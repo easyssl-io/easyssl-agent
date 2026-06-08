@@ -1,7 +1,7 @@
 # easyssl-client
 
-The open-source EasySSL Client: a single, auditable Go binary that registers a
-host with an EasySSL Server, polls for certificate configuration, deploys
+The open-source easySSL Client: a single, auditable Go binary that registers a
+host with an easySSL Server, polls for certificate configuration, deploys
 certificates through on-demand plugins, and reports inventory and health.
 
 Everything that runs on the Client side is open source, so it can be
