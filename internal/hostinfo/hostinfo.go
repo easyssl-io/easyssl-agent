@@ -1,7 +1,7 @@
-// Package hostinfo collects best-effort host diagnostics (FR-004) the Client
-// reports at registration: machine ID, hostname, OS, host type, and the binary
-// and per-instance paths. Every field is best-effort; an unavailable value is
-// reported as an empty string rather than failing.
+// Package hostinfo collects best-effort host diagnostics the Client reports at
+// registration: machine ID, hostname, OS, host type, and the binary, config, and
+// service paths. Every field is best-effort; an unavailable value is reported as
+// an empty string rather than failing.
 package hostinfo
 
 import (
@@ -13,8 +13,8 @@ import (
 	"github.com/easyssl-io/easyssl-client/internal/identity"
 )
 
-// Collect gathers the diagnostics for the given instance.
-func Collect(instanceID string) wire.Diagnostics {
+// Collect gathers the host diagnostics reported at registration.
+func Collect() wire.Diagnostics {
 	bin, _ := os.Executable()
 	return wire.Diagnostics{
 		MachineID:   machineID(),
@@ -22,8 +22,8 @@ func Collect(instanceID string) wire.Diagnostics {
 		OS:          osName(),
 		HostType:    hostType(),
 		BinaryPath:  bin,
-		ConfigPath:  identity.Dir(instanceID),
-		ServiceName: identity.ServiceName(instanceID),
+		ConfigPath:  identity.BaseDir,
+		ServiceName: identity.ServiceName(),
 	}
 }
 

@@ -24,7 +24,7 @@ func TestNewInstanceID(t *testing.T) {
 }
 
 func TestServiceName(t *testing.T) {
-	if got := ServiceName("a1b2c3d4e5f60718"); got != "easyssl-client@a1b2c3d4e5f60718.service" {
+	if got := ServiceName(); got != "easyssl-client.service" {
 		t.Errorf("ServiceName = %q", got)
 	}
 }

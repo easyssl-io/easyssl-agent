@@ -1,10 +1,11 @@
 // Command easyssl-client is the easySSL Client binary. Subcommands:
 //
 //	register --server <url> [--key <key>]   run the interactive registration flow
-//	run --instance <id>                     the systemd service loop (periodic check-in)
-//	status [--instance <id>] [--json]       print local registration state
+//	run                                     the systemd service loop (periodic check-in)
+//	status [--json]                         print local registration state
 //
-// Per Principle II the CLI writes human output to stdout, JSON where asked, and
+// A host runs one Client, so run and status need no instance selector. Per
+// Principle II the CLI writes human output to stdout, JSON where asked, and
 // errors to stderr; connections are only ever made from Client to Server.
 package main
 
@@ -16,7 +17,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
@@ -73,18 +73,14 @@ func cmdRegister(ctx context.Context, args []string) error {
 
 func cmdRun(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	instance := fs.String("instance", "", "Client instance ID (required)")
 	_ = fs.Parse(args)
-	if *instance == "" {
-		return errors.New("run: --instance is required")
-	}
-	cfg, err := identity.LoadConfig(*instance)
+	cfg, err := identity.LoadConfig()
 	if err != nil {
-		return fmt.Errorf("run: load config for %s: %w", *instance, err)
+		return fmt.Errorf("run: load config: %w", err)
 	}
-	token, err := identity.LoadToken(*instance)
+	token, err := identity.LoadToken()
 	if err != nil {
-		return fmt.Errorf("run: load token for %s: %w", *instance, err)
+		return fmt.Errorf("run: load token: %w", err)
 	}
 
 	api := serverapi.New(cfg.ServerURL)
@@ -112,23 +108,14 @@ func cmdRun(ctx context.Context, args []string) error {
 
 func cmdStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
-	instance := fs.String("instance", "", "Client instance ID (defaults to the sole installed instance)")
 	asJSON := fs.Bool("json", false, "print JSON")
 	_ = fs.Parse(args)
 
-	id := *instance
-	if id == "" {
-		only, err := soleInstance()
-		if err != nil {
-			return err
-		}
-		id = only
-	}
-	cfg, err := identity.LoadConfig(id)
+	cfg, err := identity.LoadConfig()
 	if err != nil {
 		return fmt.Errorf("status: %w", err)
 	}
-	_, tokErr := identity.LoadToken(id)
+	_, tokErr := identity.LoadToken()
 	registered := tokErr == nil
 
 	if *asJSON {
@@ -136,38 +123,14 @@ func cmdStatus(args []string) error {
 			"instanceId":  cfg.InstanceID,
 			"displayName": cfg.DisplayName,
 			"serverUrl":   cfg.ServerURL,
-			"serviceName": identity.ServiceName(cfg.InstanceID),
+			"serviceName": identity.ServiceName(),
 			"registered":  registered,
 		})
 	}
 	fmt.Printf("instance   %s\n", cfg.InstanceID)
 	fmt.Printf("name       %s\n", cfg.DisplayName)
 	fmt.Printf("server     %s\n", cfg.ServerURL)
-	fmt.Printf("service    %s\n", identity.ServiceName(cfg.InstanceID))
+	fmt.Printf("service    %s\n", identity.ServiceName())
 	fmt.Printf("registered %t\n", registered)
 	return nil
-}
-
-// soleInstance returns the instance ID when exactly one is installed.
-func soleInstance() (string, error) {
-	entries, err := os.ReadDir(identity.BaseDir)
-	if err != nil {
-		return "", fmt.Errorf("status: no instances under %s: %w", identity.BaseDir, err)
-	}
-	var ids []string
-	for _, e := range entries {
-		if e.IsDir() {
-			if _, err := os.Stat(filepath.Join(identity.BaseDir, e.Name(), "config.json")); err == nil {
-				ids = append(ids, e.Name())
-			}
-		}
-	}
-	switch len(ids) {
-	case 0:
-		return "", errors.New("status: no registered Client instances found")
-	case 1:
-		return ids[0], nil
-	default:
-		return "", fmt.Errorf("status: multiple instances installed; pass --instance (found %v)", ids)
-	}
 }

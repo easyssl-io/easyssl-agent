@@ -1,7 +1,8 @@
-// Package identity manages the Client's per-instance identity and on-disk state:
-// the 16-hex instance ID (generated locally at install, embedded in the systemd
-// unit name), and the per-instance directory holding the config and the bearer
-// token. Multiple Clients coexist on one host under distinct instance dirs.
+// Package identity manages the Client's on-disk identity and state. A host runs
+// a single Client (FR-002): its 16-hex instance ID is generated once, persisted
+// in the config, and reused across reinstalls, so re-running the installer
+// updates the existing Client instead of registering a second one. The config
+// and bearer token live directly under BaseDir.
 package identity
 
 import (
@@ -13,8 +14,11 @@ import (
 	"strings"
 )
 
-// BaseDir is the root under which each Client instance keeps its state.
+// BaseDir holds the single Client's config and token on this host.
 const BaseDir = "/etc/easyssl"
+
+// serviceName is the host's single systemd unit (not templated: one per host).
+const serviceName = "easyssl-client.service"
 
 // Config is the Client's persisted registration state.
 type Config struct {
@@ -24,8 +28,8 @@ type Config struct {
 }
 
 // NewInstanceID returns a fresh instance ID: 64 CSPRNG bits as 16 lowercase hex
-// characters. Generated locally because the ID names the systemd unit installed
-// before the first check-in; the Server enforces its global uniqueness.
+// characters. Generated locally, persisted once, and reused thereafter; the
+// Server enforces its global uniqueness.
 func NewInstanceID() (string, error) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -34,32 +38,29 @@ func NewInstanceID() (string, error) {
 	return hex.EncodeToString(b[:]), nil
 }
 
-// Dir is the per-instance directory (BaseDir/<instanceID>).
-func Dir(instanceID string) string { return filepath.Join(BaseDir, instanceID) }
+// ConfigPath and TokenPath locate the two state files.
+func ConfigPath() string { return filepath.Join(BaseDir, "config.json") }
+func TokenPath() string  { return filepath.Join(BaseDir, "client.token") }
 
-// ConfigPath and TokenPath locate the two per-instance files.
-func ConfigPath(instanceID string) string { return filepath.Join(Dir(instanceID), "config.json") }
-func TokenPath(instanceID string) string   { return filepath.Join(Dir(instanceID), "client.token") }
+// ServiceName is the host's systemd unit name.
+func ServiceName() string { return serviceName }
 
-// ServiceName is the systemd unit name for an instance.
-func ServiceName(instanceID string) string { return "easyssl-client@" + instanceID + ".service" }
-
-// SaveConfig writes the config (0600) under a 0700 instance directory.
+// SaveConfig writes the config (0600) under a 0700 BaseDir.
 func SaveConfig(cfg Config) error {
-	if err := os.MkdirAll(Dir(cfg.InstanceID), 0o700); err != nil {
+	if err := os.MkdirAll(BaseDir, 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(ConfigPath(cfg.InstanceID), append(data, '\n'), 0o600)
+	return os.WriteFile(ConfigPath(), append(data, '\n'), 0o600)
 }
 
-// LoadConfig reads the config for an instance.
-func LoadConfig(instanceID string) (Config, error) {
+// LoadConfig reads the host's config.
+func LoadConfig() (Config, error) {
 	var cfg Config
-	data, err := os.ReadFile(ConfigPath(instanceID))
+	data, err := os.ReadFile(ConfigPath())
 	if err != nil {
 		return cfg, err
 	}
@@ -67,16 +68,16 @@ func LoadConfig(instanceID string) (Config, error) {
 }
 
 // SaveToken writes the bearer token (0600); the plaintext lives only here.
-func SaveToken(instanceID, token string) error {
-	if err := os.MkdirAll(Dir(instanceID), 0o700); err != nil {
+func SaveToken(token string) error {
+	if err := os.MkdirAll(BaseDir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(TokenPath(instanceID), []byte(token), 0o600)
+	return os.WriteFile(TokenPath(), []byte(token), 0o600)
 }
 
-// LoadToken reads the bearer token for an instance.
-func LoadToken(instanceID string) (string, error) {
-	data, err := os.ReadFile(TokenPath(instanceID))
+// LoadToken reads the host's bearer token.
+func LoadToken() (string, error) {
+	data, err := os.ReadFile(TokenPath())
 	if err != nil {
 		return "", err
 	}

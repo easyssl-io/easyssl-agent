@@ -1,7 +1,7 @@
-// Package sysd installs and manages the Client's systemd units. Each Client
-// instance runs as easyssl-client@<instance-id>.service from one shared template
-// unit, so multiple Clients coexist on a host without colliding (FR-001b).
-// Root-only in this slice (FR-001d).
+// Package sysd installs and manages the Client's single systemd unit. A host
+// runs one Client as easyssl-client.service (FR-002), so re-running the
+// installer refreshes this one unit and restarts it onto the updated binary
+// rather than adding a second unit. Root-only in this slice (FR-001d).
 package sysd
 
 import (
@@ -11,16 +11,16 @@ import (
 )
 
 const (
-	unitPath    = "/etc/systemd/system/easyssl-client@.service"
+	unitPath    = "/etc/systemd/system/easyssl-client.service"
 	binaryPath  = "/usr/local/bin/easyssl-client"
 	unitContent = `[Unit]
-Description=easySSL Client (%i)
+Description=easySSL Client
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=` + binaryPath + ` run --instance %i
+ExecStart=` + binaryPath + ` run
 Restart=on-failure
 RestartSec=10
 
@@ -32,9 +32,12 @@ WantedBy=multi-user.target
 // ErrNotRoot is returned when systemd operations are attempted without root.
 var ErrNotRoot = fmt.Errorf("must run as root to manage systemd units (this slice is root-only)")
 
-// InstallAndStart writes the template unit (idempotent) and enables + starts the
-// instance's unit. It requires root.
-func InstallAndStart(instanceID string) error {
+// Install (re)writes the unit (idempotent), enables it at boot, and restarts it
+// so the service runs the currently installed binary. Restart starts the service
+// when it is stopped and bounces it onto a new binary when it is already running,
+// which makes both first install and reinstall converge on the same state. It
+// requires root.
+func Install() error {
 	if os.Geteuid() != 0 {
 		return ErrNotRoot
 	}
@@ -44,8 +47,10 @@ func InstallAndStart(instanceID string) error {
 	if err := run("systemctl", "daemon-reload"); err != nil {
 		return err
 	}
-	instance := "easyssl-client@" + instanceID
-	return run("systemctl", "enable", "--now", instance)
+	if err := run("systemctl", "enable", "easyssl-client.service"); err != nil {
+		return err
+	}
+	return run("systemctl", "restart", "easyssl-client.service")
 }
 
 func run(name string, args ...string) error {
