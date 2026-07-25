@@ -47,6 +47,14 @@ func Register(ctx context.Context, opts Options) error {
 	fmt.Println("Registering this host to an easySSL organization...")
 	fmt.Println()
 
+	// Check root before anything reaches the Server. Registering first and
+	// failing afterwards on the config write would leave a pending Client on
+	// the Server for a host that never actually installed one, which an
+	// operator then has to notice and clean up.
+	if os.Geteuid() != 0 {
+		return errors.New("register must run as root: use sudo, or run it from a root shell")
+	}
+
 	t := openTerminal()
 	if t != nil {
 		defer t.close()
