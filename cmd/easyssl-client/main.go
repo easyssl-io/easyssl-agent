@@ -97,7 +97,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	api := serverapi.New(cfg.ServerURL)
 	poll := 60
 	for {
-		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: flow.Version})
+		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{ClientVersion: flow.Version})
 		if err == nil {
 			poll = resp.NextPollSeconds
 		} else if apiErr, ok := errors.AsType[*serverapi.APIError](err); ok && apiErr.Code == wire.CodeUnknownToken {

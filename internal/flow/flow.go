@@ -24,7 +24,7 @@ import (
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-// Version is the Client agent version reported to the Server.
+// Version is the Client version reported to the Server.
 const Version = "0.0.1"
 
 // maxInstanceIDAttempts bounds instance-ID regeneration on the (astronomically
@@ -141,7 +141,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 // instance ID. status is "" (poll unused) when the Server could not be reached.
 func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (token, status string, poll int, err error) {
 	if token, err = identity.LoadToken(); err == nil {
-		resp, cerr := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: Version})
+		resp, cerr := api.Checkin(ctx, token, wire.CheckinRequest{ClientVersion: Version})
 		switch {
 		case cerr == nil:
 			return token, resp.Status, resp.NextPollSeconds, nil
@@ -166,7 +166,7 @@ func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Op
 		RegistrationKey: key,
 		InstanceID:      cfg.InstanceID,
 		ProposedName:    cfg.DisplayName,
-		AgentVersion:    Version,
+		ClientVersion:   Version,
 		ProtocolVersion: wire.ProtocolVersion,
 		Diagnostics:     hostinfo.Collect(),
 	})
@@ -209,7 +209,7 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 // Uninstall removes the Client from this host: it unregisters from the Server
 // (best-effort), stops and removes the systemd unit, and deletes the config,
 // token, and binary. Deliberately host-side only: the Server can never trigger
-// it, so a compromised Server or account cannot wipe an agent off a machine it
+// it, so a compromised Server or account cannot wipe a Client off a machine it
 // does not own. Certificates and keys this Client deployed are left alone,
 // since removing them could take the host's services down.
 func Uninstall(ctx context.Context, assumeYes bool) error {
@@ -350,7 +350,7 @@ func register(ctx context.Context, api *serverapi.Client, key, name, serverURL s
 			RegistrationKey: key,
 			InstanceID:      instanceID,
 			ProposedName:    name,
-			AgentVersion:    Version,
+			ClientVersion:   Version,
 			ProtocolVersion: wire.ProtocolVersion,
 			Diagnostics:     diag,
 		})
@@ -377,7 +377,7 @@ func waitForAuthorization(ctx context.Context, api *serverapi.Client, token stri
 		pollSeconds = 3
 	}
 	for {
-		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: Version})
+		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{ClientVersion: Version})
 		switch {
 		case err == nil && resp.Status == wire.StatusActive:
 			return nil
