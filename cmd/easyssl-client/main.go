@@ -16,6 +16,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"syscall"
@@ -87,11 +88,11 @@ func cmdRun(ctx context.Context, args []string) error {
 	_ = fs.Parse(args)
 	cfg, err := identity.LoadConfig()
 	if err != nil {
-		return fmt.Errorf("run: load config: %w", err)
+		return stateError("run", err)
 	}
 	token, err := identity.LoadToken()
 	if err != nil {
-		return fmt.Errorf("run: load token: %w", err)
+		return stateError("run", err)
 	}
 
 	api := serverapi.New(cfg.ServerURL)
@@ -117,6 +118,21 @@ func cmdRun(ctx context.Context, args []string) error {
 	}
 }
 
+// stateError explains why the Client's on-disk state could not be read. The two
+// common causes have obvious fixes, but the raw "permission denied" on
+// config.json sends people hunting for a filesystem problem instead: the state
+// is deliberately root-only (0600 under a 0700 directory) so an unprivileged
+// process cannot read the bearer token.
+func stateError(cmd string, err error) error {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("no easySSL Client is registered on this host (%s does not exist); register one with \"sudo easyssl-client register --server <url>\"", identity.ConfigPath())
+	case errors.Is(err, fs.ErrPermission):
+		return fmt.Errorf("cannot read %s: the Client's config and token are root-only; re-run as root with \"sudo easyssl-client %s\"", identity.BaseDir, cmd)
+	}
+	return fmt.Errorf("%s: %w", cmd, err)
+}
+
 func cmdStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "print JSON")
@@ -124,7 +140,7 @@ func cmdStatus(args []string) error {
 
 	cfg, err := identity.LoadConfig()
 	if err != nil {
-		return fmt.Errorf("status: %w", err)
+		return stateError("status", err)
 	}
 	_, tokErr := identity.LoadToken()
 	registered := tokErr == nil
