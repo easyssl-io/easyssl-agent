@@ -63,6 +63,15 @@ func (c *Client) Checkin(ctx context.Context, token string, req wire.CheckinRequ
 	return out, err
 }
 
+// RegistrationStatus asks what the Server currently considers this Client to be.
+// It is a plain read, so unlike Checkin it does not refresh the Client's
+// last-seen.
+func (c *Client) RegistrationStatus(ctx context.Context, token string) (wire.RegistrationStatus, error) {
+	var out wire.RegistrationStatus
+	err := c.do(ctx, http.MethodGet, wire.RouteRegistration, token, nil, &out)
+	return out, err
+}
+
 // Unregister removes this Client from its organization, so an uninstalled host
 // disappears from the Server without the operator also removing it there.
 func (c *Client) Unregister(ctx context.Context, token string) error {

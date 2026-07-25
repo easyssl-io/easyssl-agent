@@ -16,7 +16,7 @@ module; wire types are not duplicated here.
 ```
 easyssl-client register --server <url> [--key <key>] [--name <name>]   register this host
 easyssl-client run                                                     the systemd service loop (periodic check-in)
-easyssl-client status [--json]                                         print local registration state
+easyssl-client status [--json]                                         print local state and what the Server says
 easyssl-client uninstall [--yes]                                       unregister and remove the Client
 ```
 
@@ -62,6 +62,21 @@ never prompts:
 ```
 curl -sSL <server-url>/install | sudo REGISTRATION_KEY=<key> CLIENT_NAME=web-01 bash
 ```
+
+## Checking state
+
+`status` prints what the host knows (instance ID, name, Server URL, the systemd
+unit and whether it is running, whether a token is stored) and then asks the
+Server what this Client actually is: `authorized`, `pending authorization`, or
+no longer registered because it was removed or revoked there. A stored token
+proves only that one was issued once, so registration is never inferred locally.
+
+Asking is a plain read (`GET` on the Client's own registration), not a check-in,
+so running `status` never refreshes the Client's last-seen and cannot make a
+stopped Client look alive in the web console. When the Server cannot be reached,
+the state is reported as unknown with the reason, and the local facts still
+print. `--json` reports a short stable code (`authorized`, `pending`,
+`not-registered`, `unknown`) instead of the sentence.
 
 ## Uninstalling
 

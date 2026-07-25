@@ -2,7 +2,7 @@
 //
 //	register --server <url> [--key <key>] [--name <name>]   interactive registration
 //	run                                                     the systemd service loop (periodic check-in)
-//	status [--json]                                         print local registration state
+//	status [--json]                                         print local state + what the Server says
 //	uninstall [--yes]                                       unregister and remove the Client
 //
 // A host runs one Client, so the commands need no instance selector. The CLI
@@ -25,6 +25,7 @@ import (
 	"github.com/easyssl-io/easyssl-client/internal/flow"
 	"github.com/easyssl-io/easyssl-client/internal/identity"
 	"github.com/easyssl-io/easyssl-client/internal/serverapi"
+	"github.com/easyssl-io/easyssl-client/internal/sysd"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -101,7 +102,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{ClientVersion: flow.Version})
 		if err == nil {
 			poll = resp.NextPollSeconds
-		} else if apiErr, ok := errors.AsType[*serverapi.APIError](err); ok && apiErr.Code == wire.CodeUnknownToken {
+		} else if isUnknownToken(err) {
 			// Rejected or revoked: stop cleanly so systemd does not restart-loop.
 			fmt.Fprintln(os.Stderr, "run: token rejected or revoked; re-registration required")
 			return nil
@@ -142,22 +143,74 @@ func cmdStatus(args []string) error {
 	if err != nil {
 		return stateError("status", err)
 	}
-	_, tokErr := identity.LoadToken()
-	registered := tokErr == nil
+	token, tokenErr := identity.LoadToken()
+
+	// Whether the Client is still registered is not a local fact: the Server
+	// owns it and can drop a Client without telling the host, so a stored token
+	// proves only that one was issued once. Ask the Server. This is a read
+	// (GET), not a check-in, so running status never refreshes last-seen and
+	// therefore cannot make a stopped Client look alive in the console.
+	stateCode, stateDetail := serverState(cfg, token, tokenErr)
 
 	if *asJSON {
-		return json.NewEncoder(os.Stdout).Encode(map[string]any{
-			"instanceId":  cfg.InstanceID,
-			"displayName": cfg.DisplayName,
-			"serverUrl":   cfg.ServerURL,
-			"serviceName": identity.ServiceName(),
-			"registered":  registered,
-		})
+		out := map[string]any{
+			"instanceId":   cfg.InstanceID,
+			"displayName":  cfg.DisplayName,
+			"serverUrl":    cfg.ServerURL,
+			"serviceName":  identity.ServiceName(),
+			"serviceState": sysd.State(),
+			"tokenPresent": tokenErr == nil,
+			// Short code for machines; the printed line spells it out.
+			"serverState": stateCode,
+		}
+		return json.NewEncoder(os.Stdout).Encode(out)
 	}
+
 	fmt.Printf("instance   %s\n", cfg.InstanceID)
 	fmt.Printf("name       %s\n", cfg.DisplayName)
 	fmt.Printf("server     %s\n", cfg.ServerURL)
-	fmt.Printf("service    %s\n", identity.ServiceName())
-	fmt.Printf("registered %t\n", registered)
+	fmt.Printf("service    %s (%s)\n", identity.ServiceName(), sysd.State())
+	if tokenErr == nil {
+		fmt.Printf("token      stored in %s\n", identity.TokenPath())
+	} else {
+		fmt.Printf("token      missing, so this Client cannot authenticate\n")
+	}
+	fmt.Printf("state      %s\n", stateDetail)
 	return nil
+}
+
+// serverState asks the Server what this Client actually is right now, which a
+// host cannot tell from its own files: it has no way to know it was removed
+// from the console. Read-only, so status stays free of side effects.
+//
+// It returns a short stable code for machines and a sentence for people. The
+// wire calls an authorized Client "active", which printed next to a stopped
+// systemd unit reads as if the Client were running, when it only means the
+// operator admitted it; the console says "Authorized" and so does this.
+func serverState(cfg identity.Config, token string, tokenErr error) (code, detail string) {
+	if tokenErr != nil {
+		return "not-registered", "not registered (no local token)"
+	}
+	// Short: status must stay snappy on a host that cannot reach the Server.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	resp, err := serverapi.New(cfg.ServerURL).RegistrationStatus(ctx, token)
+	switch {
+	case err == nil && resp.Status == wire.StatusActive:
+		return "authorized", "authorized"
+	case err == nil && resp.Status == wire.StatusPending:
+		return "pending", "pending authorization"
+	case err == nil:
+		return resp.Status, resp.Status
+	case isUnknownToken(err):
+		return "not-registered", "not registered (the Server rejected this token; it was removed or revoked there)"
+	default:
+		return "unknown", fmt.Sprintf("unknown (could not reach %s: %v)", cfg.ServerURL, err)
+	}
+}
+
+// isUnknownToken reports whether err is the Server's unknown-token response.
+func isUnknownToken(err error) bool {
+	apiErr, ok := errors.AsType[*serverapi.APIError](err)
+	return ok && apiErr.Code == wire.CodeUnknownToken
 }

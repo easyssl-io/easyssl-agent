@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 
 const (
-	unitPath    = "/etc/systemd/system/easyssl-client.service"
+	unitName    = "easyssl-client.service"
+	unitPath    = "/etc/systemd/system/" + unitName
 	binaryPath  = "/usr/local/bin/easyssl-client"
 	unitContent = `[Unit]
 Description=easySSL Client
@@ -47,10 +49,10 @@ func Install() error {
 	if err := run("systemctl", "daemon-reload"); err != nil {
 		return err
 	}
-	if err := run("systemctl", "enable", "easyssl-client.service"); err != nil {
+	if err := run("systemctl", "enable", unitName); err != nil {
 		return err
 	}
-	return run("systemctl", "restart", "easyssl-client.service")
+	return run("systemctl", "restart", unitName)
 }
 
 // Uninstall stops and disables the service and removes its unit file. It is
@@ -61,11 +63,26 @@ func Uninstall() error {
 		return ErrNotRoot
 	}
 	// Best-effort: the unit may already be stopped, disabled, or absent.
-	_ = run("systemctl", "disable", "--now", "easyssl-client.service")
+	_ = run("systemctl", "disable", "--now", unitName)
 	if err := os.Remove(unitPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("remove unit: %w", err)
 	}
 	return run("systemctl", "daemon-reload")
+}
+
+// State reports systemd's view of the unit: active, inactive, failed, and so
+// on, or "unknown" when systemctl cannot be consulted at all. `systemctl
+// is-active` exits non-zero for every state except active, so the printed word
+// is the answer and the exit status is not.
+func State() string {
+	out, err := exec.Command("systemctl", "is-active", unitName).Output()
+	if s := strings.TrimSpace(string(out)); s != "" {
+		return s
+	}
+	if err != nil {
+		return "unknown"
+	}
+	return "unknown"
 }
 
 // BinaryPath is where the installer places the Client binary, which uninstall
