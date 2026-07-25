@@ -6,6 +6,7 @@ package hostinfo
 
 import (
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 
@@ -57,8 +58,17 @@ func osName() string {
 	return runtime.GOOS
 }
 
-// hostType is a best-effort classification: container, vm, or bare-metal.
+// hostType classifies the host as container, vm, bare-metal, or unknown when it
+// genuinely cannot tell. It asks systemd-detect-virt first: it ships with
+// systemd (which this Client already requires), and it recognizes dozens of
+// hypervisors and container runtimes, including ones the file heuristics below
+// miss entirely. The heuristics remain only as a fallback for hosts where the
+// tool is unavailable, and they never assert bare-metal on their own: guessing
+// bare-metal for anything unrecognized is how a VM ends up mislabeled.
 func hostType() string {
+	if t, ok := detectVirt(); ok {
+		return t
+	}
 	if fileExists("/.dockerenv") || fileExists("/run/.containerenv") {
 		return "container"
 	}
@@ -68,18 +78,39 @@ func hostType() string {
 			return "container"
 		}
 	}
-	// DMI vendor/product hints at a hypervisor.
+	// DMI vendor/product hints at a hypervisor. "virtualization" catches
+	// platforms whose vendor string is a hardware maker (an Apple VM reports
+	// vendor "Apple Inc." with product "Apple Virtualization Generic Platform",
+	// while bare-metal Apple hardware reports a real model name).
 	for _, p := range []string{"/sys/class/dmi/id/sys_vendor", "/sys/class/dmi/id/product_name"} {
 		if b, err := os.ReadFile(p); err == nil {
 			v := strings.ToLower(strings.TrimSpace(string(b)))
-			for _, needle := range []string{"qemu", "kvm", "vmware", "virtualbox", "xen", "amazon", "microsoft", "google", "bochs"} {
+			for _, needle := range []string{"qemu", "kvm", "vmware", "virtualbox", "xen", "amazon", "microsoft", "google", "bochs", "virtualization"} {
 				if strings.Contains(v, needle) {
 					return "vm"
 				}
 			}
 		}
 	}
-	return "bare-metal"
+	return "unknown"
+}
+
+// detectVirt classifies the host with systemd-detect-virt, returning false when
+// the tool is not available. `--quiet --container` and `--quiet --vm` each exit
+// 0 only when that kind of virtualization is detected, so systemd does the
+// classification and this Client needs no table of hypervisor names.
+func detectVirt() (string, bool) {
+	if _, err := exec.LookPath("systemd-detect-virt"); err != nil {
+		return "", false
+	}
+	if exec.Command("systemd-detect-virt", "--quiet", "--container").Run() == nil {
+		return "container", true
+	}
+	if exec.Command("systemd-detect-virt", "--quiet", "--vm").Run() == nil {
+		return "vm", true
+	}
+	// The tool ran and found nothing, which is a positive answer.
+	return "bare-metal", true
 }
 
 func fileExists(p string) bool {
