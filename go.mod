@@ -1,6 +1,6 @@
 module github.com/easyssl-io/easyssl-client
 
-go 1.26.2
+go 1.26.5
 
 require github.com/easyssl-io/easyssl-contract v0.2.0
 
