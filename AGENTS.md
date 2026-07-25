@@ -1,0 +1,56 @@
+# AGENTS.md
+
+Guidance for coding agents in `easyssl-client`. `README.md` describes what the
+Client does, its commands, and how registration and uninstall work; this file is
+what a change to it must respect.
+
+## Build
+
+```bash
+go build ./... && go test ./... && go vet ./...
+```
+
+`easyssl-contract` resolves through a `replace` pointing at a sibling checkout,
+so a clone of this repository on its own does not build yet. Build from a
+checkout that has `easyssl-contract` beside it, and read `replacement directory
+../contract does not exist` as an environment problem rather than a defect in
+the change under review.
+
+`register`, `run` and `uninstall` drive systemd, `/etc/easyssl/` and the network,
+so they are exercised on a real Linux host or a systemd-enabled container.
+
+## Code Review Rules
+
+Everything here runs on a customer's machine, and is open source so they can
+verify what it does. Flag any of the following.
+
+- **Standard library first.** A new third-party dependency is a finding unless
+  the change says why the standard library cannot do the job. The binary also
+  installs on constrained devices, so capabilities not every install needs do not
+  belong in it.
+- **The Client only ever dials out.** No listening socket, no inbound callback,
+  no Server-triggered action. The Server can never make a Client uninstall
+  itself; that is a host-side decision.
+- **All Server traffic goes through `internal/serverapi`.** It is a single funnel
+  so an audit mode can later record every interaction with no unaudited paths. A
+  direct `http.Get` or a second `http.Client` is a finding even when it works.
+- **No private key material reaches the Server**, sent or logged. P0.
+- **Secrets stay root-only**, `0600` under `/etc/easyssl/`, never printed.
+- **Local state is not proof.** A stored token means one was issued once, not
+  that this Client is still registered or authorized; that comes from the Server.
+  A status read must not count as a check-in, or a stopped Client can be made to
+  look alive.
+- **The two sides upgrade independently.** An installed Client cannot be forced
+  to update, so changes must tolerate a Server older or newer than this build.
+- **Reinstall reconciles, never duplicates.** One host runs one Client, keyed by
+  a stable instance ID, and every install step must be safe to interrupt.
+- **CLI contract.** Human output on stdout, machine output behind `--json`,
+  errors on stderr, non-zero exit on failure. `--json` codes are a stable
+  interface: adding one is fine, redefining one is not.
+
+## Conventions
+
+American English. "Client" and "Server" are capitalized when they mean the
+easySSL components; never call the Client an "agent". This repository is public
+and self-contained: never cite a document, identifier, or issue that lives in a
+private repository. State the property directly instead.
