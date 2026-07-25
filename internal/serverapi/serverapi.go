@@ -1,8 +1,8 @@
 // Package serverapi is the Client's single HTTP wrapper for every Server call.
-// Routing all Server interactions through one place is the prerequisite the
-// constitution (v4.6.0) sets for audit mode: when audit mode lands, wrapping
-// this one client records every request, with no unaudited paths. Standard
-// library only (Principle V).
+// Routing all Server interactions through one place is what will let a future
+// audit mode record every request with no unaudited paths, so new Server calls
+// belong here rather than in ad-hoc HTTP code. Standard library only, so the
+// Client stays small and auditable.
 package serverapi
 
 import (
@@ -61,6 +61,12 @@ func (c *Client) Checkin(ctx context.Context, token string, req wire.CheckinRequ
 	var out wire.CheckinResponse
 	err := c.do(ctx, http.MethodPost, wire.RouteCheckin, token, req, &out)
 	return out, err
+}
+
+// Unregister removes this Client from its organization, so an uninstalled host
+// disappears from the Server without the operator also removing it there.
+func (c *Client) Unregister(ctx context.Context, token string) error {
+	return c.do(ctx, http.MethodDelete, wire.RouteRegistration, token, nil, nil)
 }
 
 // do is the single request path: marshal body, set the bearer token if given,

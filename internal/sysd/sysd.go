@@ -1,7 +1,7 @@
 // Package sysd installs and manages the Client's single systemd unit. A host
-// runs one Client as easyssl-client.service (FR-002), so re-running the
-// installer refreshes this one unit and restarts it onto the updated binary
-// rather than adding a second unit. Root-only in this slice (FR-001d).
+// runs one Client as easyssl-client.service, so re-running the installer
+// refreshes this one unit and restarts it onto the updated binary rather than
+// adding a second unit. Root-only for now.
 package sysd
 
 import (
@@ -52,6 +52,26 @@ func Install() error {
 	}
 	return run("systemctl", "restart", "easyssl-client.service")
 }
+
+// Uninstall stops and disables the service and removes its unit file. It is
+// idempotent: a missing or already-stopped unit is not an error, so uninstall
+// works on a partially installed host. It requires root.
+func Uninstall() error {
+	if os.Geteuid() != 0 {
+		return ErrNotRoot
+	}
+	// Best-effort: the unit may already be stopped, disabled, or absent.
+	_ = run("systemctl", "disable", "--now", "easyssl-client.service")
+	if err := os.Remove(unitPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove unit: %w", err)
+	}
+	return run("systemctl", "daemon-reload")
+}
+
+// BinaryPath is where the installer places the Client binary, which uninstall
+// removes last. UnitPath is the systemd unit it installs.
+func BinaryPath() string { return binaryPath }
+func UnitPath() string   { return unitPath }
 
 func run(name string, args ...string) error {
 	cmd := exec.Command(name, args...)

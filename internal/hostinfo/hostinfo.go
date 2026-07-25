@@ -9,8 +9,8 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/easyssl-io/easyssl-contract/wire"
 	"github.com/easyssl-io/easyssl-client/internal/identity"
+	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
 // Collect gathers the host diagnostics reported at registration.

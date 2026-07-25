@@ -1,5 +1,5 @@
-// Package flow drives the interactive line-based registration session (S4 US1).
-// A host runs one Client (FR-002): the first run generates and persists the
+// Package flow drives the interactive line-based registration session.
+// A host runs one Client: the first run generates and persists the
 // instance ID, registers, stores the token, installs the systemd unit, and waits
 // for the operator to authorize from the console. A later run on an
 // already-registered host is idempotent: it refreshes the service onto the
@@ -17,11 +17,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/easyssl-io/easyssl-contract/wire"
 	"github.com/easyssl-io/easyssl-client/internal/hostinfo"
 	"github.com/easyssl-io/easyssl-client/internal/identity"
 	"github.com/easyssl-io/easyssl-client/internal/serverapi"
 	"github.com/easyssl-io/easyssl-client/internal/sysd"
+	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
 // Version is the Client agent version reported to the Server.
@@ -198,6 +198,103 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 	return nil
 }
 
+// Uninstall removes the Client from this host: it unregisters from the Server
+// (best-effort), stops and removes the systemd unit, and deletes the config,
+// token, and binary. Deliberately host-side only: the Server can never trigger
+// it, so a compromised Server or account cannot wipe an agent off a machine it
+// does not own. Certificates and keys this Client deployed are left alone,
+// since removing them could take the host's services down.
+func Uninstall(ctx context.Context, assumeYes bool) error {
+	if os.Geteuid() != 0 {
+		return errors.New("uninstall must run as root (use sudo)")
+	}
+
+	cfg, cfgErr := identity.LoadConfig()
+	installed := cfgErr == nil && cfg.InstanceID != ""
+	if !installed {
+		fmt.Println("No easySSL Client registration found on this host; removing any leftover files.")
+	} else {
+		fmt.Printf("easySSL Client %q (instance %s) is registered with %s.\n", cfg.DisplayName, cfg.InstanceID, cfg.ServerURL)
+	}
+
+	if !assumeYes && !confirmUninstall(installed) {
+		fmt.Println("Aborted; nothing was changed.")
+		return nil
+	}
+
+	// Unregister first, while the token still exists on disk. Best-effort: an
+	// unreachable Server must not block an operator from cleaning up a host,
+	// so failure only leaves a row to remove from the console.
+	if installed {
+		switch token, err := identity.LoadToken(); {
+		case err != nil:
+			fmt.Println("! no local token, so this host may still appear in the console; remove it there")
+		default:
+			if err := serverapi.New(cfg.ServerURL).Unregister(ctx, token); err == nil || isUnknownToken(err) {
+				fmt.Println("✓ unregistered from the organization")
+			} else {
+				fmt.Printf("! could not reach the Server (%v); remove this Client from the console\n", err)
+			}
+		}
+	}
+
+	// Note what is actually present first, so the summary claims only what this
+	// run really removed rather than reporting deletions of absent files.
+	hadUnit, hadState, hadBinary := exists(sysd.UnitPath()), exists(identity.BaseDir), exists(sysd.BinaryPath())
+
+	if err := sysd.Uninstall(); err != nil {
+		return fmt.Errorf("removing the systemd service: %w", err)
+	}
+	if hadUnit {
+		fmt.Printf("✓ %s stopped and removed\n", identity.ServiceName())
+	}
+
+	if err := identity.RemoveAll(); err != nil {
+		return fmt.Errorf("removing %s: %w", identity.BaseDir, err)
+	}
+	if hadState {
+		fmt.Printf("✓ %s deleted (config and token)\n", identity.BaseDir)
+	}
+
+	// Last, because it deletes the running program. Unlinking a running binary
+	// is fine on Linux: the inode survives until this process exits.
+	if err := os.Remove(sysd.BinaryPath()); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing %s: %w", sysd.BinaryPath(), err)
+	}
+	if hadBinary {
+		fmt.Printf("✓ %s deleted\n", sysd.BinaryPath())
+	}
+
+	if !hadUnit && !hadState && !hadBinary {
+		fmt.Println("Nothing to remove; this host has no easySSL Client installed.")
+		return nil
+	}
+	fmt.Println("\neasySSL Client uninstalled. Certificates it deployed were left in place.")
+	return nil
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// confirmUninstall asks before destroying local state. With no terminal (an
+// automated run) it declines rather than assuming consent; --yes is the
+// explicit way to say yes without one.
+func confirmUninstall(registered bool) bool {
+	t := openTerminal()
+	if t == nil {
+		fmt.Println("Refusing to uninstall without confirmation: re-run with --yes.")
+		return false
+	}
+	defer t.close()
+	what := "the Client and its files"
+	if registered {
+		what = "this Client from the organization, and its files"
+	}
+	return strings.EqualFold(t.prompt(fmt.Sprintf("Remove %s? [y/N]: ", what)), "y")
+}
+
 func resolveKey(t *terminal, fromFlag string) (string, error) {
 	if fromFlag != "" {
 		return fromFlag, nil
@@ -212,7 +309,7 @@ func resolveKey(t *terminal, fromFlag string) (string, error) {
 	return key, nil
 }
 
-// confirmName resolves the Client's name (FR-001c, FR-005): an explicit --name
+// confirmName resolves the Client's name: an explicit --name
 // wins, otherwise the operator edits the hostname-derived default at the
 // prompt, and a non-interactive install keeps the default.
 func confirmName(t *terminal, fromFlag, defaultName string) string {
@@ -305,7 +402,7 @@ func isUnknownToken(err error) bool {
 // process inherits the *script pipe* as stdin and reading it would consume the
 // installer script rather than the operator's typing. Opening the controlling
 // terminal /dev/tty reaches the human instead, which is what makes the key and
-// name prompts work under `curl | bash` at all (FR-001e, FR-005).
+// name prompts work under `curl | bash` at all.
 type terminal struct {
 	in    *bufio.Reader
 	out   io.Writer

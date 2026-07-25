@@ -17,6 +17,7 @@ module; wire types are not duplicated here.
 easyssl-client register --server <url> [--key <key>] [--name <name>]   register this host
 easyssl-client run                                                     the systemd service loop (periodic check-in)
 easyssl-client status [--json]                                         print local registration state
+easyssl-client uninstall [--yes]                                       unregister and remove the Client
 ```
 
 Human-readable output goes to stdout (JSON with `--json`); errors go to stderr.
@@ -61,6 +62,20 @@ never prompts:
 ```
 curl -sSL <server-url>/install | sudo REGISTRATION_KEY=<key> CLIENT_NAME=web-01 bash
 ```
+
+## Uninstalling
+
+`easyssl-client uninstall` removes the Client from the host: it unregisters
+itself from the Server first (so the host also disappears from the web console),
+then stops and removes the systemd unit and deletes `/etc/easyssl/` and the
+binary. It asks for confirmation, refusing to run unattended unless `--yes` is
+passed, and is idempotent on a host with nothing or only remnants installed. If
+the Server cannot be reached the local removal still completes and you are told
+the Client may still be listed in the console.
+
+Certificates and keys the Client deployed to the host are deliberately left in
+place, since deleting them could take the host's own services down. Uninstall is
+host-side only: the Server can never trigger it.
 
 This slice is Linux + systemd and root-only; the Client stores no encryption key
 and sends none to the Server.

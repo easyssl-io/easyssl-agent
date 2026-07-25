@@ -1,12 +1,13 @@
 // Command easyssl-client is the easySSL Client binary. Subcommands:
 //
 //	register --server <url> [--key <key>] [--name <name>]   interactive registration
-//	run                                     the systemd service loop (periodic check-in)
-//	status [--json]                         print local registration state
+//	run                                                     the systemd service loop (periodic check-in)
+//	status [--json]                                         print local registration state
+//	uninstall [--yes]                                       unregister and remove the Client
 //
-// A host runs one Client, so run and status need no instance selector. Per
-// Principle II the CLI writes human output to stdout, JSON where asked, and
-// errors to stderr; connections are only ever made from Client to Server.
+// A host runs one Client, so the commands need no instance selector. The CLI
+// writes human output to stdout, JSON where asked, and errors to stderr;
+// connections are only ever made from Client to Server, never the reverse.
 package main
 
 import (
@@ -20,10 +21,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/easyssl-io/easyssl-contract/wire"
 	"github.com/easyssl-io/easyssl-client/internal/flow"
 	"github.com/easyssl-io/easyssl-client/internal/identity"
 	"github.com/easyssl-io/easyssl-client/internal/serverapi"
+	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
 func main() {
@@ -42,6 +43,8 @@ func main() {
 		err = cmdRun(ctx, os.Args[2:])
 	case "status":
 		err = cmdStatus(os.Args[2:])
+	case "uninstall":
+		err = cmdUninstall(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -57,7 +60,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: easyssl-client <register|run|status> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: easyssl-client <register|run|status|uninstall> [flags]")
 }
 
 func cmdRegister(ctx context.Context, args []string) error {
@@ -70,6 +73,13 @@ func cmdRegister(ctx context.Context, args []string) error {
 		return errors.New("register: --server is required")
 	}
 	return flow.Register(ctx, flow.Options{ServerURL: *server, RegistrationKey: *key, Name: *name})
+}
+
+func cmdUninstall(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
+	yes := fs.Bool("yes", false, "do not ask for confirmation")
+	_ = fs.Parse(args)
+	return flow.Uninstall(ctx, *yes)
 }
 
 func cmdRun(ctx context.Context, args []string) error {

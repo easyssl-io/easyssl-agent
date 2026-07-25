@@ -1,8 +1,8 @@
 // Package identity manages the Client's on-disk identity and state. A host runs
-// a single Client (FR-002): its 16-hex instance ID is generated once, persisted
-// in the config, and reused across reinstalls, so re-running the installer
-// updates the existing Client instead of registering a second one. The config
-// and bearer token live directly under BaseDir.
+// a single Client: its 16-hex instance ID is generated once, persisted in the
+// config, and reused across reinstalls, so re-running the installer updates the
+// existing Client instead of registering a second one. The config and bearer
+// token live directly under BaseDir.
 package identity
 
 import (
@@ -74,6 +74,10 @@ func SaveToken(token string) error {
 	}
 	return os.WriteFile(TokenPath(), []byte(token), 0o600)
 }
+
+// RemoveAll deletes the Client's whole state directory (config and token). It
+// is idempotent: an already-absent directory is not an error.
+func RemoveAll() error { return os.RemoveAll(BaseDir) }
 
 // LoadToken reads the host's bearer token.
 func LoadToken() (string, error) {
