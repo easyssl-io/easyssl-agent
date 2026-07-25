@@ -1,6 +1,6 @@
 // Command easyssl-client is the easySSL Client binary. Subcommands:
 //
-//	register --server <url> [--key <key>]   run the interactive registration flow
+//	register --server <url> [--key <key>] [--name <name>]   interactive registration
 //	run                                     the systemd service loop (periodic check-in)
 //	status [--json]                         print local registration state
 //
@@ -64,11 +64,12 @@ func cmdRegister(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("register", flag.ExitOnError)
 	server := fs.String("server", "", "easySSL Server base URL (required)")
 	key := fs.String("key", os.Getenv("REGISTRATION_KEY"), "organization registration key (defaults to $REGISTRATION_KEY)")
+	name := fs.String("name", os.Getenv("CLIENT_NAME"), "Client name (defaults to $CLIENT_NAME, else the hostname; prompted when interactive)")
 	_ = fs.Parse(args)
 	if *server == "" {
 		return errors.New("register: --server is required")
 	}
-	return flow.Register(ctx, flow.Options{ServerURL: *server, RegistrationKey: *key})
+	return flow.Register(ctx, flow.Options{ServerURL: *server, RegistrationKey: *key, Name: *name})
 }
 
 func cmdRun(ctx context.Context, args []string) error {

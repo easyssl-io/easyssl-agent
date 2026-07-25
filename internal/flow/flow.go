@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ const maxInstanceIDAttempts = 5
 type Options struct {
 	ServerURL       string // required
 	RegistrationKey string // from --key or REGISTRATION_KEY; prompted if empty and interactive
+	Name            string // from --name or CLIENT_NAME; else the hostname, editable at the prompt
 }
 
 // Register runs the registration session. If this host already has a Client
@@ -45,20 +47,25 @@ func Register(ctx context.Context, opts Options) error {
 	fmt.Println("Registering this host to an easySSL organization...")
 	fmt.Println()
 
-	if cfg, err := identity.LoadConfig(); err == nil && cfg.InstanceID != "" {
-		return reinstall(ctx, opts, cfg)
+	t := openTerminal()
+	if t != nil {
+		defer t.close()
 	}
-	return freshRegister(ctx, opts)
+
+	if cfg, err := identity.LoadConfig(); err == nil && cfg.InstanceID != "" {
+		return reinstall(ctx, t, opts, cfg)
+	}
+	return freshRegister(ctx, t, opts)
 }
 
 // freshRegister registers a host that has no Client yet.
-func freshRegister(ctx context.Context, opts Options) error {
-	key, err := resolveKey(opts.RegistrationKey)
+func freshRegister(ctx context.Context, t *terminal, opts Options) error {
+	key, err := resolveKey(t, opts.RegistrationKey)
 	if err != nil {
 		return err
 	}
 	host, _ := os.Hostname()
-	name := confirmName(host)
+	name := confirmName(t, opts.Name, host)
 	fmt.Printf("✓ client name  %s\n", name)
 
 	api := serverapi.New(opts.ServerURL)
@@ -91,11 +98,11 @@ func freshRegister(ctx context.Context, opts Options) error {
 // first would run the service with the stale token, and a revoked token makes the
 // service exit (systemd does not auto-restart a clean exit) before the new token
 // is written, leaving nothing running even after the operator authorizes.
-func reinstall(ctx context.Context, opts Options, cfg identity.Config) error {
+func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Config) error {
 	fmt.Printf("This host is already registered as %q (instance %s).\n", cfg.DisplayName, cfg.InstanceID)
 
 	api := serverapi.New(cfg.ServerURL)
-	token, status, poll, err := reconcileToken(ctx, api, opts, cfg)
+	token, status, poll, err := reconcileToken(ctx, t, api, opts, cfg)
 	if err != nil {
 		return err
 	}
@@ -124,7 +131,7 @@ func reinstall(ctx context.Context, opts Options, cfg identity.Config) error {
 // current status and poll cadence. It checks in with the stored token; if that
 // token is missing or was removed from the console it re-registers under the same
 // instance ID. status is "" (poll unused) when the Server could not be reached.
-func reconcileToken(ctx context.Context, api *serverapi.Client, opts Options, cfg identity.Config) (token, status string, poll int, err error) {
+func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (token, status string, poll int, err error) {
 	if token, err = identity.LoadToken(); err == nil {
 		resp, cerr := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: Version})
 		switch {
@@ -137,13 +144,13 @@ func reconcileToken(ctx context.Context, api *serverapi.Client, opts Options, cf
 			return token, "", 0, nil // transient error: keep the token, status unknown
 		}
 	}
-	return reregister(ctx, api, opts, cfg)
+	return reregister(ctx, t, api, opts, cfg)
 }
 
 // reregister re-registers keeping the host's persisted instance ID and name, and
 // returns the new token with a pending status.
-func reregister(ctx context.Context, api *serverapi.Client, opts Options, cfg identity.Config) (string, string, int, error) {
-	key, err := resolveKey(opts.RegistrationKey)
+func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (string, string, int, error) {
+	key, err := resolveKey(t, opts.RegistrationKey)
 	if err != nil {
 		return "", "", 0, err
 	}
@@ -191,26 +198,31 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 	return nil
 }
 
-func resolveKey(fromFlag string) (string, error) {
+func resolveKey(t *terminal, fromFlag string) (string, error) {
 	if fromFlag != "" {
 		return fromFlag, nil
 	}
-	if !isTerminal(os.Stdin) {
+	if t == nil {
 		return "", errors.New("no registration key: set the REGISTRATION_KEY environment variable or pass --key")
 	}
-	key := prompt("Paste your registration key: ")
+	key := t.prompt("Paste your registration key: ")
 	if key == "" {
 		return "", errors.New("a registration key is required")
 	}
 	return key, nil
 }
 
-func confirmName(defaultName string) string {
-	if !isTerminal(os.Stdin) {
+// confirmName resolves the Client's name (FR-001c, FR-005): an explicit --name
+// wins, otherwise the operator edits the hostname-derived default at the
+// prompt, and a non-interactive install keeps the default.
+func confirmName(t *terminal, fromFlag, defaultName string) string {
+	if fromFlag != "" {
+		return fromFlag
+	}
+	if t == nil {
 		return defaultName
 	}
-	fmt.Printf("Detected hostname: %s\n", defaultName)
-	v := prompt(fmt.Sprintf("Client name [%s]: ", defaultName))
+	v := t.prompt(fmt.Sprintf("Client name [%s]: ", defaultName))
 	if v == "" {
 		return defaultName
 	}
@@ -288,19 +300,48 @@ func isUnknownToken(err error) bool {
 
 // --- small terminal helpers (stdlib only) ---
 
+// terminal is the operator's input source. It is deliberately NOT os.Stdin in
+// the common case: the one-line installer runs as `curl … | sudo bash`, so the
+// process inherits the *script pipe* as stdin and reading it would consume the
+// installer script rather than the operator's typing. Opening the controlling
+// terminal /dev/tty reaches the human instead, which is what makes the key and
+// name prompts work under `curl | bash` at all (FR-001e, FR-005).
+type terminal struct {
+	in    *bufio.Reader
+	out   io.Writer
+	close func()
+}
+
+// openTerminal returns the operator's terminal, or nil when there is none
+// (cron, cloud-init, a container without a TTY), in which case callers fall
+// back to non-interactive defaults instead of blocking forever on a read.
+func openTerminal() *terminal {
+	if isTerminal(os.Stdin) {
+		return &terminal{in: bufio.NewReader(os.Stdin), out: os.Stdout, close: func() {}}
+	}
+	f, err := os.OpenFile("/dev/tty", os.O_RDWR, 0)
+	if err != nil {
+		return nil
+	}
+	// Prompts go to the tty too, so they stay visible even if stdout is piped.
+	return &terminal{in: bufio.NewReader(f), out: f, close: func() { _ = f.Close() }}
+}
+
+// prompt writes the label and reads one line. A single reader is reused across
+// prompts so buffered input is never dropped between them.
+func (t *terminal) prompt(label string) string {
+	fmt.Fprint(t.out, label)
+	line, err := t.in.ReadString('\n')
+	if err != nil && line == "" {
+		return ""
+	}
+	return strings.TrimSpace(line)
+}
+
 func isTerminal(f *os.File) bool {
 	fi, err := f.Stat()
 	if err != nil {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
-}
-
-func prompt(label string) string {
-	fmt.Print(label)
-	sc := bufio.NewScanner(os.Stdin)
-	if sc.Scan() {
-		return strings.TrimSpace(sc.Text())
-	}
-	return ""
 }
