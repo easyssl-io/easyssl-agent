@@ -17,11 +17,15 @@ import (
 	"flag"
 	"fmt"
 	"io/fs"
+	"log/slog"
+	"math/rand/v2"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/easyssl-io/easyssl-client/internal/commands"
 	"github.com/easyssl-io/easyssl-client/internal/flow"
 	"github.com/easyssl-io/easyssl-client/internal/identity"
 	"github.com/easyssl-io/easyssl-client/internal/serverapi"
@@ -97,11 +101,29 @@ func cmdRun(ctx context.Context, args []string) error {
 	}
 
 	api := serverapi.New(cfg.ServerURL)
+	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// No handlers registered yet: certificate signing requests and deployments
+	// arrive with the features that need them. Until then an incoming command
+	// is reported unsupported, which is the same thing a Client older than its
+	// Server does, and exercises that path for free.
+	runner := commands.NewRunner(api, token, logger, map[string]commands.Handler{})
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var streaming sync.Once
+
 	poll := 60
 	for {
 		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{ClientVersion: flow.Version})
 		if err == nil {
 			poll = resp.NextPollSeconds
+			if resp.Status == wire.StatusActive {
+				// Only now: every push-channel route refuses a Client that is
+				// still awaiting authorization, exactly as the check-in does,
+				// so subscribing earlier would just loop on 401s.
+				streaming.Do(func() { go streamCommands(ctx, api, token, runner, logger) })
+				runner.Reconcile(ctx)
+			}
 		} else if isUnknownToken(err) {
 			// Rejected or revoked: stop cleanly so systemd does not restart-loop.
 			fmt.Fprintln(os.Stderr, "run: token rejected or revoked; re-registration required")
@@ -117,6 +139,57 @@ func cmdRun(ctx context.Context, args []string) error {
 		case <-time.After(time.Duration(poll) * time.Second):
 		}
 	}
+}
+
+// streamCommands keeps the event stream open for as long as the service runs,
+// reconciling on connect and on every command the Server pushes.
+//
+// A dropped stream is ordinary, not a failure: networks and proxies close idle
+// connections, and the check-in loop keeps delivering commands the whole time.
+// So this reconnects quietly and never ends the service. The one thing it will
+// not retry is a rejected credential, which no amount of waiting repairs.
+func streamCommands(ctx context.Context, api *serverapi.Client, token string, runner *commands.Runner, logger *slog.Logger) {
+	const (
+		minBackoff = 2 * time.Second
+		maxBackoff = 5 * time.Minute
+	)
+	backoff := minBackoff
+	for {
+		// Reconcile on every (re)connect, before trusting anything to arrive on
+		// the stream: whatever was published while disconnected is waiting.
+		runner.Reconcile(ctx)
+
+		err := api.SubscribeCommands(ctx, token, func(commandID string) {
+			// The id is a nudge, not the work. Reconcile reads authoritative
+			// state, which also picks up anything this Client missed.
+			runner.Reconcile(ctx)
+		})
+		if ctx.Err() != nil {
+			return
+		}
+		if isUnknownToken(err) {
+			logger.Warn("command stream refused; token rejected or revoked")
+			return
+		}
+		if err != nil {
+			logger.Debug("command stream ended", "err", err, "retry_in", backoff)
+		}
+
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(jitter(backoff)):
+		}
+		if backoff *= 2; backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
+}
+
+// jitter spreads reconnects so a fleet that lost its Server does not return in
+// lockstep the moment it comes back.
+func jitter(d time.Duration) time.Duration {
+	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
 }
 
 // stateError explains why the Client's on-disk state could not be read. The two

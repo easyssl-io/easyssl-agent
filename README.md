@@ -63,6 +63,24 @@ never prompts:
 curl -sSL <server-url>/install | sudo REGISTRATION_KEY=<key> CLIENT_NAME=web-01 bash
 ```
 
+## Receiving work from the Server
+
+Once authorized, the Client holds one long-lived connection open to the Server
+and asks for outstanding work whenever the Server nudges it. It also asks on
+every check-in regardless, and that is the part that guarantees the work
+happens: the connection only makes it prompt. So a Client behind a proxy that
+kills idle connections, or one that simply cannot keep the stream up, still does
+everything asked of it, just at check-in speed.
+
+A dropped connection is ordinary rather than a fault, and the service reconnects
+with a widening delay without ever exiting. The one thing it does not retry is a
+rejected credential: if the Server no longer recognizes the token, waiting
+cannot repair it and re-registration is required.
+
+Work is reported finished only after its outcome has been recorded, never
+before. A Client that dies in between is handed the same instruction again on
+restart, which is why running one twice has to be safe.
+
 ## Checking state
 
 `status` prints what the host knows (instance ID, name, Server URL, the systemd
