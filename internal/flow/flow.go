@@ -107,7 +107,22 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 // service exit (systemd does not auto-restart a clean exit) before the new token
 // is written, leaving nothing running even after the operator authorizes.
 func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Config) error {
-	fmt.Printf("This host is already registered as %q (instance %s).\n", cfg.DisplayName, cfg.InstanceID)
+	// An installer is downloaded from one Server and carries that Server's URL,
+	// so a mismatch means this host belongs to a different one. Continuing
+	// against the stored URL is the wrong answer twice over: the operator is
+	// watching the console they installed from, where this host will never
+	// appear, and the registration key they supplied belongs to that console
+	// too. Moving the host is not done silently either, because it detaches
+	// this host from whatever the old Server still deploys to it.
+	if opts.ServerURL != "" && opts.ServerURL != cfg.ServerURL {
+		return fmt.Errorf("this host is registered to %s, but this installer came from %s.\n"+
+			"Nothing was changed. To move it, remove it from the old Server first:\n"+
+			"    sudo easyssl-client uninstall --yes\n"+
+			"then run this installer again", cfg.ServerURL, opts.ServerURL)
+	}
+
+	fmt.Printf("This host is already registered as %q (instance %s) on %s.\n",
+		cfg.DisplayName, cfg.InstanceID, cfg.ServerURL)
 
 	api := serverapi.New(cfg.ServerURL)
 	token, status, poll, err := reconcileToken(ctx, t, api, opts, cfg)
@@ -128,7 +143,9 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 		fmt.Printf("\n✓ %s is authorized and ACTIVE.\n", cfg.DisplayName)
 		return nil
 	case "":
-		fmt.Println("\nCould not confirm status with the Server; the service will keep polling, so authorize any time.")
+		// The URL was checked against the installer's above, so this really is
+		// the Server the operator is watching; it just could not be reached.
+		fmt.Println("The service will keep polling it, so authorization completes once it is back.")
 		return nil
 	default: // pending
 		return awaitAuthorization(ctx, api, cfg.DisplayName, token, poll)
@@ -149,7 +166,12 @@ func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opt
 			fmt.Println("The previous registration was removed from the console; re-registering this host.")
 			// fall through to re-register
 		default:
-			return token, "", 0, nil // transient error: keep the token, status unknown
+			// Keep the token and let the service retry: the Server may simply
+			// be down. Name it and say why, because a Server that is briefly
+			// down and one that no longer exists are indistinguishable to the
+			// operator otherwise, and only the first resolves on its own.
+			fmt.Printf("\nCould not reach %s: %v\n", cfg.ServerURL, cerr)
+			return token, "", 0, nil
 		}
 	}
 	return reregister(ctx, t, api, opts, cfg)
