@@ -152,6 +152,11 @@ func streamCommands(ctx context.Context, api *serverapi.Client, token string, ru
 	const (
 		minBackoff = 2 * time.Second
 		maxBackoff = 5 * time.Minute
+		// A stream that stayed up this long proves the Server is reachable, so
+		// the next drop starts over at the short delay. Without it the delay
+		// only ever grows: a Client up for weeks would wait the maximum after a
+		// routine proxy timeout, having been connected the entire time.
+		healthyFor = time.Minute
 	)
 	backoff := minBackoff
 	for {
@@ -159,7 +164,11 @@ func streamCommands(ctx context.Context, api *serverapi.Client, token string, ru
 		// the stream: whatever was published while disconnected is waiting.
 		runner.Reconcile(ctx)
 
-		err := api.SubscribeCommands(ctx, token, func(commandID string) {
+		var connectedAt time.Time
+		err := api.SubscribeCommands(ctx, token, func() {
+			connectedAt = time.Now()
+			logger.Info("command stream connected")
+		}, func(commandID string) {
 			// The id is a nudge, not the work. Reconcile reads authoritative
 			// state, which also picks up anything this Client missed.
 			runner.Reconcile(ctx)
@@ -171,9 +180,13 @@ func streamCommands(ctx context.Context, api *serverapi.Client, token string, ru
 			logger.Warn("command stream refused; token rejected or revoked")
 			return
 		}
-		if err != nil {
-			logger.Debug("command stream ended", "err", err, "retry_in", backoff)
+		if !connectedAt.IsZero() && time.Since(connectedAt) >= healthyFor {
+			backoff = minBackoff
 		}
+		// Info, not Debug: a Client that can never hold the stream open looks
+		// exactly like a healthy one from the host, and this is the only place
+		// that difference is visible there.
+		logger.Info("command stream ended; reconnecting", "err", err, "retry_in", backoff)
 
 		select {
 		case <-ctx.Done():

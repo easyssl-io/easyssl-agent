@@ -158,10 +158,15 @@ func (c *Client) AckCommand(ctx context.Context, token, commandID, status string
 // stream drops. It returns nil when the stream simply ended, which is ordinary
 // rather than an error: the caller reconnects and keeps polling meanwhile.
 //
+// onConnect fires once the Server has accepted the stream. The caller cannot
+// infer that moment from the return value, which arrives only after the
+// connection is already over, so without this there is no way to tell a stream
+// that never opened from one that stayed up for hours.
+//
 // Deliberately built on net/http and bufio rather than an SSE library. The
 // grammar this needs is two field names, and everything shipped to a host that
 // handles someone's private keys has to earn its place.
-func (c *Client) SubscribeCommands(ctx context.Context, token string, onCommand func(commandID string)) error {
+func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect func(), onCommand func(commandID string)) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+wire.RouteEvents, nil)
 	if err != nil {
 		return err
@@ -178,6 +183,9 @@ func (c *Client) SubscribeCommands(ctx context.Context, token string, onCommand 
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		return decodeAPIError(res)
+	}
+	if onConnect != nil {
+		onConnect()
 	}
 
 	scanner := bufio.NewScanner(res.Body)
