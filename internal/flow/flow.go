@@ -313,16 +313,22 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 // ordinary a command to destroy something unrecoverable. The consequence is that
 // a machine someone believes they have decommissioned still holds every key it
 // generated, so that is said here rather than left to be discovered.
+// Only the number depends on the count succeeding. A keystore that cannot be
+// counted is still a keystore left on the host, and it is also the case where
+// something is already wrong, so a failure to count is the worst moment to say
+// nothing.
 func reportKeysLeftBehind() {
 	n, err := keystore.Count()
-	if err != nil || n == 0 {
+	switch {
+	case err != nil:
+		fmt.Printf("\n! private keys may remain in %s and were NOT deleted (counting them failed: %v).\n", keystore.Dir(), err)
+	case n == 0:
 		return
+	case n == 1:
+		fmt.Printf("\n! 1 private key remains in %s and was NOT deleted.\n", keystore.Dir())
+	default:
+		fmt.Printf("\n! %d private keys remain in %s and were NOT deleted.\n", n, keystore.Dir())
 	}
-	noun := "private keys"
-	if n == 1 {
-		noun = "private key"
-	}
-	fmt.Printf("\n! %d %s remain in %s and were NOT deleted.\n", n, noun, identity.BaseDir)
 	fmt.Println("  They are the only copy on this host. Delete that directory by hand if this")
 	fmt.Println("  machine is being decommissioned, and keep a copy first if the certificates")
 	fmt.Println("  using them are still in service.")

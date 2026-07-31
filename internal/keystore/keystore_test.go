@@ -22,14 +22,32 @@ const (
 	certB = "2d5a7c11-8e42-4f09-b6c3-a71e05d94f88"
 )
 
-// withTempBase points the keystore at a directory this test owns.
+// withTempBase points the keystore at a directory this test owns, and reports
+// the process as root. These tests run unprivileged, so the check has to be
+// stood in for; TestNonRootIsRefused covers the other side of it.
 func withTempBase(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	old := baseDir
-	baseDir = dir
-	t.Cleanup(func() { baseDir = old })
+	oldBase, oldEuid := baseDir, euid
+	baseDir, euid = dir, func() int { return 0 }
+	t.Cleanup(func() { baseDir, euid = oldBase, oldEuid })
 	return dir
+}
+
+// TestNonRootIsRefused: the permissions are the whole of the at-rest
+// protection, and they mean nothing unless root owns the files, since a key
+// written by another user is 0600 to that user. The service does not check
+// euid, so this is the only check on the path the Server's requests arrive on.
+func TestNonRootIsRefused(t *testing.T) {
+	base := withTempBase(t)
+	euid = func() int { return 1000 }
+
+	if _, err := Ensure(certA); err == nil {
+		t.Fatal("a non-root caller was allowed to write a private key")
+	}
+	if n := countFiles(t, filepath.Join(base, "keys")); n != 0 {
+		t.Error("a key was written despite the caller not being root")
+	}
 }
 
 // TestLayoutAndPermissions: the permissions are the entire at-rest protection,

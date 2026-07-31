@@ -60,6 +60,40 @@ const (
 func keysDir() string  { return filepath.Join(baseDir, "keys") }
 func certsDir() string { return filepath.Join(baseDir, "certs") }
 
+// log is where this package writes. SetLogger points it at the Client's own
+// handler so keystore lines match every other line the service emits; until
+// then it is the default, which keeps a package used before wiring from being
+// silent.
+var log = slog.Default()
+
+// SetLogger routes this package's output through the caller's logger.
+func SetLogger(l *slog.Logger) {
+	if l != nil {
+		log = l
+	}
+}
+
+func logger() *slog.Logger { return log }
+
+// requireRoot refuses a caller that cannot own what it is about to write.
+//
+// The permissions in this package are the whole of the at-rest protection, and
+// they only mean anything if root owns the files: a key written by some other
+// user is 0600 to that user, which is not the guarantee documented to operators.
+// Checking here rather than only in the install and uninstall commands matters
+// because the long-running service does not check, and that is the path the
+// Server's requests arrive on.
+// euid is os.Geteuid, indirected only so the tests can exercise both sides of
+// the check without running as root.
+var euid = os.Geteuid
+
+func requireRoot() error {
+	if euid() != 0 {
+		return errors.New("keystore: must run as root: private keys are stored root-only, and a key written by another user would not have the protection this Client documents")
+	}
+	return nil
+}
+
 // record is what a certificate stores about the key it uses.
 //
 // CertificateID repeats the filename deliberately. It costs one field and turns
@@ -88,6 +122,9 @@ type record struct {
 func Ensure(certificateID string) (*ecdsa.PrivateKey, error) {
 	id, err := canonicalCertificateID(certificateID)
 	if err != nil {
+		return nil, err
+	}
+	if err := requireRoot(); err != nil {
 		return nil, err
 	}
 
@@ -128,7 +165,7 @@ func Ensure(certificateID string) (*ecdsa.PrivateKey, error) {
 		return nil, err
 	}
 
-	slog.Info("private key generated", "certificate", id, "key", fp)
+	logger().Info("private key generated", "certificate", id, "key", fp)
 	return key, nil
 }
 
@@ -147,6 +184,11 @@ func CSR(key *ecdsa.PrivateKey, primaryName string, domains []string) ([]byte, e
 	}
 	return csr, nil
 }
+
+// Dir names where key material lives, for messages that have to tell an operator
+// what is on their host. The keys are in it; the records naming them are beside
+// it, and both survive an uninstall.
+func Dir() string { return keysDir() }
 
 // Count reports how many keys this host holds, for the uninstall notice.
 func Count() (int, error) {

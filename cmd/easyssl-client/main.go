@@ -28,6 +28,7 @@ import (
 	"github.com/easyssl-io/easyssl-client/internal/commands"
 	"github.com/easyssl-io/easyssl-client/internal/flow"
 	"github.com/easyssl-io/easyssl-client/internal/identity"
+	"github.com/easyssl-io/easyssl-client/internal/keystore"
 	"github.com/easyssl-io/easyssl-client/internal/serverapi"
 	"github.com/easyssl-io/easyssl-client/internal/sysd"
 	"github.com/easyssl-io/easyssl-contract/wire"
@@ -102,6 +103,9 @@ func cmdRun(ctx context.Context, args []string) error {
 
 	api := serverapi.New(cfg.ServerURL)
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	// So key generation is reported in the same format as everything else the
+	// service writes, rather than through the default handler.
+	keystore.SetLogger(logger)
 	// No handlers registered yet: certificate signing requests and deployments
 	// arrive with the features that need them. Until then an incoming command
 	// is reported unsupported, which is the same thing a Client older than its
