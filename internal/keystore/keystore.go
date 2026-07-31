@@ -302,7 +302,7 @@ func fingerprint(pub crypto.PublicKey) (string, error) {
 // syncs are required rather than cautious: the rename is what makes the write
 // atomic, and the two flushes are what make it survive a power loss.
 func writeFile(dir, name string, data []byte) error {
-	if err := os.MkdirAll(dir, dirMode); err != nil {
+	if err := mkdirAllSynced(dir); err != nil {
 		return err
 	}
 	suffix := make([]byte, 8)
@@ -331,6 +331,35 @@ func writeFile(dir, name string, data []byte) error {
 		return err
 	}
 	return syncDir(dir)
+}
+
+// mkdirAllSynced creates dir, and makes every directory it had to create durable
+// by syncing the parent that now holds that entry.
+//
+// Syncing a directory makes the entries inside it durable, not the directory
+// itself, so creating <base>/keys and then syncing only <base>/keys leaves the
+// "keys" entry in <base> unflushed. A power loss in that window can take the
+// whole directory while the record naming a key inside it survives, which is
+// the dangling reference the key-before-record ordering exists to prevent. That
+// window is narrow, since it is only the first write after an install, but it
+// is exactly the state this package refuses to repair.
+//
+// A directory that already exists needs nothing: its entry was made durable
+// when it was created, or it predates this Client.
+func mkdirAllSynced(dir string) error {
+	if _, err := os.Stat(dir); err == nil {
+		return nil
+	}
+	parent := filepath.Dir(dir)
+	if parent != dir {
+		if err := mkdirAllSynced(parent); err != nil {
+			return err
+		}
+	}
+	if err := os.Mkdir(dir, dirMode); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return syncDir(parent)
 }
 
 // syncDir flushes a directory entry, so the renamed file is still there after a

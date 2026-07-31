@@ -326,6 +326,37 @@ func TestInconsistentStateIsRefused(t *testing.T) {
 	})
 }
 
+// TestCreatesMissingDirectories: the first write after an install creates the
+// whole tree, several levels of it when the base does not exist either. Each
+// level must end up present and 0700, since a level that is missing or wrong is
+// how the durability and permission guarantees both fail on exactly the run
+// that matters most, the first one.
+func TestCreatesMissingDirectories(t *testing.T) {
+	root := t.TempDir()
+	oldBase, oldEuid := baseDir, euid
+	baseDir, euid = filepath.Join(root, "deep", "etc", "easyssl"), func() int { return 0 }
+	t.Cleanup(func() { baseDir, euid = oldBase, oldEuid })
+
+	if _, err := Ensure(certA); err != nil {
+		t.Fatalf("Ensure into a tree that does not exist yet: %v", err)
+	}
+	for _, dir := range []string{
+		filepath.Join(root, "deep"),
+		filepath.Join(root, "deep", "etc"),
+		baseDir,
+		filepath.Join(baseDir, "keys"),
+		filepath.Join(baseDir, "certs"),
+	} {
+		info, err := os.Stat(dir)
+		if err != nil {
+			t.Fatalf("stat %s: %v", dir, err)
+		}
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Errorf("%s mode = %o, want 700", dir, got)
+		}
+	}
+}
+
 func TestCountReportsKeys(t *testing.T) {
 	withTempBase(t)
 
