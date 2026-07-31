@@ -50,8 +50,10 @@ import (
 // tests can point it at a temporary directory; nothing else reassigns it.
 var baseDir = identity.BaseDir
 
-// dirMode and keyMode are the whole of the at-rest protection, so they are
-// written once here and never recomputed at a call site.
+// dirMode and fileMode are the whole of the at-rest protection, so they are
+// named once here and passed explicitly wherever something is created. Nothing
+// in this package relies on a default mode from elsewhere: a permission a
+// requirement depends on should be visible in the code that applies it.
 const (
 	dirMode  os.FileMode = 0o700
 	fileMode os.FileMode = 0o600
@@ -293,20 +295,25 @@ func fingerprint(pub crypto.PublicKey) (string, error) {
 // writeFile puts data at dir/name so that a reader sees either nothing or a
 // complete file, and so that a crash cannot lose what a CSR was built from.
 //
-// The temporary file is created inside the destination directory with its final
-// permissions, because os.CreateTemp opens at 0600 and setting the mode
-// afterwards would leave a window in which the file is readable by others. Both
+// The temporary file is created inside the destination directory, and at its
+// final permissions rather than adjusted afterwards, which would leave a window
+// in which the file is readable by others. It is opened with O_EXCL under a
+// random name, so it cannot collide with or reuse anything already there. Both
 // syncs are required rather than cautious: the rename is what makes the write
 // atomic, and the two flushes are what make it survive a power loss.
 func writeFile(dir, name string, data []byte) error {
 	if err := os.MkdirAll(dir, dirMode); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".tmp-*")
+	suffix := make([]byte, 8)
+	if _, err := rand.Read(suffix); err != nil {
+		return err
+	}
+	tmp := filepath.Join(dir, ".tmp-"+hex.EncodeToString(suffix))
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fileMode)
 	if err != nil {
 		return err
 	}
-	tmp := f.Name()
 	defer os.Remove(tmp) // a no-op once the rename below has succeeded
 
 	if _, err := f.Write(data); err != nil {
