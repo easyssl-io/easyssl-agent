@@ -19,6 +19,7 @@ import (
 
 	"github.com/easyssl-io/easyssl-client/internal/hostinfo"
 	"github.com/easyssl-io/easyssl-client/internal/identity"
+	"github.com/easyssl-io/easyssl-client/internal/keystore"
 	"github.com/easyssl-io/easyssl-client/internal/serverapi"
 	"github.com/easyssl-io/easyssl-client/internal/sysd"
 	"github.com/easyssl-io/easyssl-contract/wire"
@@ -283,7 +284,7 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 		return fmt.Errorf("removing %s: %w", identity.BaseDir, err)
 	}
 	if hadState {
-		fmt.Printf("✓ %s deleted (config and token)\n", identity.BaseDir)
+		fmt.Printf("✓ config and token deleted from %s\n", identity.BaseDir)
 	}
 
 	// Last, because it deletes the running program. Unlinking a running binary
@@ -300,7 +301,31 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 		return nil
 	}
 	fmt.Println("\neasySSL Client uninstalled. Certificates it deployed were left in place.")
+	reportKeysLeftBehind()
 	return nil
+}
+
+// reportKeysLeftBehind tells the operator that uninstalling did not remove the
+// private keys.
+//
+// It is printed rather than offered as a choice because the Client never deletes
+// key material: each key is the only copy this host has, and an uninstall is too
+// ordinary a command to destroy something unrecoverable. The consequence is that
+// a machine someone believes they have decommissioned still holds every key it
+// generated, so that is said here rather than left to be discovered.
+func reportKeysLeftBehind() {
+	n, err := keystore.Count()
+	if err != nil || n == 0 {
+		return
+	}
+	noun := "private keys"
+	if n == 1 {
+		noun = "private key"
+	}
+	fmt.Printf("\n! %d %s remain in %s and were NOT deleted.\n", n, noun, identity.BaseDir)
+	fmt.Println("  They are the only copy on this host. Delete that directory by hand if this")
+	fmt.Println("  machine is being decommissioned, and keep a copy first if the certificates")
+	fmt.Println("  using them are still in service.")
 }
 
 func exists(path string) bool {

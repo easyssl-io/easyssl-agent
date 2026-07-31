@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,9 +76,23 @@ func SaveToken(token string) error {
 	return os.WriteFile(TokenPath(), []byte(token), 0o600)
 }
 
-// RemoveAll deletes the Client's whole state directory (config and token). It
-// is idempotent: an already-absent directory is not an error.
-func RemoveAll() error { return os.RemoveAll(BaseDir) }
+// RemoveAll deletes this Client's identity: its config and its token. It is
+// idempotent, so an already-absent file is not an error.
+//
+// It deliberately does not remove BaseDir itself, because the keystore lives
+// under it and holds the only copy of every private key this host generated.
+// Uninstalling is too ordinary a command to destroy that, so the keys are left
+// behind and the caller says so. This function used to remove the whole
+// directory, which was correct only while nothing but the config and the token
+// lived there.
+func RemoveAll() error {
+	for _, path := range []string{ConfigPath(), TokenPath()} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
 
 // LoadToken reads the host's bearer token.
 func LoadToken() (string, error) {
