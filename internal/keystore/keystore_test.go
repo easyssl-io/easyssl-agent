@@ -167,7 +167,7 @@ func TestCSRMatchesStoredKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-	der, err := CSR(key, "example.test", []string{"example.test", "www.example.test"})
+	der, err := CSR(key, []string{"example.test", "www.example.test"})
 	if err != nil {
 		t.Fatalf("CSR: %v", err)
 	}
@@ -185,8 +185,10 @@ func TestCSRMatchesStoredKey(t *testing.T) {
 	if !key.PublicKey.Equal(pub) {
 		t.Error("the CSR does not carry the stored key's public half")
 	}
-	if csr.Subject.CommonName != "example.test" {
-		t.Errorf("CSR subject CN = %q, want example.test", csr.Subject.CommonName)
+	// No Common Name: an ACME client would order it as a name in its own right,
+	// so an unrequested one there becomes an unrequested name on the certificate.
+	if csr.Subject.CommonName != "" {
+		t.Errorf("CSR carries Common Name %q; it must carry none", csr.Subject.CommonName)
 	}
 	if len(csr.DNSNames) != 2 {
 		t.Errorf("CSR DNS names = %v, want both domains", csr.DNSNames)

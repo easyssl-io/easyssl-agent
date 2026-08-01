@@ -32,7 +32,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -171,13 +170,18 @@ func Ensure(certificateID string) (*ecdsa.PrivateKey, error) {
 	return key, nil
 }
 
-// CSR builds a certificate signing request from key.
+// CSR builds a certificate signing request from key, for the domains it is
+// given. It never chooses them: the caller is told what to sign.
 //
 // Built on each call and never stored, so it cannot come to disagree with the
 // key it belongs to.
-func CSR(key *ecdsa.PrivateKey, primaryName string, domains []string) ([]byte, error) {
+//
+// No Subject Common Name is set, deliberately. An ACME client reads the names to
+// order from the CSR, taking the Common Name first and then every SAN, so a
+// Common Name is either a duplicate of a SAN or a name nobody asked for, and the
+// second of those would put an unrequested name on the certificate.
+func CSR(key *ecdsa.PrivateKey, domains []string) ([]byte, error) {
 	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject:            pkix.Name{CommonName: primaryName},
 		DNSNames:           domains,
 		SignatureAlgorithm: x509.ECDSAWithSHA256,
 	}, key)
