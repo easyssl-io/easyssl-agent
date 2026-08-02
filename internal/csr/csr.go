@@ -96,9 +96,10 @@ func New(api API, token string, logger *slog.Logger) commands.Handler {
 			logger.Warn("certificate no longer awaiting a csr; discarding command", "certificate", work.CertificateID)
 			return nil
 		case errors.As(err, &apiErr) && apiErr.Code == wire.CodeCSRMismatch:
-			// The Server rejected what this Client built. Retrying the same
-			// build cannot help, so the refusal is recorded here and the
-			// command acked; the Server keeps the certificate waiting.
+			// The Server rejected what this Client built and failed the
+			// certificate at the rejection, naming this Client. Retrying the
+			// same build cannot help, so the refusal is recorded here and the
+			// command acked.
 			logger.Error("server rejected the csr", "certificate", work.CertificateID, "err", err)
 			return nil
 		default:
