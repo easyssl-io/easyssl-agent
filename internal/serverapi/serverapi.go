@@ -216,3 +216,25 @@ func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect 
 	}
 	return scanner.Err()
 }
+
+// CSRWork reads the signing work behind a request_csr command: the domain set
+// the certificate fixed at request time. Only the Client named on the
+// certificate gets an answer; anyone else gets the same 404 a nonexistent
+// certificate would.
+func (c *Client) CSRWork(ctx context.Context, token, certificateID string) (wire.CSRWork, error) {
+	var out wire.CSRWork
+	path := "/api/v1/client/certificates/" + url.PathEscape(certificateID)
+	if err := c.do(ctx, http.MethodGet, path, token, nil, &out); err != nil {
+		return wire.CSRWork{}, err
+	}
+	return out, nil
+}
+
+// SubmitCSR hands the built CSR back. The Server verifies it against the
+// request before storing it write-once; the terminal refusals
+// (csr_already_submitted, not_awaiting_csr, csr_mismatch) come back as
+// *APIError with those codes.
+func (c *Client) SubmitCSR(ctx context.Context, token, certificateID, csrPEM string) error {
+	path := "/api/v1/client/certificates/" + url.PathEscape(certificateID) + "/csr"
+	return c.do(ctx, http.MethodPost, path, token, wire.CSRSubmission{CSR: csrPEM}, nil)
+}
