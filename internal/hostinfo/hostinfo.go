@@ -1,6 +1,6 @@
 // Package hostinfo collects best-effort host diagnostics the Client reports at
-// registration: machine ID, hostname, OS, host type, and the binary, config, and
-// service paths. Every field is best-effort; an unavailable value is reported as
+// registration: hostname, OS, host type, and the binary, config, and service
+// paths. Every field is best-effort; an unavailable value is reported as
 // an empty string rather than failing.
 package hostinfo
 
@@ -18,7 +18,6 @@ import (
 func Collect() wire.Diagnostics {
 	bin, _ := os.Executable()
 	return wire.Diagnostics{
-		MachineID:   machineID(),
 		Hostname:    hostname(),
 		OS:          osName(),
 		HostType:    hostType(),
@@ -26,18 +25,6 @@ func Collect() wire.Diagnostics {
 		ConfigPath:  identity.BaseDir,
 		ServiceName: identity.ServiceName(),
 	}
-}
-
-// machineID reads /etc/machine-id (the systemd stable OS-install identifier).
-func machineID() string {
-	for _, p := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
-		if b, err := os.ReadFile(p); err == nil {
-			if id := strings.TrimSpace(string(b)); id != "" {
-				return id
-			}
-		}
-	}
-	return ""
 }
 
 func hostname() string {
