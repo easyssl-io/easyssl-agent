@@ -377,35 +377,29 @@ func syncDir(dir string) error {
 	return d.Sync()
 }
 
-// canonicalCertificateID accepts a UUID and returns it in lowercase.
+// canonicalCertificateID accepts a Server certificate id: "crt-" followed by
+// 14 characters of lowercase base32 (a-z, 2-7).
 //
 // This runs before the value reaches a path, and it is a security control
 // rather than input hygiene: the id arrives from the Server, filepath.Join
 // resolves ".." instead of refusing it, and this process runs as root, so an
 // unchecked value would let whoever sent it choose where a private key is
-// written. Lowercasing matters separately, because two spellings of one id would
-// otherwise produce two records and two keys for a single certificate.
+// written. The exact shape is enforced, not merely "no path characters",
+// because a looser check invites two spellings of one id, and two spellings
+// would produce two records and two keys for a single certificate.
 func canonicalCertificateID(id string) (string, error) {
-	const layout = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
-	if len(id) != len(layout) {
-		return "", fmt.Errorf("keystore: certificate id %q is not a UUID", id)
+	const prefix = "crt-"
+	const randomLen = 14
+	if len(id) != len(prefix)+randomLen || id[:len(prefix)] != prefix {
+		return "", fmt.Errorf("keystore: certificate id %q is not a certificate id", id)
 	}
-	out := make([]byte, len(id))
-	for i := 0; i < len(id); i++ {
-		c := lower(id[i])
-		switch i {
-		case 8, 13, 18, 23:
-			if c != '-' {
-				return "", fmt.Errorf("keystore: certificate id %q is not a UUID", id)
-			}
-		default:
-			if !isHex(c) {
-				return "", fmt.Errorf("keystore: certificate id %q is not a UUID", id)
-			}
+	for i := len(prefix); i < len(id); i++ {
+		c := id[i]
+		if (c < 'a' || c > 'z') && (c < '2' || c > '7') {
+			return "", fmt.Errorf("keystore: certificate id %q is not a certificate id", id)
 		}
-		out[i] = c
 	}
-	return string(out), nil
+	return id, nil
 }
 
 // validateKeyID accepts a key fingerprint: 64 lowercase hex characters. It reads

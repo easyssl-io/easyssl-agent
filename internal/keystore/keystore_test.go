@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	certA = "9f1c8e2a-4b73-4d51-9a0e-6c2f1b8d7e35"
-	certB = "2d5a7c11-8e42-4f09-b6c3-a71e05d94f88"
+	certA = "crt-testkeystorea2"
+	certB = "crt-testkeystoreb2"
 )
 
 // withTempBase points the keystore at a directory this test owns, and reports
@@ -146,14 +146,11 @@ func TestEnsureIsIdempotentAndPerCertificate(t *testing.T) {
 		t.Errorf("keys after a second certificate = %d, want 2", n)
 	}
 
-	// Case is not a second identity: ids are canonicalized, so the uppercase
-	// spelling must find the key the lowercase one created rather than make one.
-	upper, err := Ensure(strings.ToUpper(certA))
-	if err != nil {
-		t.Fatalf("Ensure uppercase: %v", err)
-	}
-	if !first.Equal(upper) {
-		t.Error("an uppercase certificate id produced a second key")
+	// Case is not a second identity: the Server only ever mints lowercase, so
+	// an uppercase spelling is refused outright rather than normalized into a
+	// second record for the same certificate.
+	if _, err := Ensure(strings.ToUpper(certA)); err == nil {
+		t.Error("an uppercase certificate id was accepted; it must be refused")
 	}
 }
 
@@ -209,10 +206,11 @@ func TestMalformedIdentifierIsRefused(t *testing.T) {
 		"../" + certA,
 		certA + "/../../escape",
 		"",
-		"not-a-uuid",
-		certA + "extra",
-		"9f1c8e2a4b734d519a0e6c2f1b8d7e35",     // right characters, no dashes
-		"9f1c8e2g-4b73-4d51-9a0e-6c2f1b8d7e35", // 'g' is not hex
+		"not-a-certificate-id",
+		certA + "extra",      // too long
+		certA[:len(certA)-1], // too short
+		"cert-testkeystore2", // wrong prefix
+		"crt-testkeystore19", // '1' and '9' are outside base32's a-z2-7
 	} {
 		if _, err := Ensure(id); err == nil {
 			t.Errorf("Ensure(%q) was accepted; it must be refused", id)
