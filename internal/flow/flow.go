@@ -28,10 +28,6 @@ import (
 // Version is the Client version reported to the Server.
 const Version = "0.0.1"
 
-// maxInstanceIDAttempts bounds instance-ID regeneration on the (astronomically
-// unlikely) collision path before giving up.
-const maxInstanceIDAttempts = 5
-
 // Options configures a registration session.
 type Options struct {
 	ServerURL       string // required
@@ -198,6 +194,8 @@ func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Op
 			switch apiErr.Code {
 			case wire.CodeInstanceIDTaken:
 				return "", "", 0, errors.New("registration failed: this host is already registered; remove it from the console, then reinstall")
+			case wire.CodeUnknownInstanceID:
+				return "", "", 0, fmt.Errorf("registration failed: the Server does not know this Client (instance %s). If the Server was reset, remove %s and register fresh", cfg.InstanceID, identity.ConfigPath())
 			case wire.CodeInvalidRegistrationKey:
 				return "", "", 0, errors.New("registration failed: the registration key was not accepted")
 			}
@@ -387,40 +385,34 @@ func confirmName(t *terminal, fromFlag, defaultName string) string {
 	return v
 }
 
-// register submits a fresh registration, regenerating the instance ID if the
-// Server reports it is taken.
+// register submits a fresh registration. No instance ID goes with it: the
+// Server mints one and returns it, and persisting that answer is what makes the
+// next run of the installer a reinstall of this Client rather than a second
+// registration.
 func register(ctx context.Context, api *serverapi.Client, key, name, serverURL string) (wire.RegistrationResponse, string, error) {
-	for range maxInstanceIDAttempts {
-		instanceID, err := identity.NewInstanceID()
-		if err != nil {
-			return wire.RegistrationResponse{}, "", err
-		}
-		diag := hostinfo.Collect()
-		fmt.Printf("✓ host  %s · %s\n", diag.OS, diag.HostType)
-		fmt.Printf("→ submitting registration to %s\n", serverURL)
+	diag := hostinfo.Collect()
+	fmt.Printf("✓ host  %s · %s\n", diag.OS, diag.HostType)
+	fmt.Printf("→ submitting registration to %s\n", serverURL)
 
-		resp, err := api.Register(ctx, wire.RegistrationRequest{
-			RegistrationKey: key,
-			InstanceID:      instanceID,
-			ProposedName:    name,
-			ClientVersion:   Version,
-			ProtocolVersion: wire.ProtocolVersion,
-			Diagnostics:     diag,
-		})
-		if err == nil {
-			return resp, instanceID, nil
-		}
+	resp, err := api.Register(ctx, wire.RegistrationRequest{
+		RegistrationKey: key,
+		ProposedName:    name,
+		ClientVersion:   Version,
+		ProtocolVersion: wire.ProtocolVersion,
+		Diagnostics:     diag,
+	})
+	if err != nil {
 		if apiErr, ok := errors.AsType[*serverapi.APIError](err); ok {
-			switch apiErr.Code {
-			case wire.CodeInstanceIDTaken:
-				continue // regenerate and retry
-			case wire.CodeInvalidRegistrationKey:
+			if apiErr.Code == wire.CodeInvalidRegistrationKey {
 				return wire.RegistrationResponse{}, "", errors.New("registration failed: the registration key was not accepted")
 			}
 		}
 		return wire.RegistrationResponse{}, "", fmt.Errorf("registration failed: %w", err)
 	}
-	return wire.RegistrationResponse{}, "", errors.New("registration failed: could not obtain a unique instance ID")
+	if resp.InstanceID == "" {
+		return wire.RegistrationResponse{}, "", errors.New("registration failed: the Server did not assign an instance ID (is it older than this Client?)")
+	}
+	return resp, resp.InstanceID, nil
 }
 
 // waitForAuthorization polls until the Client is active, the token is rejected,

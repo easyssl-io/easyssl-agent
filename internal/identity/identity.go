@@ -1,13 +1,12 @@
 // Package identity manages the Client's on-disk identity and state. A host runs
-// a single Client: its 16-hex instance ID is generated once, persisted in the
-// config, and reused across reinstalls, so re-running the installer updates the
-// existing Client instead of registering a second one. The config and bearer
-// token live directly under BaseDir.
+// a single Client: its 16-hex instance ID is assigned by the Server at
+// registration, persisted in the config, and presented on every reinstall, so
+// re-running the installer updates the existing Client instead of registering a
+// second one. Nothing here mints an identifier; the Server is the only party
+// that does. The config and bearer token live directly under BaseDir.
 package identity
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -26,17 +25,6 @@ type Config struct {
 	InstanceID  string `json:"instanceId"`
 	DisplayName string `json:"displayName"`
 	ServerURL   string `json:"serverUrl"`
-}
-
-// NewInstanceID returns a fresh instance ID: 64 CSPRNG bits as 16 lowercase hex
-// characters. Generated locally, persisted once, and reused thereafter; the
-// Server enforces its global uniqueness.
-func NewInstanceID() (string, error) {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b[:]), nil
 }
 
 // ConfigPath and TokenPath locate the two state files.
