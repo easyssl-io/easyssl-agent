@@ -35,7 +35,7 @@ func New(baseURL string) *Client {
 }
 
 // APIError is a non-2xx Server response. Code is the wire error code (e.g.
-// wire.CodeInstanceIDTaken) when the body carried one, so callers can branch on
+// wire.CodeClientIDTaken) when the body carried one, so callers can branch on
 // it rather than parsing prose.
 type APIError struct {
 	Status  int

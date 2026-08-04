@@ -68,7 +68,9 @@ func work(domains ...string) wire.CSRWork {
 	return wire.CSRWork{CertificateID: certID, Domains: domains, KeyType: wire.KeyTypeECP256}
 }
 
-func command() wire.Command { return wire.Command{ID: "cmd-1", Type: wire.CommandRequestCSR, RefID: certID} }
+func command() wire.Command {
+	return wire.Command{ID: "cmd-1", Type: wire.CommandRequestCSR, RefID: certID}
+}
 
 func TestBuildsAndSubmitsAVerifiableCSR(t *testing.T) {
 	api := &fakeAPI{work: work("app.example.test", "*.svc.example.test")}

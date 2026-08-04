@@ -246,7 +246,7 @@ func cmdStatus(args []string) error {
 
 	if *asJSON {
 		out := map[string]any{
-			"instanceId":   cfg.InstanceID,
+			"clientId":     cfg.ClientID,
 			"displayName":  cfg.DisplayName,
 			"serverUrl":    cfg.ServerURL,
 			"serviceName":  identity.ServiceName(),
@@ -258,7 +258,7 @@ func cmdStatus(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(out)
 	}
 
-	fmt.Printf("instance   %s\n", cfg.InstanceID)
+	fmt.Printf("client     %s\n", cfg.ClientID)
 	fmt.Printf("name       %s\n", cfg.DisplayName)
 	fmt.Printf("server     %s\n", cfg.ServerURL)
 	fmt.Printf("service    %s (%s)\n", identity.ServiceName(), sysd.State())

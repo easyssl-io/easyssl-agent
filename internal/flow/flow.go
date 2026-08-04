@@ -1,6 +1,6 @@
 // Package flow drives the interactive line-based registration session.
 // A host runs one Client: the first run generates and persists the
-// instance ID, registers, stores the token, installs the systemd unit, and waits
+// registers, stores the Server-minted Client ID and token, installs the systemd unit, and waits
 // for the operator to authorize from the console. A later run on an
 // already-registered host is idempotent: it refreshes the service onto the
 // updated binary and reports state instead of registering a second Client. It is
@@ -57,7 +57,7 @@ func Register(ctx context.Context, opts Options) error {
 		defer t.close()
 	}
 
-	if cfg, err := identity.LoadConfig(); err == nil && cfg.InstanceID != "" {
+	if cfg, err := identity.LoadConfig(); err == nil && cfg.ClientID != "" {
 		return reinstall(ctx, t, opts, cfg)
 	}
 	return freshRegister(ctx, t, opts)
@@ -74,12 +74,12 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	fmt.Printf("✓ client name  %s\n", name)
 
 	api := serverapi.New(opts.ServerURL)
-	resp, instanceID, err := register(ctx, api, key, name, opts.ServerURL)
+	resp, clientID, err := register(ctx, api, key, name, opts.ServerURL)
 	if err != nil {
 		return err
 	}
 
-	cfg := identity.Config{InstanceID: instanceID, DisplayName: name, ServerURL: opts.ServerURL}
+	cfg := identity.Config{ClientID: clientID, DisplayName: name, ServerURL: opts.ServerURL}
 	if err := identity.SaveConfig(cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
@@ -97,7 +97,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 }
 
 // reinstall handles a host that is already registered. It reconciles the token
-// (re-registering under the same instance ID if it was removed from the console),
+// (re-registering under the same Client ID if it was removed from the console),
 // then refreshes and restarts the service onto the freshly installed binary, and
 // reports state. Reconciling the token BEFORE the restart is essential: restarting
 // first would run the service with the stale token, and a revoked token makes the
@@ -119,7 +119,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	}
 
 	fmt.Printf("This host is already registered as %q (instance %s) on %s.\n",
-		cfg.DisplayName, cfg.InstanceID, cfg.ServerURL)
+		cfg.DisplayName, cfg.ClientID, cfg.ServerURL)
 
 	api := serverapi.New(cfg.ServerURL)
 	token, status, poll, err := reconcileToken(ctx, t, api, opts, cfg)
@@ -152,7 +152,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 // reconcileToken returns a token the service can run with, plus the Client's
 // current status and poll cadence. It checks in with the stored token; if that
 // token is missing or was removed from the console it re-registers under the same
-// instance ID. status is "" (poll unused) when the Server could not be reached.
+// Client ID. status is "" (poll unused) when the Server could not be reached.
 func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (token, status string, poll int, err error) {
 	if token, err = identity.LoadToken(); err == nil {
 		resp, cerr := api.Checkin(ctx, token, wire.CheckinRequest{ClientVersion: Version})
@@ -174,7 +174,7 @@ func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opt
 	return reregister(ctx, t, api, opts, cfg)
 }
 
-// reregister re-registers keeping the host's persisted instance ID and name, and
+// reregister re-registers keeping the host's persisted Client ID and name, and
 // returns the new token with a pending status.
 func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (string, string, int, error) {
 	key, err := resolveKey(t, opts.RegistrationKey)
@@ -183,7 +183,7 @@ func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Op
 	}
 	resp, err := api.Register(ctx, wire.RegistrationRequest{
 		RegistrationKey: key,
-		InstanceID:      cfg.InstanceID,
+		ClientID:        cfg.ClientID,
 		ProposedName:    cfg.DisplayName,
 		ClientVersion:   Version,
 		ProtocolVersion: wire.ProtocolVersion,
@@ -192,10 +192,10 @@ func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Op
 	if err != nil {
 		if apiErr, ok := errors.AsType[*serverapi.APIError](err); ok {
 			switch apiErr.Code {
-			case wire.CodeInstanceIDTaken:
+			case wire.CodeClientIDTaken:
 				return "", "", 0, errors.New("registration failed: this host is already registered; remove it from the console, then reinstall")
-			case wire.CodeUnknownInstanceID:
-				return "", "", 0, fmt.Errorf("registration failed: the Server does not know this Client (instance %s). If the Server was reset, remove %s and register fresh", cfg.InstanceID, identity.ConfigPath())
+			case wire.CodeUnknownClientID:
+				return "", "", 0, fmt.Errorf("registration failed: the Server does not know this Client (%s). If the Server was reset, remove %s and register fresh", cfg.ClientID, identity.ConfigPath())
 			case wire.CodeInvalidRegistrationKey:
 				return "", "", 0, errors.New("registration failed: the registration key was not accepted")
 			}
@@ -239,11 +239,11 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 	}
 
 	cfg, cfgErr := identity.LoadConfig()
-	installed := cfgErr == nil && cfg.InstanceID != ""
+	installed := cfgErr == nil && cfg.ClientID != ""
 	if !installed {
 		fmt.Println("No easySSL Client registration found on this host; removing any leftover files.")
 	} else {
-		fmt.Printf("easySSL Client %q (instance %s) is registered with %s.\n", cfg.DisplayName, cfg.InstanceID, cfg.ServerURL)
+		fmt.Printf("easySSL Client %q (%s) is registered with %s.\n", cfg.DisplayName, cfg.ClientID, cfg.ServerURL)
 	}
 
 	if !assumeYes && !confirmUninstall(installed) {
@@ -385,7 +385,7 @@ func confirmName(t *terminal, fromFlag, defaultName string) string {
 	return v
 }
 
-// register submits a fresh registration. No instance ID goes with it: the
+// register submits a fresh registration. No identifier goes with it: the
 // Server mints one and returns it, and persisting that answer is what makes the
 // next run of the installer a reinstall of this Client rather than a second
 // registration.
@@ -409,10 +409,10 @@ func register(ctx context.Context, api *serverapi.Client, key, name, serverURL s
 		}
 		return wire.RegistrationResponse{}, "", fmt.Errorf("registration failed: %w", err)
 	}
-	if resp.InstanceID == "" {
-		return wire.RegistrationResponse{}, "", errors.New("registration failed: the Server did not assign an instance ID (is it older than this Client?)")
+	if resp.ClientID == "" {
+		return wire.RegistrationResponse{}, "", errors.New("registration failed: did not receive a Client ID from the Server (is it older than this Client?)")
 	}
-	return resp, resp.InstanceID, nil
+	return resp, resp.ClientID, nil
 }
 
 // waitForAuthorization polls until the Client is active, the token is rejected,
