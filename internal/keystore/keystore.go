@@ -428,3 +428,42 @@ func lower(c byte) byte {
 	}
 	return c
 }
+
+// ErrNoKey reports that this host holds no key for a certificate. It is a
+// distinct error because the answer differs by caller: the CSR flow generates
+// one, while a deployment must fail — a certificate whose key this host never
+// held cannot be installed here, and generating one would produce a key that
+// does not match the certificate.
+var ErrNoKey = errors.New("keystore: this host holds no key for that certificate")
+
+// Load returns the key certificateID uses, or ErrNoKey when this host has none.
+// Unlike Ensure it never generates: the caller is installing something already
+// issued, so a missing key is a fact to report rather than a gap to fill.
+func Load(certificateID string) (*ecdsa.PrivateKey, error) {
+	id, err := canonicalCertificateID(certificateID)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireRoot(); err != nil {
+		return nil, err
+	}
+	rec, found, err := readRecord(id)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, ErrNoKey
+	}
+	return loadKey(rec.KeyFingerprint)
+}
+
+// EncodePrivateKeyPEM renders a key as PKCS#8 PEM, the form a Plugin receives
+// it in. It never touches disk: the material goes over a pipe to the Plugin,
+// which writes it where it needs to and removes it.
+func EncodePrivateKeyPEM(key *ecdsa.PrivateKey) (string, error) {
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		return "", fmt.Errorf("keystore: encoding key: %w", err)
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})), nil
+}

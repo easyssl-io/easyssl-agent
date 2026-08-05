@@ -30,6 +30,7 @@ import (
 
 	"github.com/easyssl-io/easyssl-client/internal/commands"
 	"github.com/easyssl-io/easyssl-client/internal/csr"
+	"github.com/easyssl-io/easyssl-client/internal/deploy"
 	"github.com/easyssl-io/easyssl-client/internal/flow"
 	"github.com/easyssl-io/easyssl-client/internal/identity"
 	"github.com/easyssl-io/easyssl-client/internal/keystore"
@@ -113,11 +114,11 @@ func cmdRun(ctx context.Context, args []string) error {
 	// So key generation is reported in the same format as everything else the
 	// service writes, rather than through the default handler.
 	keystore.SetLogger(logger)
-	// Deployments arrive with the feature that needs them; until then that
-	// command type is reported unsupported, the same thing a Client older than
-	// its Server does.
+	// A command type with no handler here is reported unsupported, which is
+	// also what a Client older than its Server does.
 	runner := commands.NewRunner(api, token, logger, map[string]commands.Handler{
 		wire.CommandRequestCSR: csr.New(api, token, logger),
+		wire.CommandDeploy:     deploy.New(api, pluginmgr.New(nil, nil), token, logger),
 	})
 
 	ctx, cancel := context.WithCancel(ctx)

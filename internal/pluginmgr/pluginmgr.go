@@ -405,3 +405,21 @@ func (c HTTPCatalog) Download(ctx context.Context, url string) (io.ReadCloser, e
 	}
 	return res.Body, nil
 }
+
+// Find returns the installed Plugin with this id, or false. It reads the
+// Client's own record rather than the directory: a file someone dropped into
+// the install directory by hand was never installed by anything, and running it
+// because the name matched is how a host ends up executing something nobody
+// fetched.
+func (m *Manager) Find(id string) (Installed, bool, error) {
+	rec, err := m.load()
+	if err != nil {
+		return Installed{}, false, err
+	}
+	for _, p := range rec.Plugins {
+		if p.ID == id {
+			return p, true, nil
+		}
+	}
+	return Installed{}, false, nil
+}

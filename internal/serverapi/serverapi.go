@@ -246,3 +246,18 @@ func (c *Client) SubmitCSR(ctx context.Context, token, certificateID, csrPEM str
 func (c *Client) ReportPlugin(ctx context.Context, token, pluginID string, rep wire.PluginReport) error {
 	return c.do(ctx, http.MethodPut, "/api/v1/client/plugins/"+pluginID, token, rep, nil)
 }
+
+// DeploymentWork reads what a deploy command refers to: the certificate, the
+// chain and the resolved settings. Never the private key — that is already on
+// this host, which is why only this Client can carry the Deployment out.
+func (c *Client) DeploymentWork(ctx context.Context, token, deploymentID string) (wire.DeploymentWork, error) {
+	var out wire.DeploymentWork
+	err := c.do(ctx, http.MethodGet, "/api/v1/client/deployments/"+deploymentID, token, nil, &out)
+	return out, err
+}
+
+// ReportDeploymentResult sends the terminal outcome. Write-once on the Server:
+// a second report answers deployment_finished, which the Client treats as done.
+func (c *Client) ReportDeploymentResult(ctx context.Context, token, deploymentID string, res wire.DeploymentResult) error {
+	return c.do(ctx, http.MethodPost, "/api/v1/client/deployments/"+deploymentID+"/result", token, res, nil)
+}
