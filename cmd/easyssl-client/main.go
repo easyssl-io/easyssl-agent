@@ -4,6 +4,8 @@
 //	run                                                     the systemd service loop (periodic check-in)
 //	status [--json]                                         print local state + what the Server says
 //	uninstall [--yes]                                       unregister and remove the Client
+//	plugin install <name> [--json]                          fetch a plugin from the Marketplace and report it
+//	plugin list [--json]                                    what this host has installed
 //
 // A host runs one Client, so the commands need no instance selector. The CLI
 // writes human output to stdout, JSON where asked, and errors to stderr;
@@ -21,6 +23,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/signal"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -30,6 +33,7 @@ import (
 	"github.com/easyssl-io/easyssl-client/internal/flow"
 	"github.com/easyssl-io/easyssl-client/internal/identity"
 	"github.com/easyssl-io/easyssl-client/internal/keystore"
+	"github.com/easyssl-io/easyssl-client/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-client/internal/serverapi"
 	"github.com/easyssl-io/easyssl-client/internal/sysd"
 	"github.com/easyssl-io/easyssl-contract/wire"
@@ -53,6 +57,8 @@ func main() {
 		err = cmdStatus(os.Args[2:])
 	case "uninstall":
 		err = cmdUninstall(ctx, os.Args[2:])
+	case "plugin":
+		err = cmdPlugin(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -68,7 +74,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: easyssl-client <register|run|status|uninstall> [flags]")
+	fmt.Fprintln(os.Stderr, "usage: easyssl-client <register|run|status|uninstall|plugin> [flags]")
 }
 
 func cmdRegister(ctx context.Context, args []string) error {
@@ -305,4 +311,81 @@ func serverState(cfg identity.Config, token string, tokenErr error) (code, detai
 func isUnknownToken(err error) bool {
 	apiErr, ok := errors.AsType[*serverapi.APIError](err)
 	return ok && apiErr.Code == wire.CodeUnknownToken
+}
+
+// cmdPlugin dispatches the plugin subcommands. Plugins are fetched from the
+// Server's Marketplace on demand; nothing is bundled into this binary.
+func cmdPlugin(ctx context.Context, args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: easyssl-client plugin <install|list> [flags]")
+	}
+	switch args[0] {
+	case "install":
+		return cmdPluginInstall(ctx, args[1:])
+	case "list":
+		return cmdPluginList(args[1:])
+	default:
+		return fmt.Errorf("unknown plugin command %q (want install or list)", args[0])
+	}
+}
+
+func cmdPluginInstall(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("plugin install", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "print JSON")
+	_ = fs.Parse(args)
+	if fs.NArg() != 1 {
+		return errors.New("usage: easyssl-client plugin install <name> [--json]")
+	}
+	name := fs.Arg(0)
+
+	cfg, err := identity.LoadConfig()
+	if err != nil {
+		return stateError("plugin install", err)
+	}
+	token, err := identity.LoadToken()
+	if err != nil {
+		return stateError("plugin install", err)
+	}
+
+	mgr := pluginmgr.New(
+		pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL},
+		serverapi.New(cfg.ServerURL),
+	)
+	// The host's own platform: a Client installs for the machine it runs on,
+	// never for another, so there is no flag to get this wrong.
+	inst, err := mgr.Install(ctx, token, name, runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(inst)
+	}
+	fmt.Printf("installed  %s v%s\n", inst.ID, inst.Version)
+	fmt.Printf("path       %s\n", inst.Path)
+	fmt.Printf("digest     sha256:%s\n", inst.Digest)
+	fmt.Printf("reported   to %s\n", cfg.ServerURL)
+	return nil
+}
+
+func cmdPluginList(args []string) error {
+	fs := flag.NewFlagSet("plugin list", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "print JSON")
+	_ = fs.Parse(args)
+
+	mgr := pluginmgr.New(nil, nil)
+	installed, err := mgr.List()
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(installed)
+	}
+	if len(installed) == 0 {
+		fmt.Println("No plugins installed. Install one with: easyssl-client plugin install generic-cli")
+		return nil
+	}
+	for _, p := range installed {
+		fmt.Printf("%-16s v%-10s sha256:%s\n", p.ID, p.Version, p.Digest[:12]+"…")
+	}
+	return nil
 }

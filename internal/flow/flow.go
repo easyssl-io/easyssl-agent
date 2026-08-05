@@ -20,6 +20,7 @@ import (
 	"github.com/easyssl-io/easyssl-client/internal/hostinfo"
 	"github.com/easyssl-io/easyssl-client/internal/identity"
 	"github.com/easyssl-io/easyssl-client/internal/keystore"
+	"github.com/easyssl-io/easyssl-client/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-client/internal/serverapi"
 	"github.com/easyssl-io/easyssl-client/internal/sysd"
 	"github.com/easyssl-io/easyssl-contract/wire"
@@ -300,7 +301,31 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 	}
 	fmt.Println("\neasySSL Client uninstalled. Certificates it deployed were left in place.")
 	reportKeysLeftBehind()
+	reportPluginsLeftBehind()
 	return nil
+}
+
+// reportPluginsLeftBehind names the Plugins still on the host, for the same
+// reason the keys are named: uninstalling removes the Client, not what it put
+// on the machine. A Plugin is an executable this host will no longer run, since
+// nothing is left to invoke it, but it is still there and someone
+// decommissioning the machine should know rather than discover it.
+func reportPluginsLeftBehind() {
+	installed, err := pluginmgr.New(nil, nil).List()
+	switch {
+	case err != nil:
+		fmt.Printf("\n! plugins may remain in %s and were NOT deleted (listing them failed: %v).\n",
+			pluginmgr.InstallDir, err)
+	case len(installed) == 0:
+		return
+	default:
+		fmt.Printf("\n! %d plugin executable(s) remain in %s and were NOT deleted:\n",
+			len(installed), pluginmgr.InstallDir)
+		for _, p := range installed {
+			fmt.Printf("    %s v%s\n", p.ID, p.Version)
+		}
+		fmt.Println("  Delete that directory by hand if this host is being decommissioned.")
+	}
 }
 
 // reportKeysLeftBehind tells the operator that uninstalling did not remove the

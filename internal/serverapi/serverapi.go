@@ -238,3 +238,11 @@ func (c *Client) SubmitCSR(ctx context.Context, token, certificateID, csrPEM str
 	path := "/api/v1/client/certificates/" + url.PathEscape(certificateID) + "/csr"
 	return c.do(ctx, http.MethodPost, path, token, wire.CSRSubmission{CSR: csrPEM}, nil)
 }
+
+// ReportPlugin tells the Server what this Client installed: the version, the
+// artifact digest, and the settings the Plugin declares for itself (S4
+// FR-008a). The Server answers every later question from this record, so
+// nothing ever queries the host.
+func (c *Client) ReportPlugin(ctx context.Context, token, pluginID string, rep wire.PluginReport) error {
+	return c.do(ctx, http.MethodPut, "/api/v1/client/plugins/"+pluginID, token, rep, nil)
+}
