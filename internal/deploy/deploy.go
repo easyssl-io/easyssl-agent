@@ -129,6 +129,18 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 			work.PluginID, work.PluginID))
 	}
 
+	// The record says the Plugin is installed; that the artifact is still there
+	// and still executable is a separate fact. Checked before the key is read,
+	// so a host in this state produces a message naming the Plugin and the fix
+	// rather than the operating system's own words about a failed exec.
+	if err := runnable(installed.Path); err != nil {
+		return failed(installed.Version, fmt.Sprintf(
+			"the %s plugin is recorded on this host but cannot be run (%v), "+
+				"so nothing could install this certificate.\n"+
+				"Install it there again and deploy again:\n    easyssl-client plugin install %s",
+			work.PluginID, err, work.PluginID))
+	}
+
 	key, err := loadKey(work.CertificateID)
 	if err != nil {
 		if errors.Is(err, keystore.ErrNoKey) {
@@ -246,6 +258,24 @@ func runBounded(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 		}
 		return stdout.Bytes(), nil
 	}
+}
+
+// runnable reports whether the recorded artifact is still a file this Client
+// could execute. The record saying a Plugin is installed and the file being
+// usable are separate facts, and they disagree when someone removes it by hand
+// or an upgrade leaves it unexecutable.
+func runnable(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return errors.New("it is a directory")
+	}
+	if info.Mode().Perm()&0o100 == 0 {
+		return fmt.Errorf("it is not executable (mode %o)", info.Mode().Perm())
+	}
+	return nil
 }
 
 // failed builds a result for an attempt that never reached a Plugin answer. It
