@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"regexp"
 	"sync"
 	"syscall"
 	"time"
@@ -177,7 +178,7 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	return wire.DeploymentResult{
 		OK:            out.OK,
 		PluginVersion: installed.Version,
-		Output:        truncate(out.Output),
+		Output:        report(out.Output),
 	}
 }
 
@@ -209,7 +210,7 @@ func runPlugin(ctx context.Context, path string, req plugincontract.InstallReque
 	if err := json.Unmarshal(stdout, &out); err != nil {
 		// A Plugin that answered with something unparseable failed, and what it
 		// did say is the only evidence of why.
-		return out, fmt.Errorf("the plugin's install output is not JSON: %w\noutput:\n%s", err, truncate(string(stdout)))
+		return out, fmt.Errorf("the plugin's install output is not JSON: %w\noutput:\n%s", err, report(string(stdout)))
 	}
 	return out, nil
 }
@@ -238,18 +239,73 @@ func runBounded(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 		}
 		<-done
 		return nil, fmt.Errorf("the plugin did not finish within %s and was killed.\noutput so far:\n%s",
-			runTimeout, truncate(stdout.String()+stderr.String()))
+			runTimeout, report(stdout.String()+stderr.String()))
 	case err := <-done:
 		if err != nil {
-			return nil, fmt.Errorf("the plugin exited with an error: %w\n%s", err, truncate(stderr.String()))
+			return nil, fmt.Errorf("the plugin exited with an error: %w\n%s", err, report(stderr.String()))
 		}
 		return stdout.Bytes(), nil
 	}
 }
 
+// failed builds a result for an attempt that never reached a Plugin answer. It
+// reports through the same funnel: the message may quote what a Plugin printed.
 func failed(pluginVersion, output string) wire.DeploymentResult {
-	return wire.DeploymentResult{OK: false, PluginVersion: pluginVersion, Output: truncate(output)}
+	return wire.DeploymentResult{OK: false, PluginVersion: pluginVersion, Output: report(output)}
 }
+
+// privateKeyBlock matches a PEM private key however it is framed. The body is
+// `[\s\S]` rather than `.` so it spans real newlines, and the same match
+// covers a key echoed inside JSON, where the newlines are two-character `\n`
+// escapes and the whole block is one line.
+var privateKeyBlock = regexp.MustCompile(
+	`(-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----)([\s\S]*?)(-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----)`)
+
+// keyBegin and keyEnd locate the markers on their own, for the case below where
+// a key has no end marker left.
+var (
+	keyBegin = regexp.MustCompile(`-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----`)
+	keyEnd   = regexp.MustCompile(`-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----`)
+)
+
+// redactPrivateKeys masks the body of any PEM private key in text a Plugin
+// produced.
+//
+// A Plugin is arbitrary code and receives the key on its stdin, so one that
+// echoes its request — or simply prints the file it was handed — puts the key
+// in its output. Reporting that verbatim would store a usable private key in
+// the Server's database and show it in the web console, which is a worse
+// exposure than the one the whole design avoids by never sending a key over the
+// wire. The markers are kept so the redaction is visible rather than looking
+// like a Plugin that said nothing.
+func redactPrivateKeys(s string) string {
+	s = privateKeyBlock.ReplaceAllString(s, "${1}"+keyPlaceholder+"${3}")
+	// Whatever survives the pass above is a key with no end marker, which is
+	// what a bounded or interrupted echo leaves. Only the last begin marker can
+	// be unclosed — every earlier one was closed, or it would have swallowed
+	// the rest — so the tail from it is dropped. Done by index rather than by a
+	// second pattern: a pattern anchored to the end would also match the begin
+	// marker the pass above deliberately kept, and take the whole output after
+	// a redacted key with it.
+	last := keyBegin.FindAllStringIndex(s, -1)
+	if len(last) == 0 {
+		return s
+	}
+	start := last[len(last)-1]
+	if keyEnd.FindStringIndex(s[start[1]:]) != nil {
+		return s // closed, and already redacted above
+	}
+	return s[:start[1]] + keyPlaceholder
+}
+
+// keyPlaceholder stands in for what was removed, and says who removed it so a
+// reader does not go looking for a truncated file.
+const keyPlaceholder = "\n****** private key redacted by the easySSL Client ******\n"
+
+// report prepares any text for the Server: the key is removed first and the
+// result bounded afterwards, in that order, because truncating first can cut a
+// key's end marker off and leave the head of one unredactable.
+func report(s string) string { return truncate(redactPrivateKeys(s)) }
 
 // truncate bounds reported text, keeping the head and the tail around a marker
 // naming what was dropped: the start says what the script set out to do and the
