@@ -278,10 +278,12 @@ func runnable(path string) error {
 	return nil
 }
 
-// failed builds a result for an attempt that never reached a Plugin answer. It
-// reports through the same funnel: the message may quote what a Plugin printed.
-func failed(pluginVersion, output string) wire.DeploymentResult {
-	return wire.DeploymentResult{OK: false, PluginVersion: pluginVersion, Output: report(output)}
+// failed builds a result for an attempt whose explanation is the Client's, not
+// a Plugin's: either no Plugin ran, or the one that did could not answer. The
+// text goes to Message, leaving Output for what a Plugin actually printed, and
+// still through the same funnel, because a killed run's error may quote it.
+func failed(pluginVersion, message string) wire.DeploymentResult {
+	return wire.DeploymentResult{OK: false, PluginVersion: pluginVersion, Message: report(message)}
 }
 
 // privateKeyBlock matches a PEM private key however it is framed. The body is
