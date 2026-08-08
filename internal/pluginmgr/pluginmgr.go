@@ -333,6 +333,8 @@ type CatalogPlugin struct {
 	Version     string            `json:"version"`
 	Description string            `json:"description"`
 	Party       string            `json:"party"`
+	Publisher   string            `json:"publisher"`
+	SourceURL   string            `json:"sourceUrl"`
 	Platforms   []string          `json:"platforms"`
 	Artifacts   []CatalogArtifact `json:"artifacts"`
 }

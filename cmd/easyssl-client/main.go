@@ -13,6 +13,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -24,6 +25,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -318,26 +320,29 @@ func isUnknownToken(err error) bool {
 // Server's Marketplace on demand; nothing is bundled into this binary.
 func cmdPlugin(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: easyssl-client plugin <install|list> [flags]")
+		return errors.New("usage: easyssl-client plugin <catalog|install|list> [flags]")
 	}
 	switch args[0] {
+	case "catalog":
+		return cmdPluginCatalog(ctx, args[1:])
 	case "install":
 		return cmdPluginInstall(ctx, args[1:])
 	case "list":
 		return cmdPluginList(args[1:])
 	default:
-		return fmt.Errorf("unknown plugin command %q (want install or list)", args[0])
+		return fmt.Errorf("unknown plugin command %q (want catalog, install or list)", args[0])
 	}
 }
 
 func cmdPluginInstall(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("plugin install", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "print JSON")
+	yes := fs.Bool("yes", false, "install without the confirmation prompt")
 	_ = fs.Parse(args)
-	if fs.NArg() != 1 {
-		return errors.New("usage: easyssl-client plugin install <name> [--json]")
+	if fs.NArg() == 0 {
+		return errors.New("usage: easyssl-client plugin install <name>... [--yes] [--json]")
 	}
-	name := fs.Arg(0)
+	names := fs.Args()
 
 	cfg, err := identity.LoadConfig()
 	if err != nil {
@@ -348,23 +353,121 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 		return stateError("plugin install", err)
 	}
 
+	// Said before anything is installed, because this is the moment the
+	// authorization is given and it grants more than it looks like: a Plugin
+	// runs with this Client's privileges, which is root wherever the Client is
+	// a system service, and there is no boundary between the two past the
+	// digest check (FR-008c). Skipped for --json, which is a machine's call,
+	// and for --yes, which is the person saying they know.
+	if !*asJSON && !*yes {
+		fmt.Fprintf(os.Stderr,
+			"Installing %s on this host.\n\n"+
+				"A Plugin runs with this Client's privileges, which is root wherever the\n"+
+				"Client runs as a system service. Authorizing this install authorizes code\n"+
+				"execution at that level on this host: a Plugin can read and write private\n"+
+				"key material and restart services. The Server's digest check is the only\n"+
+				"boundary, and it answers whether the artifact is the one easySSL published,\n"+
+				"not what it can do.\n\n",
+			strings.Join(names, ", "))
+		ok, err := confirm("Install and run it with those privileges?")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			fmt.Fprintln(os.Stderr, "Nothing installed.")
+			return nil
+		}
+	}
+
 	mgr := pluginmgr.New(
 		pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL},
 		serverapi.New(cfg.ServerURL),
 	)
 	// The host's own platform: a Client installs for the machine it runs on,
 	// never for another, so there is no flag to get this wrong.
-	inst, err := mgr.Install(ctx, token, name, runtime.GOOS, runtime.GOARCH)
+	out := make([]pluginmgr.Installed, 0, len(names))
+	for _, name := range names {
+		inst, ierr := mgr.Install(ctx, token, name, runtime.GOOS, runtime.GOARCH)
+		if ierr != nil {
+			// Whatever was installed before this one stays installed and is
+			// reported, so a partial run says what it did rather than only
+			// what it could not do.
+			if !*asJSON {
+				printInstalled(out, cfg.ServerURL)
+			}
+			return ierr
+		}
+		out = append(out, inst)
+	}
+	if *asJSON {
+		return json.NewEncoder(os.Stdout).Encode(out)
+	}
+	printInstalled(out, cfg.ServerURL)
+	return nil
+}
+
+func printInstalled(out []pluginmgr.Installed, serverURL string) {
+	for _, inst := range out {
+		fmt.Printf("installed  %s v%s\n", inst.ID, inst.Version)
+		fmt.Printf("path       %s\n", inst.Path)
+		fmt.Printf("digest     sha256:%s\n", inst.Digest)
+		fmt.Printf("reported   to %s\n", serverURL)
+	}
+}
+
+// confirm asks a yes/no question on the terminal. A closed stdin answers no:
+// a non-interactive run that reached this prompt did not mean to install.
+func confirm(question string) (bool, error) {
+	fmt.Fprintf(os.Stderr, "%s [y/N] ", question)
+	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
+	if err != nil {
+		return false, nil //nolint:nilerr // no answer is not an answer of yes
+	}
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return true, nil
+	}
+	return false, nil
+}
+
+// cmdPluginCatalog lists what the Marketplace offers for this host, so a Plugin
+// can be found and installed without knowing its name in advance (FR-005,
+// FR-007).
+func cmdPluginCatalog(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("plugin catalog", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "print JSON")
+	_ = fs.Parse(args)
+
+	cfg, err := identity.LoadConfig()
+	if err != nil {
+		return stateError("plugin catalog", err)
+	}
+	catalog, err := pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL}.Fetch(ctx)
 	if err != nil {
 		return err
 	}
+	entries := catalog.Plugins
 	if *asJSON {
-		return json.NewEncoder(os.Stdout).Encode(inst)
+		return json.NewEncoder(os.Stdout).Encode(entries)
 	}
-	fmt.Printf("installed  %s v%s\n", inst.ID, inst.Version)
-	fmt.Printf("path       %s\n", inst.Path)
-	fmt.Printf("digest     sha256:%s\n", inst.Digest)
-	fmt.Printf("reported   to %s\n", cfg.ServerURL)
+	if len(entries) == 0 {
+		fmt.Println("The Marketplace offers no Plugins for this host's platform.")
+		return nil
+	}
+	for _, e := range entries {
+		fmt.Printf("%-16s v%-10s %s\n", e.ID, e.Version, e.Party)
+		if e.Description != "" {
+			fmt.Printf("%-16s %s\n", "", e.Description)
+		}
+		if e.Publisher != "" {
+			fmt.Printf("%-16s by %s\n", "", e.Publisher)
+		}
+		if e.SourceURL != "" {
+			fmt.Printf("%-16s %s\n", "", e.SourceURL)
+		}
+		fmt.Println()
+	}
+	fmt.Println("Install one with: easyssl-client plugin install <name>")
 	return nil
 }
 
