@@ -1,14 +1,15 @@
 // Package identity manages the Client's on-disk identity and state. A host runs
-// a single Client: its 16-hex instance ID is generated once, persisted in the
-// config, and reused across reinstalls, so re-running the installer updates the
-// existing Client instead of registering a second one. The config and bearer
-// token live directly under BaseDir.
+// a single Client, identified by its public Client ID (`clnt-` + 14 base32
+// characters): the Server mints it at registration, this package persists it,
+// and every reinstall presents it, so re-running the installer updates the
+// existing Client instead of registering a second one. It is the same
+// identifier the console shows; nothing here mints anything. The config and
+// bearer token live directly under BaseDir.
 package identity
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,20 +23,9 @@ const serviceName = "easyssl-client.service"
 
 // Config is the Client's persisted registration state.
 type Config struct {
-	InstanceID  string `json:"instanceId"`
+	ClientID    string `json:"clientId"`
 	DisplayName string `json:"displayName"`
 	ServerURL   string `json:"serverUrl"`
-}
-
-// NewInstanceID returns a fresh instance ID: 64 CSPRNG bits as 16 lowercase hex
-// characters. Generated locally, persisted once, and reused thereafter; the
-// Server enforces its global uniqueness.
-func NewInstanceID() (string, error) {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(b[:]), nil
 }
 
 // ConfigPath and TokenPath locate the two state files.
@@ -75,9 +65,23 @@ func SaveToken(token string) error {
 	return os.WriteFile(TokenPath(), []byte(token), 0o600)
 }
 
-// RemoveAll deletes the Client's whole state directory (config and token). It
-// is idempotent: an already-absent directory is not an error.
-func RemoveAll() error { return os.RemoveAll(BaseDir) }
+// RemoveAll deletes this Client's identity: its config and its token. It is
+// idempotent, so an already-absent file is not an error.
+//
+// It deliberately does not remove BaseDir itself, because the keystore lives
+// under it and holds the only copy of every private key this host generated.
+// Uninstalling is too ordinary a command to destroy that, so the keys are left
+// behind and the caller says so. This function used to remove the whole
+// directory, which was correct only while nothing but the config and the token
+// lived there.
+func RemoveAll() error {
+	for _, path := range []string{ConfigPath(), TokenPath()} {
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
 
 // LoadToken reads the host's bearer token.
 func LoadToken() (string, error) {

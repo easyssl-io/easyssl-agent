@@ -63,6 +63,24 @@ never prompts:
 curl -sSL <server-url>/install | sudo REGISTRATION_KEY=<key> CLIENT_NAME=web-01 bash
 ```
 
+## Receiving work from the Server
+
+Once authorized, the Client holds one long-lived connection open to the Server
+and asks for outstanding work whenever the Server nudges it. It also asks on
+every check-in regardless, and that is the part that guarantees the work
+happens: the connection only makes it prompt. So a Client behind a proxy that
+kills idle connections, or one that simply cannot keep the stream up, still does
+everything asked of it, just at check-in speed.
+
+A dropped connection is ordinary rather than a fault, and the service reconnects
+with a widening delay without ever exiting. The one thing it does not retry is a
+rejected credential: if the Server no longer recognizes the token, waiting
+cannot repair it and re-registration is required.
+
+Work is reported finished only after its outcome has been recorded, never
+before. A Client that dies in between is handed the same instruction again on
+restart, which is why running one twice has to be safe.
+
 ## Checking state
 
 `status` prints what the host knows (instance ID, name, Server URL, the systemd
@@ -78,17 +96,58 @@ the state is reported as unknown with the reason, and the local facts still
 print. `--json` reports a short stable code (`authorized`, `pending`,
 `not-registered`, `unknown`) instead of the sentence.
 
+## Private keys
+
+Every certificate's private key is generated here, on this host, and never sent
+anywhere. The Server receives only a certificate signing request, so it has no
+key to store and none to lose.
+
+```text
+/etc/easyssl/keys/<fingerprint>.key    the key, PKCS#8 PEM, ECDSA P-256
+/etc/easyssl/certs/<certificate>.json  names the key that certificate uses
+```
+
+A key is named by the SHA-256 of its own public key, so the directory can be
+checked against itself and one key can serve several certificates without the
+secret being copied. Both directories are `0700`, the files are `0600`, and
+everything is owned by root. Nothing about the format is specific to easySSL:
+
+```bash
+sudo openssl pkey -in /etc/easyssl/keys/<fingerprint>.key -noout -text
+```
+
+**What this protects against, and what it does not.** The keys are stored
+unencrypted, and filesystem permissions are the whole of their protection.
+Anyone who is root on this host, or who holds a backup or a disk image of it,
+holds the private keys. There is deliberately no passphrase: the Client renews
+and deploys certificates unattended, so any key that unlocked the keystore would
+have to sit on the same disk and would stop nobody who could already read it.
+
+**Nothing is ever deleted.** There is no pruning, no expiry sweep and no purge
+command. A new key is generated for every issuance, renewals included, so the
+keystore grows by one key each time a certificate is renewed, and every key
+stays until an operator removes it by hand. Deleting a key is the one operation
+here with no recovery, which is why the Client does not do it at all.
+
 ## Uninstalling
 
 `easyssl-client uninstall` removes the Client from the host: it unregisters
 itself from the Server first (so the host also disappears from the web console),
-then stops and removes the systemd unit and deletes `/etc/easyssl/` and the
-binary. It asks for confirmation, refusing to run unattended unless `--yes` is
-passed, and is idempotent on a host with nothing or only remnants installed. If
-the Server cannot be reached the local removal still completes and you are told
-the Client may still be listed in the console.
+then stops and removes the systemd unit, deletes the config and token from
+`/etc/easyssl/`, and deletes the binary. It asks for confirmation, refusing to
+run unattended unless `--yes` is passed, and is idempotent on a host with
+nothing or only remnants installed. If the Server cannot be reached the local
+removal still completes and you are told the Client may still be listed in the
+console.
 
-Certificates and keys the Client deployed to the host are deliberately left in
+**Private keys are not deleted, and uninstall says so.** They are the only copy
+on this host, and an uninstall is too ordinary a command to destroy something
+unrecoverable, so `/etc/easyssl/keys/` and `/etc/easyssl/certs/` survive it and
+the command reports how many keys remain. If the machine is being
+decommissioned, delete that directory by hand; if certificates using those keys
+are still in service, keep a copy first.
+
+Certificates and keys the Client deployed elsewhere on the host are also left in
 place, since deleting them could take the host's own services down. Uninstall is
 host-side only: the Server can never trigger it.
 
