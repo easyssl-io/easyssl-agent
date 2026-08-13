@@ -183,6 +183,7 @@ func (m *Manager) Install(ctx context.Context, token, pluginID, goos, goarch str
 	if err := m.reporter.ReportPlugin(ctx, token, pluginID, wire.PluginReport{
 		Version:      desc.Version,
 		Digest:       digest,
+		Description:  desc.Description,
 		Declarations: desc.Settings,
 	}); err != nil {
 		// Installed but unreported: the host has the Plugin and the Server does
