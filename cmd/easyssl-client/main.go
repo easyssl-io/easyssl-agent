@@ -360,13 +360,18 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 	// digest check (FR-008c). Skipped for --json, which is a machine's call,
 	// and for --yes, which is the person saying they know.
 	if !*asJSON && !*yes {
+		// One line per paragraph, wrapped by the terminal rather than here. A
+		// fixed width is a guess about a window this program cannot see: on a
+		// narrower one every line is folded again a few words from its end, and
+		// the result reads as a ragged column with words split across it, which
+		// is the opposite of what wrapping the text was meant to achieve.
 		fmt.Fprintf(os.Stderr,
 			"Installing %s on this host.\n\n"+
-				"A Plugin runs with this Client's privileges, which is root wherever the\n"+
-				"Client runs as a system service. Authorizing this install authorizes code\n"+
-				"execution at that level on this host: a Plugin can read and write private\n"+
-				"key material and restart services. The Server's digest check is the only\n"+
-				"boundary, and it answers whether the artifact is the one easySSL published,\n"+
+				"A Plugin runs with this Client's privileges, which is root wherever the "+
+				"Client runs as a system service. Authorizing this install authorizes code "+
+				"execution at that level on this host: a Plugin can read and write private "+
+				"key material and restart services. The Server's digest check is the only "+
+				"boundary, and it answers whether the artifact is the one easySSL published, "+
 				"not what it can do.\n\n",
 			strings.Join(names, ", "))
 		ok, err := confirm("Install and run it with those privileges?")

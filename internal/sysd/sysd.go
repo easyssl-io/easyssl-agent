@@ -2,6 +2,20 @@
 // runs one Client as easyssl-client.service, so re-running the installer
 // refreshes this one unit and restarts it onto the updated binary rather than
 // adding a second unit. Root-only for now.
+//
+// The unit orders itself after network.target and not network-online.target.
+// The two are not the same promise: network.target says the stack is up, while
+// network-online.target says a link is configured and reachable, and reaching
+// it means running a wait-online helper that blocks until it is satisfied or
+// times out. On a host whose interface that helper does not recognize as
+// configured, which includes a static address with no network manager and every
+// container whose address the runtime set up itself, it blocks for its full
+// two-minute timeout and the Client is silent for that long after every boot.
+//
+// The stronger dependency buys nothing here. This is a poll loop that retries,
+// under Restart=on-failure, so a network that is not ready yet costs one failed
+// attempt and RestartSec, and a network that never comes back is not something
+// waiting longer at boot would fix.
 package sysd
 
 import (
@@ -17,8 +31,7 @@ const (
 	binaryPath  = "/usr/local/bin/easyssl-client"
 	unitContent = `[Unit]
 Description=easySSL Client
-After=network-online.target
-Wants=network-online.target
+After=network.target
 
 [Service]
 Type=simple
