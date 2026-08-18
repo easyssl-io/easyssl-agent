@@ -1,4 +1,4 @@
-// Package hostinfo collects best-effort host diagnostics the Client reports at
+// Package hostinfo collects best-effort host diagnostics the Agent reports at
 // registration: hostname, OS, host type, and the binary, config, and service
 // paths. Every field is best-effort; an unavailable value is reported as
 // an empty string rather than failing.
@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/easyssl-io/easyssl-client/internal/identity"
+	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -47,7 +47,7 @@ func osName() string {
 
 // hostType classifies the host as container, vm, bare-metal, or unknown when it
 // genuinely cannot tell. It asks systemd-detect-virt first: it ships with
-// systemd (which this Client already requires), and it recognizes dozens of
+// systemd (which this Agent already requires), and it recognizes dozens of
 // hypervisors and container runtimes, including ones the file heuristics below
 // miss entirely. The heuristics remain only as a fallback for hosts where the
 // tool is unavailable, and they never assert bare-metal on their own: guessing
@@ -85,7 +85,7 @@ func hostType() string {
 // detectVirt classifies the host with systemd-detect-virt, returning false when
 // the tool is not available. `--quiet --container` and `--quiet --vm` each exit
 // 0 only when that kind of virtualization is detected, so systemd does the
-// classification and this Client needs no table of hypervisor names.
+// classification and this Agent needs no table of hypervisor names.
 func detectVirt() (string, bool) {
 	if _, err := exec.LookPath("systemd-detect-virt"); err != nil {
 		return "", false

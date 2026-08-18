@@ -1,5 +1,5 @@
 // Package pluginmgr installs Plugins on this host and tells the Server what is
-// installed. Nothing is bundled into the Client binary: a Plugin is fetched
+// installed. Nothing is bundled into the Agent binary: a Plugin is fetched
 // from the Server's Marketplace on demand, placed under InstallDir, asked to
 // describe itself, and reported.
 //
@@ -30,8 +30,8 @@ import (
 )
 
 // InstallDir is where Plugin executables live on the host, and RecordPath is
-// the Client's own record of what it put there. Both are root-owned: a Plugin
-// is executed by the Client, which runs as root, so anything that could write
+// the Agent's own record of what it put there. Both are root-owned: a Plugin
+// is executed by the Agent, which runs as root, so anything that could write
 // here could run code as root.
 const (
 	InstallDir = "/var/lib/easyssl/plugins"
@@ -53,7 +53,7 @@ const describeTimeout = 30 * time.Second
 // catalog entry cannot name a file outside InstallDir.
 var validPluginID = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`)
 
-// Installed is one Plugin this host has, as recorded by the Client.
+// Installed is one Plugin this host has, as recorded by the Agent.
 type Installed struct {
 	ID      string `json:"id"`
 	Version string `json:"version"`
@@ -64,7 +64,7 @@ type Installed struct {
 	Path        string    `json:"path"`
 }
 
-// Record is the Client's list of installed Plugins.
+// Record is the Agent's list of installed Plugins.
 type Record struct {
 	Plugins []Installed `json:"plugins"`
 }
@@ -194,10 +194,10 @@ func (m *Manager) Install(ctx context.Context, token, pluginID, goos, goarch str
 	return inst, nil
 }
 
-// List reads what this host recorded as installed. It reports what the Client
+// List reads what this host recorded as installed. It reports what the Agent
 // put there, not what is on disk: a file someone dropped into the install
 // directory by hand was never installed by anything and is not a Plugin this
-// Client will run.
+// Agent will run.
 func (m *Manager) List() ([]Installed, error) {
 	rec, err := m.load()
 	if err != nil {
@@ -207,7 +207,7 @@ func (m *Manager) List() ([]Installed, error) {
 	return rec.Plugins, nil
 }
 
-// fetchTo downloads url to path (0755, root-owned by virtue of the Client
+// fetchTo downloads url to path (0755, root-owned by virtue of the Agent
 // running as root) and returns the SHA-256 of what was written. It writes to a
 // temporary file in the same directory and renames, so a failed download never
 // half-replaces a working Plugin and an upgrade of a Plugin currently running
@@ -300,7 +300,7 @@ func (m *Manager) load() (Record, error) {
 func describeByExec(ctx context.Context, path string) (plugincontract.DescribeResponse, error) {
 	var out plugincontract.DescribeResponse
 	// #nosec G204 -- path is InstallDir joined with a name matched against
-	// validPluginID, so it names a file this Client just wrote.
+	// validPluginID, so it names a file this Agent just wrote.
 	cmd := exec.CommandContext(ctx, path, plugincontract.OpDescribe)
 	stdout, err := cmd.Output()
 	if err != nil {
@@ -321,7 +321,7 @@ func describeByExec(ctx context.Context, path string) (plugincontract.DescribeRe
 // CatalogArtifact and CatalogPlugin mirror what the Server publishes
 // (contracts/server-api.md). They live here rather than in the wire package
 // because the Marketplace is a Server-to-anyone surface rather than part of the
-// Client↔Server protocol: a browser reads the same JSON.
+// Agent↔Server protocol: a browser reads the same JSON.
 type CatalogArtifact struct {
 	OS     string `json:"os"`
 	Arch   string `json:"arch"`
@@ -410,7 +410,7 @@ func (c HTTPCatalog) Download(ctx context.Context, url string) (io.ReadCloser, e
 }
 
 // Find returns the installed Plugin with this id, or false. It reads the
-// Client's own record rather than the directory: a file someone dropped into
+// Agent's own record rather than the directory: a file someone dropped into
 // the install directory by hand was never installed by anything, and running it
 // because the name matched is how a host ends up executing something nobody
 // fetched.

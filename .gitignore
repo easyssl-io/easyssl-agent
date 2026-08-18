@@ -1,6 +1,6 @@
 # Build output
 /bin/
-/easyssl-client
+/easyssl-agent
 *.exe
 *.out
 

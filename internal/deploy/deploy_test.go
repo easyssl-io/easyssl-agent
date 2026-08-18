@@ -45,7 +45,7 @@ func TestRedactPrivateKeys(t *testing.T) {
 			if strings.Contains(got, secretBody) {
 				t.Fatalf("the key survived redaction:\n%s", got)
 			}
-			if !strings.Contains(got, "redacted by the easySSL Client") {
+			if !strings.Contains(got, "redacted by the easySSL Agent") {
 				t.Fatalf("nothing says the text was redacted:\n%s", got)
 			}
 			// The markers stay, so a reader can see a key was there rather than

@@ -1,8 +1,8 @@
-// Package identity manages the Client's on-disk identity and state. A host runs
-// a single Client, identified by its public Client ID (`clnt-` + 14 base32
+// Package identity manages the Agent's on-disk identity and state. A host runs
+// a single Agent, identified by its public Agent ID (`agnt-` + 14 base32
 // characters): the Server mints it at registration, this package persists it,
 // and every reinstall presents it, so re-running the installer updates the
-// existing Client instead of registering a second one. It is the same
+// existing Agent instead of registering a second one. It is the same
 // identifier the console shows; nothing here mints anything. The config and
 // bearer token live directly under BaseDir.
 package identity
@@ -15,22 +15,22 @@ import (
 	"strings"
 )
 
-// BaseDir holds the single Client's config and token on this host.
+// BaseDir holds the single Agent's config and token on this host.
 const BaseDir = "/etc/easyssl"
 
 // serviceName is the host's single systemd unit (not templated: one per host).
-const serviceName = "easyssl-client.service"
+const serviceName = "easyssl-agent.service"
 
-// Config is the Client's persisted registration state.
+// Config is the Agent's persisted registration state.
 type Config struct {
-	ClientID    string `json:"clientId"`
+	AgentID     string `json:"agentId"`
 	DisplayName string `json:"displayName"`
 	ServerURL   string `json:"serverUrl"`
 }
 
 // ConfigPath and TokenPath locate the two state files.
 func ConfigPath() string { return filepath.Join(BaseDir, "config.json") }
-func TokenPath() string  { return filepath.Join(BaseDir, "client.token") }
+func TokenPath() string  { return filepath.Join(BaseDir, "agent.token") }
 
 // ServiceName is the host's systemd unit name.
 func ServiceName() string { return serviceName }
@@ -65,7 +65,7 @@ func SaveToken(token string) error {
 	return os.WriteFile(TokenPath(), []byte(token), 0o600)
 }
 
-// RemoveAll deletes this Client's identity: its config and its token. It is
+// RemoveAll deletes this Agent's identity: its config and its token. It is
 // idempotent, so an already-absent file is not an error.
 //
 // It deliberately does not remove BaseDir itself, because the keystore lives

@@ -1,9 +1,9 @@
 // Package flow drives the interactive line-based registration session.
-// A host runs one Client: the first run generates and persists the
-// registers, stores the Server-minted Client ID and token, installs the systemd unit, and waits
+// A host runs one Agent: the first run generates and persists the
+// registers, stores the Server-minted Agent ID and token, installs the systemd unit, and waits
 // for the operator to authorize from the console. A later run on an
 // already-registered host is idempotent: it refreshes the service onto the
-// updated binary and reports state instead of registering a second Client. It is
+// updated binary and reports state instead of registering a second Agent. It is
 // plain stdin/stdout, no full-screen TUI in this slice.
 package flow
 
@@ -17,36 +17,36 @@ import (
 	"strings"
 	"time"
 
-	"github.com/easyssl-io/easyssl-client/internal/hostinfo"
-	"github.com/easyssl-io/easyssl-client/internal/identity"
-	"github.com/easyssl-io/easyssl-client/internal/keystore"
-	"github.com/easyssl-io/easyssl-client/internal/pluginmgr"
-	"github.com/easyssl-io/easyssl-client/internal/serverapi"
-	"github.com/easyssl-io/easyssl-client/internal/sysd"
+	"github.com/easyssl-io/easyssl-agent/internal/hostinfo"
+	"github.com/easyssl-io/easyssl-agent/internal/identity"
+	"github.com/easyssl-io/easyssl-agent/internal/keystore"
+	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
+	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
+	"github.com/easyssl-io/easyssl-agent/internal/sysd"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-// Version is the Client version reported to the Server.
+// Version is the Agent version reported to the Server.
 const Version = "0.0.1"
 
 // Options configures a registration session.
 type Options struct {
 	ServerURL       string // required
 	RegistrationKey string // from --key or REGISTRATION_KEY; prompted if empty and interactive
-	Name            string // from --name or CLIENT_NAME; else the hostname, editable at the prompt
+	Name            string // from --name or AGENT_NAME; else the hostname, editable at the prompt
 }
 
-// Register runs the registration session. If this host already has a Client
+// Register runs the registration session. If this host already has a Agent
 // identity it takes the idempotent reinstall path; otherwise it registers a new
-// Client. A context cancellation (Ctrl-C) during the wait is not an error: the
+// Agent. A context cancellation (Ctrl-C) during the wait is not an error: the
 // installed systemd service keeps polling, so authorization can complete later.
 func Register(ctx context.Context, opts Options) error {
-	fmt.Printf("easySSL client installer · v%s\n", Version)
+	fmt.Printf("easySSL agent installer · v%s\n", Version)
 	fmt.Println("Registering this host to an easySSL organization...")
 	fmt.Println()
 
 	// Check root before anything reaches the Server. Registering first and
-	// failing afterwards on the config write would leave a pending Client on
+	// failing afterwards on the config write would leave a pending Agent on
 	// the Server for a host that never actually installed one, which an
 	// operator then has to notice and clean up.
 	if os.Geteuid() != 0 {
@@ -58,13 +58,13 @@ func Register(ctx context.Context, opts Options) error {
 		defer t.close()
 	}
 
-	if cfg, err := identity.LoadConfig(); err == nil && cfg.ClientID != "" {
+	if cfg, err := identity.LoadConfig(); err == nil && cfg.AgentID != "" {
 		return reinstall(ctx, t, opts, cfg)
 	}
 	return freshRegister(ctx, t, opts)
 }
 
-// freshRegister registers a host that has no Client yet.
+// freshRegister registers a host that has no Agent yet.
 func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	key, err := resolveKey(t, opts.RegistrationKey)
 	if err != nil {
@@ -72,33 +72,33 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	}
 	host, _ := os.Hostname()
 	name := confirmName(t, opts.Name, host)
-	fmt.Printf("✓ client name  %s\n", name)
+	fmt.Printf("✓ agent name  %s\n", name)
 
 	api := serverapi.New(opts.ServerURL)
-	resp, clientID, err := register(ctx, api, key, name, opts.ServerURL)
+	resp, agentID, err := register(ctx, api, key, name, opts.ServerURL)
 	if err != nil {
 		return err
 	}
 
-	cfg := identity.Config{ClientID: clientID, DisplayName: name, ServerURL: opts.ServerURL}
+	cfg := identity.Config{AgentID: agentID, DisplayName: name, ServerURL: opts.ServerURL}
 	if err := identity.SaveConfig(cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
-	if err := identity.SaveToken(resp.ClientToken); err != nil {
+	if err := identity.SaveToken(resp.AgentToken); err != nil {
 		return fmt.Errorf("save token: %w", err)
 	}
-	fmt.Printf("✓ client token stored in %s\n", identity.TokenPath())
+	fmt.Printf("✓ agent token stored in %s\n", identity.TokenPath())
 
 	if err := sysd.Install(); err != nil {
 		return fmt.Errorf("installing systemd unit: %w", err)
 	}
 	fmt.Printf("✓ systemd service installed: %s\n", identity.ServiceName())
 
-	return awaitAuthorization(ctx, api, name, resp.ClientToken, resp.NextPollSeconds)
+	return awaitAuthorization(ctx, api, name, resp.AgentToken, resp.NextPollSeconds)
 }
 
 // reinstall handles a host that is already registered. It reconciles the token
-// (re-registering under the same Client ID if it was removed from the console),
+// (re-registering under the same Agent ID if it was removed from the console),
 // then refreshes and restarts the service onto the freshly installed binary, and
 // reports state. Reconciling the token BEFORE the restart is essential: restarting
 // first would run the service with the stale token, and a revoked token makes the
@@ -115,12 +115,12 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	if opts.ServerURL != "" && opts.ServerURL != cfg.ServerURL {
 		return fmt.Errorf("this host is registered to %s, but this installer came from %s.\n"+
 			"Nothing was changed. To move it, remove it from the old Server first:\n"+
-			"    sudo easyssl-client uninstall --yes\n"+
+			"    sudo easyssl-agent uninstall --yes\n"+
 			"then run this installer again", cfg.ServerURL, opts.ServerURL)
 	}
 
 	fmt.Printf("This host is already registered as %q (instance %s) on %s.\n",
-		cfg.DisplayName, cfg.ClientID, cfg.ServerURL)
+		cfg.DisplayName, cfg.AgentID, cfg.ServerURL)
 
 	api := serverapi.New(cfg.ServerURL)
 	token, status, poll, err := reconcileToken(ctx, t, api, opts, cfg)
@@ -150,13 +150,13 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	}
 }
 
-// reconcileToken returns a token the service can run with, plus the Client's
+// reconcileToken returns a token the service can run with, plus the Agent's
 // current status and poll cadence. It checks in with the stored token; if that
 // token is missing or was removed from the console it re-registers under the same
-// Client ID. status is "" (poll unused) when the Server could not be reached.
+// Agent ID. status is "" (poll unused) when the Server could not be reached.
 func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (token, status string, poll int, err error) {
 	if token, err = identity.LoadToken(); err == nil {
-		resp, cerr := api.Checkin(ctx, token, wire.CheckinRequest{ClientVersion: Version})
+		resp, cerr := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: Version})
 		switch {
 		case cerr == nil:
 			return token, resp.Status, resp.NextPollSeconds, nil
@@ -175,7 +175,7 @@ func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opt
 	return reregister(ctx, t, api, opts, cfg)
 }
 
-// reregister re-registers keeping the host's persisted Client ID and name, and
+// reregister re-registers keeping the host's persisted Agent ID and name, and
 // returns the new token with a pending status.
 func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (string, string, int, error) {
 	key, err := resolveKey(t, opts.RegistrationKey)
@@ -184,37 +184,37 @@ func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Op
 	}
 	resp, err := api.Register(ctx, wire.RegistrationRequest{
 		RegistrationKey: key,
-		ClientID:        cfg.ClientID,
+		AgentID:         cfg.AgentID,
 		ProposedName:    cfg.DisplayName,
-		ClientVersion:   Version,
+		AgentVersion:    Version,
 		ProtocolVersion: wire.ProtocolVersion,
 		Diagnostics:     hostinfo.Collect(),
 	})
 	if err != nil {
 		if apiErr, ok := errors.AsType[*serverapi.APIError](err); ok {
 			switch apiErr.Code {
-			case wire.CodeClientIDTaken:
+			case wire.CodeAgentIDTaken:
 				return "", "", 0, errors.New("registration failed: this host is already registered; remove it from the console, then reinstall")
-			case wire.CodeUnknownClientID:
-				return "", "", 0, fmt.Errorf("registration failed: the Server does not know this Client (%s). If the Server was reset, remove %s and register fresh", cfg.ClientID, identity.ConfigPath())
+			case wire.CodeUnknownAgentID:
+				return "", "", 0, fmt.Errorf("registration failed: the Server does not know this Agent (%s). If the Server was reset, remove %s and register fresh", cfg.AgentID, identity.ConfigPath())
 			case wire.CodeInvalidRegistrationKey:
 				return "", "", 0, errors.New("registration failed: the registration key was not accepted")
 			}
 		}
 		return "", "", 0, fmt.Errorf("registration failed: %w", err)
 	}
-	if err := identity.SaveToken(resp.ClientToken); err != nil {
+	if err := identity.SaveToken(resp.AgentToken); err != nil {
 		return "", "", 0, fmt.Errorf("save token: %w", err)
 	}
-	fmt.Printf("✓ re-registered, new client token stored in %s\n", identity.TokenPath())
-	return resp.ClientToken, wire.StatusPending, resp.NextPollSeconds, nil
+	fmt.Printf("✓ re-registered, new agent token stored in %s\n", identity.TokenPath())
+	return resp.AgentToken, wire.StatusPending, resp.NextPollSeconds, nil
 }
 
 // awaitAuthorization waits for the operator to authorize, printing the outcome.
 // An interrupt during the wait is reported as safe (the service keeps polling).
 func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token string, pollSeconds int) error {
 	fmt.Println()
-	fmt.Println("Waiting for authorization from the web console (approve it at your console › Clients)...")
+	fmt.Println("Waiting for authorization from the web console (approve it at your console › Agents)...")
 
 	if err := waitForAuthorization(ctx, api, token, pollSeconds); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -228,11 +228,11 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 	return nil
 }
 
-// Uninstall removes the Client from this host: it unregisters from the Server
+// Uninstall removes the Agent from this host: it unregisters from the Server
 // (best-effort), stops and removes the systemd unit, and deletes the config,
 // token, and binary. Deliberately host-side only: the Server can never trigger
-// it, so a compromised Server or account cannot wipe a Client off a machine it
-// does not own. Certificates and keys this Client deployed are left alone,
+// it, so a compromised Server or account cannot wipe a Agent off a machine it
+// does not own. Certificates and keys this Agent deployed are left alone,
 // since removing them could take the host's services down.
 func Uninstall(ctx context.Context, assumeYes bool) error {
 	if os.Geteuid() != 0 {
@@ -240,11 +240,11 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 	}
 
 	cfg, cfgErr := identity.LoadConfig()
-	installed := cfgErr == nil && cfg.ClientID != ""
+	installed := cfgErr == nil && cfg.AgentID != ""
 	if !installed {
-		fmt.Println("No easySSL Client registration found on this host; removing any leftover files.")
+		fmt.Println("No easySSL Agent registration found on this host; removing any leftover files.")
 	} else {
-		fmt.Printf("easySSL Client %q (%s) is registered with %s.\n", cfg.DisplayName, cfg.ClientID, cfg.ServerURL)
+		fmt.Printf("easySSL Agent %q (%s) is registered with %s.\n", cfg.DisplayName, cfg.AgentID, cfg.ServerURL)
 	}
 
 	if !assumeYes && !confirmUninstall(installed) {
@@ -263,7 +263,7 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 			if err := serverapi.New(cfg.ServerURL).Unregister(ctx, token); err == nil || isUnknownToken(err) {
 				fmt.Println("✓ unregistered from the organization")
 			} else {
-				fmt.Printf("! could not reach the Server (%v); remove this Client from the console\n", err)
+				fmt.Printf("! could not reach the Server (%v); remove this Agent from the console\n", err)
 			}
 		}
 	}
@@ -296,17 +296,17 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 	}
 
 	if !hadUnit && !hadState && !hadBinary {
-		fmt.Println("Nothing to remove; this host has no easySSL Client installed.")
+		fmt.Println("Nothing to remove; this host has no easySSL Agent installed.")
 		return nil
 	}
-	fmt.Println("\neasySSL Client uninstalled. Certificates it deployed were left in place.")
+	fmt.Println("\neasySSL Agent uninstalled. Certificates it deployed were left in place.")
 	reportKeysLeftBehind()
 	reportPluginsLeftBehind()
 	return nil
 }
 
 // reportPluginsLeftBehind names the Plugins still on the host, for the same
-// reason the keys are named: uninstalling removes the Client, not what it put
+// reason the keys are named: uninstalling removes the Agent, not what it put
 // on the machine. A Plugin is an executable this host will no longer run, since
 // nothing is left to invoke it, but it is still there and someone
 // decommissioning the machine should know rather than discover it.
@@ -331,7 +331,7 @@ func reportPluginsLeftBehind() {
 // reportKeysLeftBehind tells the operator that uninstalling did not remove the
 // private keys.
 //
-// It is printed rather than offered as a choice because the Client never deletes
+// It is printed rather than offered as a choice because the Agent never deletes
 // key material: each key is the only copy this host has, and an uninstall is too
 // ordinary a command to destroy something unrecoverable. The consequence is that
 // a machine someone believes they have decommissioned still holds every key it
@@ -372,9 +372,9 @@ func confirmUninstall(registered bool) bool {
 		return false
 	}
 	defer t.close()
-	what := "the Client and its files"
+	what := "the Agent and its files"
 	if registered {
-		what = "this Client from the organization, and its files"
+		what = "this Agent from the organization, and its files"
 	}
 	return strings.EqualFold(t.prompt(fmt.Sprintf("Remove %s? [y/N]: ", what)), "y")
 }
@@ -393,7 +393,7 @@ func resolveKey(t *terminal, fromFlag string) (string, error) {
 	return key, nil
 }
 
-// confirmName resolves the Client's name: an explicit --name
+// confirmName resolves the Agent's name: an explicit --name
 // wins, otherwise the operator edits the hostname-derived default at the
 // prompt, and a non-interactive install keeps the default.
 func confirmName(t *terminal, fromFlag, defaultName string) string {
@@ -403,7 +403,7 @@ func confirmName(t *terminal, fromFlag, defaultName string) string {
 	if t == nil {
 		return defaultName
 	}
-	v := t.prompt(fmt.Sprintf("Client name [%s]: ", defaultName))
+	v := t.prompt(fmt.Sprintf("Agent name [%s]: ", defaultName))
 	if v == "" {
 		return defaultName
 	}
@@ -412,7 +412,7 @@ func confirmName(t *terminal, fromFlag, defaultName string) string {
 
 // register submits a fresh registration. No identifier goes with it: the
 // Server mints one and returns it, and persisting that answer is what makes the
-// next run of the installer a reinstall of this Client rather than a second
+// next run of the installer a reinstall of this Agent rather than a second
 // registration.
 func register(ctx context.Context, api *serverapi.Client, key, name, serverURL string) (wire.RegistrationResponse, string, error) {
 	diag := hostinfo.Collect()
@@ -422,7 +422,7 @@ func register(ctx context.Context, api *serverapi.Client, key, name, serverURL s
 	resp, err := api.Register(ctx, wire.RegistrationRequest{
 		RegistrationKey: key,
 		ProposedName:    name,
-		ClientVersion:   Version,
+		AgentVersion:    Version,
 		ProtocolVersion: wire.ProtocolVersion,
 		Diagnostics:     diag,
 	})
@@ -434,20 +434,20 @@ func register(ctx context.Context, api *serverapi.Client, key, name, serverURL s
 		}
 		return wire.RegistrationResponse{}, "", fmt.Errorf("registration failed: %w", err)
 	}
-	if resp.ClientID == "" {
-		return wire.RegistrationResponse{}, "", errors.New("registration failed: did not receive a Client ID from the Server (is it older than this Client?)")
+	if resp.AgentID == "" {
+		return wire.RegistrationResponse{}, "", errors.New("registration failed: did not receive a Agent ID from the Server (is it older than this Agent?)")
 	}
-	return resp, resp.ClientID, nil
+	return resp, resp.AgentID, nil
 }
 
-// waitForAuthorization polls until the Client is active, the token is rejected,
+// waitForAuthorization polls until the Agent is active, the token is rejected,
 // or the context is canceled. Transient network errors are retried.
 func waitForAuthorization(ctx context.Context, api *serverapi.Client, token string, pollSeconds int) error {
 	if pollSeconds <= 0 {
 		pollSeconds = 3
 	}
 	for {
-		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{ClientVersion: Version})
+		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: Version})
 		switch {
 		case err == nil && resp.Status == wire.StatusActive:
 			return nil

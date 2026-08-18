@@ -1,5 +1,5 @@
-// Package sysd installs and manages the Client's single systemd unit. A host
-// runs one Client as easyssl-client.service, so re-running the installer
+// Package sysd installs and manages the Agent's single systemd unit. A host
+// runs one Agent as easyssl-agent.service, so re-running the installer
 // refreshes this one unit and restarts it onto the updated binary rather than
 // adding a second unit. Root-only for now.
 //
@@ -10,7 +10,7 @@
 // times out. On a host whose interface that helper does not recognize as
 // configured, which includes a static address with no network manager and every
 // container whose address the runtime set up itself, it blocks for its full
-// two-minute timeout and the Client is silent for that long after every boot.
+// two-minute timeout and the Agent is silent for that long after every boot.
 //
 // The stronger dependency buys nothing here. This is a poll loop that retries,
 // under Restart=on-failure, so a network that is not ready yet costs one failed
@@ -26,11 +26,11 @@ import (
 )
 
 const (
-	unitName    = "easyssl-client.service"
+	unitName    = "easyssl-agent.service"
 	unitPath    = "/etc/systemd/system/" + unitName
-	binaryPath  = "/usr/local/bin/easyssl-client"
+	binaryPath  = "/usr/local/bin/easyssl-agent"
 	unitContent = `[Unit]
-Description=easySSL Client
+Description=easySSL Agent
 After=network.target
 
 [Service]
@@ -98,7 +98,7 @@ func State() string {
 	return "unknown"
 }
 
-// BinaryPath is where the installer places the Client binary, which uninstall
+// BinaryPath is where the installer places the Agent binary, which uninstall
 // removes last. UnitPath is the systemd unit it installs.
 func BinaryPath() string { return binaryPath }
 func UnitPath() string   { return unitPath }

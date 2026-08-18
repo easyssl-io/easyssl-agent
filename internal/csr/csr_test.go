@@ -15,7 +15,7 @@ import (
 
 	"github.com/easyssl-io/easyssl-contract/wire"
 
-	"github.com/easyssl-io/easyssl-client/internal/serverapi"
+	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 )
 
 const certID = "3f2b9c44-1a77-4ce0-8d21-0d5e8f6a4b72"
@@ -176,7 +176,7 @@ func TestTransportTroubleLeavesTheCommandPending(t *testing.T) {
 	}
 }
 
-// Work this Client cannot perform is acked, not retried: nothing changes on a
+// Work this Agent cannot perform is acked, not retried: nothing changes on a
 // retry, and the command's expiry is what reports the certificate stuck.
 func TestUnperformableWorkIsAckedWithoutSubmitting(t *testing.T) {
 	cases := map[string]wire.CSRWork{
