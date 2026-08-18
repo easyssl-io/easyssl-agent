@@ -103,7 +103,7 @@ func TestInstallRecordsAndReportsWhatThePluginSaid(t *testing.T) {
 	rep := &fakeReporter{}
 	m := newManager(t, srv, rep, declaration(), nil)
 
-	inst, err := m.Install(context.Background(), "esct_token", "generic-cli", "linux", "amd64")
+	inst, err := m.Install(context.Background(), "esat_token", "generic-cli", "linux", "amd64")
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestInstallRecordsAndReportsWhatThePluginSaid(t *testing.T) {
 		t.Fatalf("reported %d times, want once", len(rep.got))
 	}
 	r := rep.got[0]
-	if r.token != "esct_token" || r.pluginID != "generic-cli" {
+	if r.token != "esat_token" || r.pluginID != "generic-cli" {
 		t.Fatalf("reported as %q/%q", r.token, r.pluginID)
 	}
 	if r.report.Version != "0.1.0" || r.report.Digest != wantDigest {

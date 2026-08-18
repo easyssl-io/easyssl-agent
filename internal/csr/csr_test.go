@@ -15,7 +15,7 @@ import (
 
 	"github.com/easyssl-io/easyssl-contract/wire"
 
-	"github.com/easyssl-io/easyssl-client/internal/serverapi"
+	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 )
 
 const certID = "3f2b9c44-1a77-4ce0-8d21-0d5e8f6a4b72"
@@ -61,7 +61,7 @@ func newHandler(t *testing.T, api *fakeAPI) func(context.Context, wire.Command) 
 	orig := ensureKey
 	ensureKey = memoizedEnsure(t)
 	t.Cleanup(func() { ensureKey = orig })
-	return New(api, "esct_test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return New(api, "esat_test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func work(domains ...string) wire.CSRWork {
@@ -176,7 +176,7 @@ func TestTransportTroubleLeavesTheCommandPending(t *testing.T) {
 	}
 }
 
-// Work this Client cannot perform is acked, not retried: nothing changes on a
+// Work this Agent cannot perform is acked, not retried: nothing changes on a
 // retry, and the command's expiry is what reports the certificate stuck.
 func TestUnperformableWorkIsAckedWithoutSubmitting(t *testing.T) {
 	cases := map[string]wire.CSRWork{
@@ -199,7 +199,7 @@ func TestKeystoreTroubleLeavesTheCommandPending(t *testing.T) {
 	orig := ensureKey
 	ensureKey = func(string) (*ecdsa.PrivateKey, error) { return nil, errors.New("disk full") }
 	t.Cleanup(func() { ensureKey = orig })
-	h := New(api, "esct_test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(api, "esat_test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := h(context.Background(), command()); err == nil {
 		t.Fatal("keystore failure: handler = nil, want error (retry until the command expires)")
 	}

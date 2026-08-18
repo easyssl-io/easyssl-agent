@@ -1,6 +1,6 @@
-// Package commands runs the work the Server asks this Client to do.
+// Package commands runs the work the Server asks this Agent to do.
 //
-// The Server cannot reach in, so this Client asks. It asks whenever the Server
+// The Server cannot reach in, so this Agent asks. It asks whenever the Server
 // nudges it over the event stream, and it asks on a timer regardless. The timer
 // is what guarantees the work happens; the nudge only makes it prompt. Every
 // path through here is built on that assumption, which is why nothing retries a
@@ -27,7 +27,7 @@ type Fetcher interface {
 	AckCommand(ctx context.Context, token, commandID, status string) error
 }
 
-// Runner reconciles this Client against the commands the Server is waiting on.
+// Runner reconciles this Agent against the commands the Server is waiting on.
 type Runner struct {
 	api      Fetcher
 	token    string
@@ -67,7 +67,7 @@ func (r *Runner) Reconcile(ctx context.Context) {
 //
 // The order matters and is the whole recovery story: whatever the handler does,
 // it records its result on the referenced resource itself, and only then is the
-// command acked here. A Client that dies in between leaves the command
+// command acked here. An Agent that dies in between leaves the command
 // outstanding, so it comes back on the next fetch and runs again against work
 // already recorded. That is why a handler has to tolerate running twice.
 func (r *Runner) runOne(ctx context.Context, cmd wire.Command) {
@@ -92,7 +92,7 @@ func (r *Runner) runOne(ctx context.Context, cmd wire.Command) {
 			return // shutting down: leave it outstanding, it will be handed back
 		}
 		// The attempt terminated. It failed, and that failure belongs to the
-		// referenced resource; from the command's point of view this Client is
+		// referenced resource; from the command's point of view this Agent is
 		// finished with it, so it is acked rather than retried forever.
 		r.logger.Error("command failed", "command", cmd.ID, "type", cmd.Type, "err", err)
 	}

@@ -1,8 +1,11 @@
 # AGENTS.md
 
-Guidance for coding agents in `easyssl-client`. `README.md` describes what the
-Client does, its commands, and how registration and uninstall work; this file is
-what a change to it must respect.
+Guidance for AI coding agents working in `easyssl-agent`. The file is named
+`AGENTS.md` because that is the name the tools read; "agent" in this file means
+an AI coding agent, while **Agent** capitalized means easySSL's own
+host-installed component. `README.md` describes what the Agent does, its
+commands, and how registration and uninstall work; this file is what a change
+to it must respect.
 
 ## Build
 
@@ -28,8 +31,8 @@ verify what it does. Flag any of the following.
   the change says why the standard library cannot do the job. The binary also
   installs on constrained devices, so capabilities not every install needs do not
   belong in it.
-- **The Client only ever dials out.** No listening socket, no inbound callback,
-  no Server-triggered action. The Server can never make a Client uninstall
+- **The Agent only ever dials out.** No listening socket, no inbound callback,
+  no Server-triggered action. The Server can never make an Agent uninstall
   itself; that is a host-side decision.
 - **All Server traffic goes through `internal/serverapi`.** It is a single funnel
   so an audit mode can later record every interaction with no unaudited paths. A
@@ -37,12 +40,12 @@ verify what it does. Flag any of the following.
 - **No private key material reaches the Server**, sent or logged. P0.
 - **Secrets stay root-only**, `0600` under `/etc/easyssl/`, never printed.
 - **Local state is not proof.** A stored token means one was issued once, not
-  that this Client is still registered or authorized; that comes from the Server.
-  A status read must not count as a check-in, or a stopped Client can be made to
+  that this Agent is still registered or authorized; that comes from the Server.
+  A status read must not count as a check-in, or a stopped Agent can be made to
   look alive.
-- **The two sides upgrade independently.** An installed Client cannot be forced
+- **The two sides upgrade independently.** An installed Agent cannot be forced
   to update, so changes must tolerate a Server older or newer than this build.
-- **Reinstall reconciles, never duplicates.** One host runs one Client, keyed by
+- **Reinstall reconciles, never duplicates.** One host runs one Agent, keyed by
   a stable instance ID, and every install step must be safe to interrupt.
 - **CLI contract.** Human output on stdout, machine output behind `--json`,
   errors on stderr, non-zero exit on failure. `--json` codes are a stable
@@ -50,7 +53,9 @@ verify what it does. Flag any of the following.
 
 ## Conventions
 
-American English. "Client" and "Server" are capitalized when they mean the
-easySSL components; never call the Client an "agent". This repository is public
-and self-contained: never cite a document, identifier, or issue that lives in a
-private repository. State the property directly instead.
+American English. "Agent" and "Server" are capitalized when they mean the
+easySSL components, so that a reader can tell them from an ordinary agent or an
+ordinary server. A third-party ACME client stays lowercase, being somebody
+else's software. This repository is public and self-contained: never cite a
+document, identifier, or issue that lives in a private repository. State the
+property directly instead.

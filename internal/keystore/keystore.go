@@ -1,10 +1,10 @@
-// Package keystore holds this Client's private keys.
+// Package keystore holds this Agent's private keys.
 //
 // Keys are stored unencrypted. Filesystem permissions are the whole of their
 // protection, so anyone who is root on this host, or who holds a backup or disk
 // image of it, holds the keys. That limit is stated rather than left implied by
 // the word "keystore": encryption in easySSL exists to hand the Server a copy it
-// cannot read, and never to protect local disk, because a Client renews and
+// cannot read, and never to protect local disk, because an Agent renews and
 // deploys unattended and any key that unlocked its own keystore would have to
 // sit on the same disk.
 //
@@ -42,7 +42,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/easyssl-io/easyssl-client/internal/identity"
+	"github.com/easyssl-io/easyssl-agent/internal/identity"
 )
 
 // baseDir is where the keystore lives. A variable rather than a constant only so
@@ -61,7 +61,7 @@ const (
 func keysDir() string  { return filepath.Join(baseDir, "keys") }
 func certsDir() string { return filepath.Join(baseDir, "certs") }
 
-// log is where this package writes. SetLogger points it at the Client's own
+// log is where this package writes. SetLogger points it at the Agent's own
 // handler so keystore lines match every other line the service emits; until
 // then it is the default, which keeps a package used before wiring from being
 // silent.
@@ -90,7 +90,7 @@ var euid = os.Geteuid
 
 func requireRoot() error {
 	if euid() != 0 {
-		return errors.New("keystore: must run as root: private keys are stored root-only, and a key written by another user would not have the protection this Client documents")
+		return errors.New("keystore: must run as root: private keys are stored root-only, and a key written by another user would not have the protection this Agent documents")
 	}
 	return nil
 }
@@ -112,7 +112,7 @@ type record struct {
 //
 // Calling it again for the same certificate returns the same key. That is the
 // requirement rather than an optimization: the Server delivers a command at
-// least once, so a Client that built a CSR and died before acknowledging it will
+// least once, so an Agent that built a CSR and died before acknowledging it will
 // be handed the same request again. Generating afresh on the second run would
 // leave the Server holding a CSR for a key that no longer exists, and the
 // certificate issued from it would be unusable by the host that asked for it.
@@ -153,7 +153,7 @@ func Ensure(certificateID string) (*ecdsa.PrivateKey, error) {
 	// The key becomes durable before the record that names it. The failure
 	// between the two has to be the harmless one: a key nothing refers to costs
 	// a file on a host that keeps every key anyway, while a record naming a key
-	// that does not exist is a dangling reference this Client cannot repair,
+	// that does not exist is a dangling reference this Agent cannot repair,
 	// because it cannot know whether the missing key was already used for a CSR.
 	if err := writeFile(keysDir(), fp+".key", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})); err != nil {
 		return nil, err
@@ -349,7 +349,7 @@ func writeFile(dir, name string, data []byte) error {
 // is exactly the state this package refuses to repair.
 //
 // A directory that already exists needs nothing: its entry was made durable
-// when it was created, or it predates this Client.
+// when it was created, or it predates this Agent.
 func mkdirAllSynced(dir string) error {
 	if _, err := os.Stat(dir); err == nil {
 		return nil

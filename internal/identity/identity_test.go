@@ -5,7 +5,7 @@ import (
 )
 
 func TestServiceName(t *testing.T) {
-	if got := ServiceName(); got != "easyssl-client.service" {
+	if got := ServiceName(); got != "easyssl-agent.service" {
 		t.Errorf("ServiceName = %q", got)
 	}
 }

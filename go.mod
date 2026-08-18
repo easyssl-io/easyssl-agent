@@ -1,4 +1,4 @@
-module github.com/easyssl-io/easyssl-client
+module github.com/easyssl-io/easyssl-agent
 
 go 1.26.6
 

@@ -5,7 +5,7 @@
 // The private key never crosses the wire in either direction. It was generated
 // here and lives in this host's keystore; the Server sends only the certificate
 // and the chain, and this package reads the key locally by the certificate id.
-// That is also why a Deployment can only ever run on the Client that holds the
+// That is also why a Deployment can only ever run on the Agent that holds the
 // key.
 package deploy
 
@@ -23,10 +23,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/easyssl-io/easyssl-client/internal/commands"
-	"github.com/easyssl-io/easyssl-client/internal/keystore"
-	"github.com/easyssl-io/easyssl-client/internal/pluginmgr"
-	"github.com/easyssl-io/easyssl-client/internal/serverapi"
+	"github.com/easyssl-io/easyssl-agent/internal/commands"
+	"github.com/easyssl-io/easyssl-agent/internal/keystore"
+	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
+	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
@@ -77,7 +77,7 @@ func New(api API, plugins Plugins, token string, logger *slog.Logger) commands.H
 		if err != nil {
 			var apiErr *serverapi.APIError
 			if errors.As(err, &apiErr) && apiErr.Status == 404 {
-				// Not this Client's, or gone. No retry changes that: a stale
+				// Not this Agent's, or gone. No retry changes that: a stale
 				// instruction, discarded and acked.
 				logger.Warn("deployment not found; discarding command", "deployment", cmd.RefID)
 				return nil
@@ -97,8 +97,8 @@ func New(api API, plugins Plugins, token string, logger *slog.Logger) commands.H
 		if err := api.ReportDeploymentResult(ctx, token, cmd.RefID, res); err != nil {
 			var apiErr *serverapi.APIError
 			if errors.As(err, &apiErr) && apiErr.Code == wire.CodeDeploymentFinished {
-				// Something already reported this one, which is the shape of a
-				// Client that died between acting and reporting. Done either way.
+				// Something already reported this one, which is the shape of an
+				// Agent that died between acting and reporting. Done either way.
 				logger.Info("deployment already reported; acking", "deployment", cmd.RefID)
 				return nil
 			}
@@ -113,7 +113,7 @@ func New(api API, plugins Plugins, token string, logger *slog.Logger) commands.H
 }
 
 // run performs one Deployment and always returns a result describing the
-// attempt: every failure here is this Deployment failing rather than the Client
+// attempt: every failure here is this Deployment failing rather than the Agent
 // failing, so it is reported rather than retried.
 func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger *slog.Logger) wire.DeploymentResult {
 	installed, found, err := plugins.Find(work.PluginID)
@@ -125,7 +125,7 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 		// it, because the fix is to install it and the Server cannot know that.
 		return failed("", fmt.Sprintf(
 			"the %s plugin is not installed on this host, so nothing could install this certificate.\n"+
-				"Install it there and deploy again:\n    easyssl-client plugin install %s",
+				"Install it there and deploy again:\n    easyssl-agent plugin install %s",
 			work.PluginID, work.PluginID))
 	}
 
@@ -137,7 +137,7 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 		return failed(installed.Version, fmt.Sprintf(
 			"the %s plugin is recorded on this host but cannot be run (%v), "+
 				"so nothing could install this certificate.\n"+
-				"Install it there again and deploy again:\n    easyssl-client plugin install %s",
+				"Install it there again and deploy again:\n    easyssl-agent plugin install %s",
 			work.PluginID, err, work.PluginID))
 	}
 
@@ -146,7 +146,7 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 		if errors.Is(err, keystore.ErrNoKey) {
 			return failed(installed.Version, fmt.Sprintf(
 				"this host holds no private key for %s, so it cannot install it. "+
-					"A certificate is installable only by the Client that generated its key.",
+					"A certificate is installable only by the Agent that generated its key.",
 				work.CertificateID))
 		}
 		return failed(installed.Version, fmt.Sprintf("reading the private key: %v", err))
@@ -157,7 +157,7 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	}
 
 	// The run's own directory, created here and removed here whatever happens.
-	// A Plugin that materializes files puts them in it, so a Plugin this Client
+	// A Plugin that materializes files puts them in it, so a Plugin this Agent
 	// had to kill cannot leave key material behind.
 	workDir, err := os.MkdirTemp("", "easyssl-deploy-")
 	if err != nil {
@@ -206,7 +206,7 @@ func runPlugin(ctx context.Context, path string, req plugincontract.InstallReque
 	rctx, cancel := context.WithTimeout(ctx, runTimeout)
 	defer cancel()
 
-	// #nosec G204 -- path comes from this Client's own record of what it
+	// #nosec G204 -- path comes from this Agent's own record of what it
 	// installed, not from the Server or the request.
 	cmd := exec.Command(path, plugincontract.OpInstall)
 	cmd.Stdin = bytesReader(body)
@@ -260,7 +260,7 @@ func runBounded(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 	}
 }
 
-// runnable reports whether the recorded artifact is still a file this Client
+// runnable reports whether the recorded artifact is still a file this Agent
 // could execute. The record saying a Plugin is installed and the file being
 // usable are separate facts, and they disagree when someone removes it by hand
 // or an upgrade leaves it unexecutable.
@@ -278,7 +278,7 @@ func runnable(path string) error {
 	return nil
 }
 
-// failed builds a result for an attempt whose explanation is the Client's, not
+// failed builds a result for an attempt whose explanation is the Agent's, not
 // a Plugin's: either no Plugin ran, or the one that did could not answer. The
 // text goes to Message, leaving Output for what a Plugin actually printed, and
 // still through the same funnel, because a killed run's error may quote it.
@@ -332,7 +332,7 @@ func redactPrivateKeys(s string) string {
 
 // keyPlaceholder stands in for what was removed, and says who removed it so a
 // reader does not go looking for a truncated file.
-const keyPlaceholder = "\n****** private key redacted by the easySSL Client ******\n"
+const keyPlaceholder = "\n****** private key redacted by the easySSL Agent ******\n"
 
 // report prepares any text for the Server: the key is removed first and the
 // result bounded afterwards, in that order, because truncating first can cut a
@@ -346,14 +346,14 @@ func truncate(s string) string {
 	if len(s) <= maxOutput {
 		return s
 	}
-	const marker = "\n… %d bytes omitted by the Client …\n"
+	const marker = "\n… %d bytes omitted by the Agent …\n"
 	head := maxOutput / 2
 	tail := maxOutput - head - len(marker) - 8
 	return s[:head] + fmt.Sprintf(marker, len(s)-head-tail) + s[len(s)-tail:]
 }
 
 // limitedBuffer collects output up to a bound, so a Plugin printing without
-// limit cannot exhaust this Client's memory while the Server would only have
+// limit cannot exhaust this Agent's memory while the Server would only have
 // stored a truncated copy anyway.
 type limitedBuffer struct {
 	buf []byte
@@ -384,7 +384,7 @@ func (b *limitedBuffer) String() string {
 	if b.dropped == 0 {
 		return string(b.buf)
 	}
-	return fmt.Sprintf("%s\n… %d further bytes discarded by the Client …\n", b.buf, b.dropped)
+	return fmt.Sprintf("%s\n… %d further bytes discarded by the Agent …\n", b.buf, b.dropped)
 }
 
 // bytesReader avoids importing bytes for one call.
