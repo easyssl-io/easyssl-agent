@@ -4,7 +4,7 @@
 // protection, so anyone who is root on this host, or who holds a backup or disk
 // image of it, holds the keys. That limit is stated rather than left implied by
 // the word "keystore": encryption in easySSL exists to hand the Server a copy it
-// cannot read, and never to protect local disk, because a Agent renews and
+// cannot read, and never to protect local disk, because an Agent renews and
 // deploys unattended and any key that unlocked its own keystore would have to
 // sit on the same disk.
 //
@@ -112,7 +112,7 @@ type record struct {
 //
 // Calling it again for the same certificate returns the same key. That is the
 // requirement rather than an optimization: the Server delivers a command at
-// least once, so a Agent that built a CSR and died before acknowledging it will
+// least once, so an Agent that built a CSR and died before acknowledging it will
 // be handed the same request again. Generating afresh on the second run would
 // leave the Server holding a CSR for a key that no longer exists, and the
 // certificate issued from it would be unusable by the host that asked for it.

@@ -97,7 +97,7 @@ func New(api API, plugins Plugins, token string, logger *slog.Logger) commands.H
 		if err := api.ReportDeploymentResult(ctx, token, cmd.RefID, res); err != nil {
 			var apiErr *serverapi.APIError
 			if errors.As(err, &apiErr) && apiErr.Code == wire.CodeDeploymentFinished {
-				// Something already reported this one, which is the shape of a
+				// Something already reported this one, which is the shape of an
 				// Agent that died between acting and reporting. Done either way.
 				logger.Info("deployment already reported; acking", "deployment", cmd.RefID)
 				return nil

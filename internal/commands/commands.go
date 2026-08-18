@@ -67,7 +67,7 @@ func (r *Runner) Reconcile(ctx context.Context) {
 //
 // The order matters and is the whole recovery story: whatever the handler does,
 // it records its result on the referenced resource itself, and only then is the
-// command acked here. A Agent that dies in between leaves the command
+// command acked here. An Agent that dies in between leaves the command
 // outstanding, so it comes back on the next fetch and runs again against work
 // already recorded. That is why a handler has to tolerate running twice.
 func (r *Runner) runOne(ctx context.Context, cmd wire.Command) {

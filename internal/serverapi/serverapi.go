@@ -146,7 +146,7 @@ func (c *Client) PendingCommands(ctx context.Context, token string) ([]wire.Comm
 // (however that turned out), or it does not recognize the type.
 //
 // Sent after any outcome has been recorded on the resource the command refers
-// to, never before. A repeat is fine and expected: a Agent that recorded an
+// to, never before. A repeat is fine and expected: an Agent that recorded an
 // outcome and then died is handed the command again and acks a second time.
 func (c *Client) AckCommand(ctx context.Context, token, commandID, status string) error {
 	path := wire.RouteCommands + "/" + url.PathEscape(commandID) + "/ack"

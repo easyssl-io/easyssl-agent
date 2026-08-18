@@ -36,7 +36,7 @@ type Options struct {
 	Name            string // from --name or AGENT_NAME; else the hostname, editable at the prompt
 }
 
-// Register runs the registration session. If this host already has a Agent
+// Register runs the registration session. If this host already has an Agent
 // identity it takes the idempotent reinstall path; otherwise it registers a new
 // Agent. A context cancellation (Ctrl-C) during the wait is not an error: the
 // installed systemd service keeps polling, so authorization can complete later.
@@ -231,7 +231,7 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 // Uninstall removes the Agent from this host: it unregisters from the Server
 // (best-effort), stops and removes the systemd unit, and deletes the config,
 // token, and binary. Deliberately host-side only: the Server can never trigger
-// it, so a compromised Server or account cannot wipe a Agent off a machine it
+// it, so a compromised Server or account cannot wipe an Agent off a machine it
 // does not own. Certificates and keys this Agent deployed are left alone,
 // since removing them could take the host's services down.
 func Uninstall(ctx context.Context, assumeYes bool) error {
@@ -435,7 +435,7 @@ func register(ctx context.Context, api *serverapi.Client, key, name, serverURL s
 		return wire.RegistrationResponse{}, "", fmt.Errorf("registration failed: %w", err)
 	}
 	if resp.AgentID == "" {
-		return wire.RegistrationResponse{}, "", errors.New("registration failed: did not receive a Agent ID from the Server (is it older than this Agent?)")
+		return wire.RegistrationResponse{}, "", errors.New("registration failed: did not receive an Agent ID from the Server (is it older than this Agent?)")
 	}
 	return resp, resp.AgentID, nil
 }

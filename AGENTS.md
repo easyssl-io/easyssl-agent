@@ -32,7 +32,7 @@ verify what it does. Flag any of the following.
   installs on constrained devices, so capabilities not every install needs do not
   belong in it.
 - **The Agent only ever dials out.** No listening socket, no inbound callback,
-  no Server-triggered action. The Server can never make a Agent uninstall
+  no Server-triggered action. The Server can never make an Agent uninstall
   itself; that is a host-side decision.
 - **All Server traffic goes through `internal/serverapi`.** It is a single funnel
   so an audit mode can later record every interaction with no unaudited paths. A

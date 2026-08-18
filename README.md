@@ -68,7 +68,7 @@ curl -sSL <server-url>/install | sudo REGISTRATION_KEY=<key> AGENT_NAME=web-01 b
 Once authorized, the Agent holds one long-lived connection open to the Server
 and asks for outstanding work whenever the Server nudges it. It also asks on
 every check-in regardless, and that is the part that guarantees the work
-happens: the connection only makes it prompt. So a Agent behind a proxy that
+happens: the connection only makes it prompt. So an Agent behind a proxy that
 kills idle connections, or one that simply cannot keep the stream up, still does
 everything asked of it, just at check-in speed.
 
@@ -78,7 +78,7 @@ rejected credential: if the Server no longer recognizes the token, waiting
 cannot repair it and re-registration is required.
 
 Work is reported finished only after its outcome has been recorded, never
-before. A Agent that dies in between is handed the same instruction again on
+before. An Agent that dies in between is handed the same instruction again on
 restart, which is why running one twice has to be safe.
 
 ## Checking state

@@ -117,7 +117,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	// service writes, rather than through the default handler.
 	keystore.SetLogger(logger)
 	// A command type with no handler here is reported unsupported, which is
-	// also what a Agent older than its Server does.
+	// also what an Agent older than its Server does.
 	runner := commands.NewRunner(api, token, logger, map[string]commands.Handler{
 		wire.CommandRequestCSR: csr.New(api, token, logger),
 		wire.CommandDeploy:     deploy.New(api, pluginmgr.New(nil, nil), token, logger),
@@ -133,7 +133,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		if err == nil {
 			poll = resp.NextPollSeconds
 			if resp.Status == wire.StatusActive {
-				// Only now: every push-channel route refuses a Agent that is
+				// Only now: every push-channel route refuses an Agent that is
 				// still awaiting authorization, exactly as the check-in does,
 				// so subscribing earlier would just loop on 401s.
 				streaming.Do(func() { go streamCommands(ctx, api, token, runner, logger) })
@@ -169,7 +169,7 @@ func streamCommands(ctx context.Context, api *serverapi.Client, token string, ru
 		maxBackoff = 5 * time.Minute
 		// A stream that stayed up this long proves the Server is reachable, so
 		// the next drop starts over at the short delay. Without it the delay
-		// only ever grows: a Agent up for weeks would wait the maximum after a
+		// only ever grows: an Agent up for weeks would wait the maximum after a
 		// routine proxy timeout, having been connected the entire time.
 		healthyFor = time.Minute
 	)
@@ -198,7 +198,7 @@ func streamCommands(ctx context.Context, api *serverapi.Client, token string, ru
 		if !connectedAt.IsZero() && time.Since(connectedAt) >= healthyFor {
 			backoff = minBackoff
 		}
-		// Info, not Debug: a Agent that can never hold the stream open looks
+		// Info, not Debug: an Agent that can never hold the stream open looks
 		// exactly like a healthy one from the host, and this is the only place
 		// that difference is visible there.
 		logger.Info("command stream ended; reconnecting", "err", err, "retry_in", backoff)
@@ -247,7 +247,7 @@ func cmdStatus(args []string) error {
 	token, tokenErr := identity.LoadToken()
 
 	// Whether the Agent is still registered is not a local fact: the Server
-	// owns it and can drop a Agent without telling the host, so a stored token
+	// owns it and can drop an Agent without telling the host, so a stored token
 	// proves only that one was issued once. Ask the Server. This is a read
 	// (GET), not a check-in, so running status never refreshes last-seen and
 	// therefore cannot make a stopped Agent look alive in the console.
@@ -388,7 +388,7 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 		pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL},
 		serverapi.New(cfg.ServerURL),
 	)
-	// The host's own platform: a Agent installs for the machine it runs on,
+	// The host's own platform: an Agent installs for the machine it runs on,
 	// never for another, so there is no flag to get this wrong.
 	out := make([]pluginmgr.Installed, 0, len(names))
 	for _, name := range names {
