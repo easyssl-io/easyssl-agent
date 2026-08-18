@@ -61,7 +61,7 @@ func newHandler(t *testing.T, api *fakeAPI) func(context.Context, wire.Command) 
 	orig := ensureKey
 	ensureKey = memoizedEnsure(t)
 	t.Cleanup(func() { ensureKey = orig })
-	return New(api, "esct_test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	return New(api, "esat_test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 }
 
 func work(domains ...string) wire.CSRWork {
@@ -199,7 +199,7 @@ func TestKeystoreTroubleLeavesTheCommandPending(t *testing.T) {
 	orig := ensureKey
 	ensureKey = func(string) (*ecdsa.PrivateKey, error) { return nil, errors.New("disk full") }
 	t.Cleanup(func() { ensureKey = orig })
-	h := New(api, "esct_test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+	h := New(api, "esat_test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := h(context.Background(), command()); err == nil {
 		t.Fatal("keystore failure: handler = nil, want error (retry until the command expires)")
 	}
