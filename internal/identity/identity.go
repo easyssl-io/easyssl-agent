@@ -26,6 +26,21 @@ type Config struct {
 	AgentID     string `json:"agentId"`
 	DisplayName string `json:"displayName"`
 	ServerURL   string `json:"serverUrl"`
+	// OrganizationName is what the console calls the organization this host is
+	// registered with, kept so a message on the host can name it rather than
+	// saying "the organization" to somebody who administers several. The
+	// Server sends it on registration and on every check-in; absent on a host
+	// registered before the field existed, and every use falls back.
+	OrganizationName string `json:"organizationName,omitempty"`
+}
+
+// Organization is the name to show for this host's organization, or a plain
+// fallback when the Server has not sent one yet.
+func (c Config) Organization() string {
+	if c.OrganizationName == "" {
+		return "its organization"
+	}
+	return c.OrganizationName
 }
 
 // ConfigPath and TokenPath locate the two state files.
