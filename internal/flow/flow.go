@@ -94,7 +94,8 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	}
 	fmt.Printf("✓ systemd service installed: %s\n", identity.ServiceName())
 
-	return awaitAuthorization(ctx, api, name, resp.AgentToken, resp.NextPollSeconds)
+	return awaitAuthorization(ctx, api, name, resp.AgentToken, resp.NextPollSeconds,
+		marketplaceURL(opts.ServerURL, resp.MarketplaceURL))
 }
 
 // reinstall handles a host that is already registered. It reconciles the token
@@ -146,7 +147,8 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 		fmt.Println("The service will keep polling it, so authorization completes once it is back.")
 		return nil
 	default: // pending
-		return awaitAuthorization(ctx, api, cfg.DisplayName, token, poll)
+		return awaitAuthorization(ctx, api, cfg.DisplayName, token, poll,
+			marketplaceURL(cfg.ServerURL, ""))
 	}
 }
 
@@ -212,9 +214,9 @@ func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Op
 
 // awaitAuthorization waits for the operator to authorize, printing the outcome.
 // An interrupt during the wait is reported as safe (the service keeps polling).
-func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token string, pollSeconds int) error {
+func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token string, pollSeconds int, marketplaceURL string) error {
 	fmt.Println()
-	fmt.Println("Waiting for authorization from the web console (approve it at your console › Agents)...")
+	fmt.Println(authorizationInstructions(marketplaceURL))
 
 	if err := waitForAuthorization(ctx, api, token, pollSeconds); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
@@ -226,6 +228,17 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 	fmt.Printf("\n✓ %s was authorized and is now ACTIVE.\n", name)
 	fmt.Printf("  manage:  systemctl status %s\n", identity.ServiceName())
 	return nil
+}
+
+func marketplaceURL(serverURL, fromServer string) string {
+	if fromServer != "" {
+		return fromServer
+	}
+	return strings.TrimRight(serverURL, "/") + "/plugins/marketplace"
+}
+
+func authorizationInstructions(marketplaceURL string) string {
+	return fmt.Sprintf("Visit the Plugin marketplace: %s\n\nWaiting for authorization from the web console (approve it at your console › Agents)...", marketplaceURL)
 }
 
 // Uninstall removes the Agent from this host: it unregisters from the Server

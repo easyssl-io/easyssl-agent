@@ -39,9 +39,9 @@ A host runs a single Agent. `register` runs an interactive line-based session:
    keeps only the token's hash.
 5. Installs and starts the systemd unit `easyssl-agent.service`, which runs
    `run` to check in periodically.
-6. Waits for an operator to authorize the Agent from the web console. This wait
-   is safe to interrupt: the installed service keeps polling, so authorization
-   can complete at any later time.
+6. Prints the web-console Plugin Marketplace URL, then waits for an operator to
+   authorize the Agent. The URL remains visible if the wait is interrupted;
+   the installed service keeps polling, so authorization can complete later.
 
 Re-running the installer on an already-registered host is idempotent: it
 refreshes the binary, restarts the service, and reports the current state
@@ -153,4 +153,3 @@ host-side only: the Server can never trigger it.
 
 This slice is Linux + systemd and root-only; the Agent stores no encryption key
 and sends none to the Server.
-
