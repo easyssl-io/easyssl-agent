@@ -25,6 +25,11 @@ import (
 	"strings"
 )
 
+// Type=notify, so the Agent can set the line `systemctl status` prints under
+// the unit: a host removed from the console keeps its service running and says
+// so there, rather than exiting and leaving a dead unit with no reason. See
+// sdnotify. The Agent sends READY=1 at startup; without it systemd would wait
+// out the start timeout and kill the service.
 const (
 	unitName    = "easyssl-agent.service"
 	unitPath    = "/etc/systemd/system/" + unitName
@@ -34,7 +39,8 @@ Description=easySSL Agent
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
 ExecStart=` + binaryPath + ` run
 Restart=on-failure
 RestartSec=10

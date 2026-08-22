@@ -37,6 +37,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
+	"github.com/easyssl-io/easyssl-agent/internal/sdnotify"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-agent/internal/sysd"
 	"github.com/easyssl-io/easyssl-contract/wire"
@@ -127,10 +128,30 @@ func cmdRun(ctx context.Context, args []string) error {
 	defer cancel()
 	var streaming sync.Once
 
+	// Under Type=notify systemd waits for this before calling the service
+	// started; a no-op anywhere else (see sdnotify).
+	sdnotify.Ready()
+	sdnotify.Status("Checking in.")
+
+	// Set once when the token stops being accepted, so the message is written
+	// at error level the first time and rarely after that: the condition does
+	// not change on its own, and a line a minute would bury everything else in
+	// the journal.
+	removedSince := time.Time{}
+
 	poll := 60
 	for {
 		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: flow.Version})
 		if err == nil {
+			if !removedSince.IsZero() {
+				// Nothing recovers a revoked token by itself, so this only
+				// happens if the host was registered again while the service
+				// ran. Say so, since the last thing the log said was the
+				// opposite.
+				logger.Info("token accepted again; resuming work")
+				sdnotify.Status("Checking in.")
+				removedSince = time.Time{}
+			}
 			poll = resp.NextPollSeconds
 			if resp.Status == wire.StatusActive {
 				// Only now: every push-channel route refuses an Agent that is
@@ -140,9 +161,27 @@ func cmdRun(ctx context.Context, args []string) error {
 				runner.Reconcile(ctx)
 			}
 		} else if isUnknownToken(err) {
-			// Rejected or revoked: stop cleanly so systemd does not restart-loop.
-			fmt.Fprintln(os.Stderr, "run: token rejected or revoked; re-registration required")
-			return nil
+			// Removed from the console, or the token revoked. The service keeps
+			// running and stops doing work: this Agent belongs to the host, not
+			// to the Server (Constitution Principle II), so a decision taken in
+			// the console does not stop a unit here, remove a file, or leave a
+			// failed unit in `systemctl --failed` for a host that is behaving
+			// correctly. Uninstalling stays the operator's action, and the
+			// message names both ways out.
+			if removedSince.IsZero() {
+				removedSince = time.Now()
+				logger.Error("this host is no longer registered with the Server: its token was rejected or revoked",
+					"server", cfg.ServerURL,
+					"next", "register again by re-running the installer, or remove this Agent with `easyssl-agent uninstall`",
+					"note", "no work will be done until then; nothing under "+identity.BaseDir+" has been touched")
+				sdnotify.Status("Not registered: token rejected or revoked. Re-run the installer to register again, or `easyssl-agent uninstall` to remove this Agent.")
+			} else if time.Since(removedSince) > 30*time.Minute {
+				removedSince = time.Now()
+				logger.Error("still not registered with the Server; re-run the installer or uninstall this Agent",
+					"server", cfg.ServerURL)
+			}
+			// Fall through to the wait: the loop keeps the service alive and
+			// picks the work back up if the host is registered again.
 		}
 		// A transient error (Server unreachable) falls through and retries.
 		if poll <= 0 {
