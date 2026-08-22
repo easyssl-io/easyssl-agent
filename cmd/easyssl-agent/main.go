@@ -494,7 +494,11 @@ func cmdPluginList(args []string) error {
 		return nil
 	}
 	for _, p := range installed {
-		fmt.Printf("%-16s v%-10s sha256:%s\n", p.ID, p.Version, p.Digest[:12]+"…")
+		fmt.Println(pluginListLine(p))
 	}
 	return nil
+}
+
+func pluginListLine(p pluginmgr.Installed) string {
+	return fmt.Sprintf("%-16s v%-10s sha256:%s", p.ID, p.Version, p.Digest)
 }
