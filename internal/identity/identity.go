@@ -32,15 +32,27 @@ type Config struct {
 	// Server sends it on registration and on every check-in; absent on a host
 	// registered before the field existed, and every use falls back.
 	OrganizationName string `json:"organizationName,omitempty"`
+	// OrganizationID is the console's public id for it (`org-…`). Kept beside
+	// the name because the name is not unique: every account starts with one
+	// called "Default organization".
+	OrganizationID string `json:"organizationId,omitempty"`
 }
 
-// Organization is the name to show for this host's organization, or a plain
-// fallback when the Server has not sent one yet.
+// Organization is how to refer to this host's organization in a message: the
+// name with its id, since the name alone does not identify one. Falls back
+// through what is known, to wording that names none, for a host registered
+// against a Server older than these fields.
 func (c Config) Organization() string {
-	if c.OrganizationName == "" {
+	switch {
+	case c.OrganizationName != "" && c.OrganizationID != "":
+		return c.OrganizationName + " (" + c.OrganizationID + ")"
+	case c.OrganizationName != "":
+		return c.OrganizationName
+	case c.OrganizationID != "":
+		return c.OrganizationID
+	default:
 		return "its organization"
 	}
-	return c.OrganizationName
 }
 
 // ConfigPath and TokenPath locate the two state files.

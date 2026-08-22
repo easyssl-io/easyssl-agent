@@ -80,7 +80,13 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 		return err
 	}
 
-	cfg := identity.Config{AgentID: agentID, DisplayName: name, ServerURL: opts.ServerURL, OrganizationName: resp.OrganizationName}
+	cfg := identity.Config{
+		AgentID:          agentID,
+		DisplayName:      name,
+		ServerURL:        opts.ServerURL,
+		OrganizationName: resp.OrganizationName,
+		OrganizationID:   resp.OrganizationID,
+	}
 	if err := identity.SaveConfig(cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
@@ -218,7 +224,7 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 	fmt.Println()
 	fmt.Println(authorizationInstructions(marketplaceURL))
 
-	org, err := waitForAuthorization(ctx, api, token, pollSeconds)
+	org, orgID, err := waitForAuthorization(ctx, api, token, pollSeconds)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			fmt.Println("\n(installer interrupted; the systemd service keeps polling, so authorize any time)")
@@ -229,8 +235,9 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 	// The organization is named here because this is the moment it becomes
 	// true, and the installer's output is what the operator keeps.
 	if org != "" {
-		fmt.Printf("\n✓ %s was authorized and is now ACTIVE in %s.\n", name, org)
-		rememberOrganization(org)
+		rememberOrganization(org, orgID)
+		cfg, _ := identity.LoadConfig()
+		fmt.Printf("\n✓ %s was authorized and is now ACTIVE in %s.\n", name, cfg.Organization())
 	} else {
 		fmt.Printf("\n✓ %s was authorized and is now ACTIVE.\n", name)
 	}
@@ -241,12 +248,15 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 // rememberOrganization records a name learned after the config was written:
 // registration answers before the Agent is authorized, and an older Server
 // sends nothing at all. Best effort, since the name is only ever a message.
-func rememberOrganization(org string) {
+func rememberOrganization(org, orgID string) {
 	cfg, err := identity.LoadConfig()
-	if err != nil || cfg.OrganizationName == org {
+	if err != nil || (cfg.OrganizationName == org && cfg.OrganizationID == orgID) {
 		return
 	}
 	cfg.OrganizationName = org
+	if orgID != "" {
+		cfg.OrganizationID = orgID
+	}
 	_ = identity.SaveConfig(cfg)
 }
 
@@ -480,7 +490,7 @@ func register(ctx context.Context, api *serverapi.Client, key, name, serverURL s
 // or the context is canceled. Transient network errors are retried.
 // Returns the organization's name, which the check-in carries and which is
 // therefore known only once the Server answers.
-func waitForAuthorization(ctx context.Context, api *serverapi.Client, token string, pollSeconds int) (string, error) {
+func waitForAuthorization(ctx context.Context, api *serverapi.Client, token string, pollSeconds int) (name, id string, err error) {
 	if pollSeconds <= 0 {
 		pollSeconds = 3
 	}
@@ -488,18 +498,18 @@ func waitForAuthorization(ctx context.Context, api *serverapi.Client, token stri
 		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: Version})
 		switch {
 		case err == nil && resp.Status == wire.StatusActive:
-			return resp.OrganizationName, nil
+			return resp.OrganizationName, resp.OrganizationID, nil
 		case err == nil:
 			pollSeconds = resp.NextPollSeconds
 		default:
 			if isUnknownToken(err) {
-				return "", errors.New("registration was rejected (or the token was revoked)")
+				return "", "", errors.New("registration was rejected (or the token was revoked)")
 			}
 			// transient error: keep the current cadence and retry
 		}
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return "", "", ctx.Err()
 		case <-time.After(time.Duration(pollSeconds) * time.Second):
 		}
 	}

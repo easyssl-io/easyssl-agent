@@ -203,8 +203,14 @@ func cmdRun(ctx context.Context, args []string) error {
 			}
 			// A rename in the console reaches the host here rather than
 			// waiting for a re-registration that may never happen.
-			if resp.OrganizationName != "" && resp.OrganizationName != cfg.OrganizationName {
-				cfg.OrganizationName = resp.OrganizationName
+			if (resp.OrganizationName != "" && resp.OrganizationName != cfg.OrganizationName) ||
+				(resp.OrganizationID != "" && resp.OrganizationID != cfg.OrganizationID) {
+				if resp.OrganizationName != "" {
+					cfg.OrganizationName = resp.OrganizationName
+				}
+				if resp.OrganizationID != "" {
+					cfg.OrganizationID = resp.OrganizationID
+				}
 				if err := identity.SaveConfig(cfg); err != nil {
 					logger.Warn("could not record the organization name", "err", err)
 				}
@@ -351,13 +357,14 @@ func cmdStatus(args []string) error {
 
 	if *asJSON {
 		out := map[string]any{
-			"agentId":      cfg.AgentID,
-			"displayName":  cfg.DisplayName,
-			"serverUrl":    cfg.ServerURL,
-			"organization": cfg.OrganizationName,
-			"serviceName":  identity.ServiceName(),
-			"serviceState": sysd.State(),
-			"tokenPresent": tokenErr == nil,
+			"agentId":        cfg.AgentID,
+			"displayName":    cfg.DisplayName,
+			"serverUrl":      cfg.ServerURL,
+			"organization":   cfg.OrganizationName,
+			"organizationId": cfg.OrganizationID,
+			"serviceName":    identity.ServiceName(),
+			"serviceState":   sysd.State(),
+			"tokenPresent":   tokenErr == nil,
 			// Short code for machines; the printed line spells it out.
 			"serverState": stateCode,
 		}
@@ -367,8 +374,8 @@ func cmdStatus(args []string) error {
 	fmt.Printf("agent     %s\n", cfg.AgentID)
 	fmt.Printf("name       %s\n", cfg.DisplayName)
 	fmt.Printf("server     %s\n", cfg.ServerURL)
-	if cfg.OrganizationName != "" {
-		fmt.Printf("org        %s\n", cfg.OrganizationName)
+	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
+		fmt.Printf("org        %s\n", cfg.Organization())
 	}
 	fmt.Printf("service    %s (%s)\n", identity.ServiceName(), sysd.State())
 	if tokenErr == nil {
