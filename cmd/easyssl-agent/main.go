@@ -152,6 +152,14 @@ func cmdRun(ctx context.Context, args []string) error {
 				sdnotify.Status("Checking in.")
 				removedSince = time.Time{}
 			}
+			// A rename in the console reaches the host here rather than
+			// waiting for a re-registration that may never happen.
+			if resp.OrganizationName != "" && resp.OrganizationName != cfg.OrganizationName {
+				cfg.OrganizationName = resp.OrganizationName
+				if err := identity.SaveConfig(cfg); err != nil {
+					logger.Warn("could not record the organization name", "err", err)
+				}
+			}
 			poll = resp.NextPollSeconds
 			if resp.Status == wire.StatusActive {
 				// Only now: every push-channel route refuses an Agent that is
@@ -297,6 +305,7 @@ func cmdStatus(args []string) error {
 			"agentId":      cfg.AgentID,
 			"displayName":  cfg.DisplayName,
 			"serverUrl":    cfg.ServerURL,
+			"organization": cfg.OrganizationName,
 			"serviceName":  identity.ServiceName(),
 			"serviceState": sysd.State(),
 			"tokenPresent": tokenErr == nil,
@@ -309,6 +318,9 @@ func cmdStatus(args []string) error {
 	fmt.Printf("agent     %s\n", cfg.AgentID)
 	fmt.Printf("name       %s\n", cfg.DisplayName)
 	fmt.Printf("server     %s\n", cfg.ServerURL)
+	if cfg.OrganizationName != "" {
+		fmt.Printf("org        %s\n", cfg.OrganizationName)
+	}
 	fmt.Printf("service    %s (%s)\n", identity.ServiceName(), sysd.State())
 	if tokenErr == nil {
 		fmt.Printf("token      stored in %s\n", identity.TokenPath())
