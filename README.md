@@ -21,6 +21,10 @@ easyssl-agent uninstall [--yes]                                       unregister
 ```
 
 Human-readable output goes to stdout (JSON with `--json`); errors go to stderr.
+This slice is root-only: every operational command refuses before reading a
+specific file or contacting the Server when run as another user, and names the
+corresponding `sudo easyssl-agent …` command. Top-level help and usage errors do
+not need root.
 
 ## How registration works
 

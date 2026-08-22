@@ -48,6 +48,10 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+	if err := rootPreflight(os.Args[1:], os.Geteuid()); err != nil {
+		fmt.Fprintln(os.Stderr, "easyssl-agent: "+err.Error())
+		os.Exit(1)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -79,6 +83,51 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: easyssl-agent <register|run|status|uninstall|plugin> [flags]")
+}
+
+// rootPreflight refuses every operational command before it parses flags,
+// reads a path, or contacts the Server. This slice keeps all Agent state under
+// a root-only directory, so waiting for the filesystem error both leaks which
+// particular file was reached first and gives otherwise-equivalent commands
+// inconsistent failures.
+func rootPreflight(args []string, euid int) error {
+	cmd := rootCommand(args)
+	if euid == 0 || cmd == "" {
+		return nil
+	}
+	if cmd == "register" {
+		// Registration has to name both routes to root: a host operator may
+		// already be in a root shell on a system where sudo is not installed.
+		return errors.New("register must run as root: use sudo, or run it from a root shell")
+	}
+	return rootOnlyError(cmd)
+}
+
+// rootCommand returns only recognized commands that can read or change Agent
+// state. Keeping the inventory here makes the early gate reviewable as one
+// complete list; help, incomplete groups, and unknown commands retain their
+// normal usage errors.
+func rootCommand(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	switch args[0] {
+	case "register", "run", "status", "uninstall":
+		return args[0]
+	case "plugin":
+		if len(args) < 2 {
+			return ""
+		}
+		switch args[1] {
+		case "catalog", "install", "list":
+			return "plugin " + args[1]
+		}
+	}
+	return ""
+}
+
+func rootOnlyError(cmd string) error {
+	return fmt.Errorf("cannot read %s: the Agent's config and token are root-only; re-run as root with \"sudo easyssl-agent %s\"", identity.BaseDir, cmd)
 }
 
 func cmdRegister(ctx context.Context, args []string) error {
@@ -277,7 +326,7 @@ func stateError(cmd string, err error) error {
 	case errors.Is(err, fs.ErrNotExist):
 		return fmt.Errorf("no easySSL Agent is registered on this host (%s does not exist); register one with \"sudo easyssl-agent register --server <url>\"", identity.ConfigPath())
 	case errors.Is(err, fs.ErrPermission):
-		return fmt.Errorf("cannot read %s: the Agent's config and token are root-only; re-run as root with \"sudo easyssl-agent %s\"", identity.BaseDir, cmd)
+		return rootOnlyError(cmd)
 	}
 	return fmt.Errorf("%s: %w", cmd, err)
 }
