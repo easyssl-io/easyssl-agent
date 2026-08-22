@@ -42,7 +42,7 @@ func TestRootPreflightCoversEveryOperationalCommand(t *testing.T) {
 			if tt.cmd == "register" {
 				return
 			}
-			want := "cannot read /etc/easyssl: the Agent's config and token are root-only; re-run as root with \"sudo easyssl-agent " + tt.cmd + "\""
+			want := "this command requires root; re-run as root with \"sudo easyssl-agent " + tt.cmd + "\""
 			if err.Error() != want {
 				t.Fatalf("error = %q, want %q", err, want)
 			}

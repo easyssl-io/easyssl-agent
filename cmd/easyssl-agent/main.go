@@ -127,7 +127,7 @@ func rootCommand(args []string) string {
 }
 
 func rootOnlyError(cmd string) error {
-	return fmt.Errorf("cannot read %s: the Agent's config and token are root-only; re-run as root with \"sudo easyssl-agent %s\"", identity.BaseDir, cmd)
+	return fmt.Errorf("this command requires root; re-run as root with \"sudo easyssl-agent %s\"", cmd)
 }
 
 func cmdRegister(ctx context.Context, args []string) error {
