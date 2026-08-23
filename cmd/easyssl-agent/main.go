@@ -37,6 +37,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
+	"github.com/easyssl-io/easyssl-agent/internal/sdnotify"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-agent/internal/sysd"
 	"github.com/easyssl-io/easyssl-contract/wire"
@@ -46,6 +47,10 @@ func main() {
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
+	}
+	if err := rootPreflight(os.Args[1:], os.Geteuid()); err != nil {
+		fmt.Fprintln(os.Stderr, "easyssl-agent: "+err.Error())
+		os.Exit(1)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -78,6 +83,51 @@ func main() {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: easyssl-agent <register|run|status|uninstall|plugin> [flags]")
+}
+
+// rootPreflight refuses every operational command before it parses flags,
+// reads a path, or contacts the Server. This slice keeps all Agent state under
+// a root-only directory, so waiting for the filesystem error both leaks which
+// particular file was reached first and gives otherwise-equivalent commands
+// inconsistent failures.
+func rootPreflight(args []string, euid int) error {
+	cmd := rootCommand(args)
+	if euid == 0 || cmd == "" {
+		return nil
+	}
+	if cmd == "register" {
+		// Registration has to name both routes to root: a host operator may
+		// already be in a root shell on a system where sudo is not installed.
+		return errors.New("register must run as root: use sudo, or run it from a root shell")
+	}
+	return rootOnlyError(cmd)
+}
+
+// rootCommand returns only recognized commands that can read or change Agent
+// state. Keeping the inventory here makes the early gate reviewable as one
+// complete list; help, incomplete groups, and unknown commands retain their
+// normal usage errors.
+func rootCommand(args []string) string {
+	if len(args) == 0 {
+		return ""
+	}
+	switch args[0] {
+	case "register", "run", "status", "uninstall":
+		return args[0]
+	case "plugin":
+		if len(args) < 2 {
+			return ""
+		}
+		switch args[1] {
+		case "catalog", "install", "list":
+			return "plugin " + args[1]
+		}
+	}
+	return ""
+}
+
+func rootOnlyError(cmd string) error {
+	return fmt.Errorf("this command requires root; re-run as root with \"sudo easyssl-agent %s\"", cmd)
 }
 
 func cmdRegister(ctx context.Context, args []string) error {
@@ -127,10 +177,44 @@ func cmdRun(ctx context.Context, args []string) error {
 	defer cancel()
 	var streaming sync.Once
 
+	// Under Type=notify systemd waits for this before calling the service
+	// started; a no-op anywhere else (see sdnotify).
+	sdnotify.Ready()
+	sdnotify.Status("Checking in.")
+
+	// Set once when the token stops being accepted, so the message is written
+	// at error level the first time and rarely after that: the condition does
+	// not change on its own, and a line a minute would bury everything else in
+	// the journal.
+	removedSince := time.Time{}
+
 	poll := 60
 	for {
 		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: flow.Version})
 		if err == nil {
+			if !removedSince.IsZero() {
+				// Nothing recovers a revoked token by itself, so this only
+				// happens if the host was registered again while the service
+				// ran. Say so, since the last thing the log said was the
+				// opposite.
+				logger.Info("token accepted again; resuming work")
+				sdnotify.Status("Checking in.")
+				removedSince = time.Time{}
+			}
+			// A rename in the console reaches the host here rather than
+			// waiting for a re-registration that may never happen.
+			if (resp.OrganizationName != "" && resp.OrganizationName != cfg.OrganizationName) ||
+				(resp.OrganizationID != "" && resp.OrganizationID != cfg.OrganizationID) {
+				if resp.OrganizationName != "" {
+					cfg.OrganizationName = resp.OrganizationName
+				}
+				if resp.OrganizationID != "" {
+					cfg.OrganizationID = resp.OrganizationID
+				}
+				if err := identity.SaveConfig(cfg); err != nil {
+					logger.Warn("could not record the organization name", "err", err)
+				}
+			}
 			poll = resp.NextPollSeconds
 			if resp.Status == wire.StatusActive {
 				// Only now: every push-channel route refuses an Agent that is
@@ -140,9 +224,27 @@ func cmdRun(ctx context.Context, args []string) error {
 				runner.Reconcile(ctx)
 			}
 		} else if isUnknownToken(err) {
-			// Rejected or revoked: stop cleanly so systemd does not restart-loop.
-			fmt.Fprintln(os.Stderr, "run: token rejected or revoked; re-registration required")
-			return nil
+			// Removed from the console, or the token revoked. The service keeps
+			// running and stops doing work: this Agent belongs to the host, not
+			// to the Server (Constitution Principle II), so a decision taken in
+			// the console does not stop a unit here, remove a file, or leave a
+			// failed unit in `systemctl --failed` for a host that is behaving
+			// correctly. Uninstalling stays the operator's action, and the
+			// message names both ways out.
+			if removedSince.IsZero() {
+				removedSince = time.Now()
+				logger.Error("this host is no longer registered with the Server: its token was rejected or revoked",
+					"server", cfg.ServerURL,
+					"next", "register again by re-running the installer, or remove this Agent with `easyssl-agent uninstall`",
+					"note", "no work will be done until then; nothing under "+identity.BaseDir+" has been touched")
+				sdnotify.Status("Not registered: token rejected or revoked. Re-run the installer to register again, or `easyssl-agent uninstall` to remove this Agent.")
+			} else if time.Since(removedSince) > 30*time.Minute {
+				removedSince = time.Now()
+				logger.Error("still not registered with the Server; re-run the installer or uninstall this Agent",
+					"server", cfg.ServerURL)
+			}
+			// Fall through to the wait: the loop keeps the service alive and
+			// picks the work back up if the host is registered again.
 		}
 		// A transient error (Server unreachable) falls through and retries.
 		if poll <= 0 {
@@ -230,7 +332,7 @@ func stateError(cmd string, err error) error {
 	case errors.Is(err, fs.ErrNotExist):
 		return fmt.Errorf("no easySSL Agent is registered on this host (%s does not exist); register one with \"sudo easyssl-agent register --server <url>\"", identity.ConfigPath())
 	case errors.Is(err, fs.ErrPermission):
-		return fmt.Errorf("cannot read %s: the Agent's config and token are root-only; re-run as root with \"sudo easyssl-agent %s\"", identity.BaseDir, cmd)
+		return rootOnlyError(cmd)
 	}
 	return fmt.Errorf("%s: %w", cmd, err)
 }
@@ -255,12 +357,14 @@ func cmdStatus(args []string) error {
 
 	if *asJSON {
 		out := map[string]any{
-			"agentId":      cfg.AgentID,
-			"displayName":  cfg.DisplayName,
-			"serverUrl":    cfg.ServerURL,
-			"serviceName":  identity.ServiceName(),
-			"serviceState": sysd.State(),
-			"tokenPresent": tokenErr == nil,
+			"agentId":        cfg.AgentID,
+			"displayName":    cfg.DisplayName,
+			"serverUrl":      cfg.ServerURL,
+			"organization":   cfg.OrganizationName,
+			"organizationId": cfg.OrganizationID,
+			"serviceName":    identity.ServiceName(),
+			"serviceState":   sysd.State(),
+			"tokenPresent":   tokenErr == nil,
 			// Short code for machines; the printed line spells it out.
 			"serverState": stateCode,
 		}
@@ -270,6 +374,9 @@ func cmdStatus(args []string) error {
 	fmt.Printf("agent     %s\n", cfg.AgentID)
 	fmt.Printf("name       %s\n", cfg.DisplayName)
 	fmt.Printf("server     %s\n", cfg.ServerURL)
+	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
+		fmt.Printf("org        %s\n", cfg.Organization())
+	}
 	fmt.Printf("service    %s (%s)\n", identity.ServiceName(), sysd.State())
 	if tokenErr == nil {
 		fmt.Printf("token      stored in %s\n", identity.TokenPath())
@@ -494,7 +601,11 @@ func cmdPluginList(args []string) error {
 		return nil
 	}
 	for _, p := range installed {
-		fmt.Printf("%-16s v%-10s sha256:%s\n", p.ID, p.Version, p.Digest[:12]+"…")
+		fmt.Println(pluginListLine(p))
 	}
 	return nil
+}
+
+func pluginListLine(p pluginmgr.Installed) string {
+	return fmt.Sprintf("%-16s v%-10s sha256:%s", p.ID, p.Version, p.Digest)
 }

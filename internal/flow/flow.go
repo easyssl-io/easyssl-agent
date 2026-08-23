@@ -41,10 +41,6 @@ type Options struct {
 // Agent. A context cancellation (Ctrl-C) during the wait is not an error: the
 // installed systemd service keeps polling, so authorization can complete later.
 func Register(ctx context.Context, opts Options) error {
-	fmt.Printf("easySSL agent installer · v%s\n", Version)
-	fmt.Println("Registering this host to an easySSL organization...")
-	fmt.Println()
-
 	// Check root before anything reaches the Server. Registering first and
 	// failing afterwards on the config write would leave a pending Agent on
 	// the Server for a host that never actually installed one, which an
@@ -52,6 +48,10 @@ func Register(ctx context.Context, opts Options) error {
 	if os.Geteuid() != 0 {
 		return errors.New("register must run as root: use sudo, or run it from a root shell")
 	}
+
+	fmt.Printf("easySSL agent installer · v%s\n", Version)
+	fmt.Println("Registering this host to an easySSL organization...")
+	fmt.Println()
 
 	t := openTerminal()
 	if t != nil {
@@ -80,7 +80,13 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 		return err
 	}
 
-	cfg := identity.Config{AgentID: agentID, DisplayName: name, ServerURL: opts.ServerURL}
+	cfg := identity.Config{
+		AgentID:          agentID,
+		DisplayName:      name,
+		ServerURL:        opts.ServerURL,
+		OrganizationName: resp.OrganizationName,
+		OrganizationID:   resp.OrganizationID,
+	}
 	if err := identity.SaveConfig(cfg); err != nil {
 		return fmt.Errorf("save config: %w", err)
 	}
@@ -94,7 +100,8 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	}
 	fmt.Printf("✓ systemd service installed: %s\n", identity.ServiceName())
 
-	return awaitAuthorization(ctx, api, name, resp.AgentToken, resp.NextPollSeconds)
+	return awaitAuthorization(ctx, api, name, resp.AgentToken, resp.NextPollSeconds,
+		marketplaceURL(opts.ServerURL, resp.MarketplaceURL))
 }
 
 // reinstall handles a host that is already registered. It reconciles the token
@@ -146,7 +153,8 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 		fmt.Println("The service will keep polling it, so authorization completes once it is back.")
 		return nil
 	default: // pending
-		return awaitAuthorization(ctx, api, cfg.DisplayName, token, poll)
+		return awaitAuthorization(ctx, api, cfg.DisplayName, token, poll,
+			marketplaceURL(cfg.ServerURL, ""))
 	}
 }
 
@@ -212,20 +220,55 @@ func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Op
 
 // awaitAuthorization waits for the operator to authorize, printing the outcome.
 // An interrupt during the wait is reported as safe (the service keeps polling).
-func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token string, pollSeconds int) error {
+func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token string, pollSeconds int, marketplaceURL string) error {
 	fmt.Println()
-	fmt.Println("Waiting for authorization from the web console (approve it at your console › Agents)...")
+	fmt.Println(authorizationInstructions(marketplaceURL))
 
-	if err := waitForAuthorization(ctx, api, token, pollSeconds); err != nil {
+	org, orgID, err := waitForAuthorization(ctx, api, token, pollSeconds)
+	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			fmt.Println("\n(installer interrupted; the systemd service keeps polling, so authorize any time)")
 			return nil
 		}
 		return err
 	}
-	fmt.Printf("\n✓ %s was authorized and is now ACTIVE.\n", name)
+	// The organization is named here because this is the moment it becomes
+	// true, and the installer's output is what the operator keeps.
+	if org != "" {
+		rememberOrganization(org, orgID)
+		cfg, _ := identity.LoadConfig()
+		fmt.Printf("\n✓ %s was authorized and is now ACTIVE in %s.\n", name, cfg.Organization())
+	} else {
+		fmt.Printf("\n✓ %s was authorized and is now ACTIVE.\n", name)
+	}
 	fmt.Printf("  manage:  systemctl status %s\n", identity.ServiceName())
 	return nil
+}
+
+// rememberOrganization records a name learned after the config was written:
+// registration answers before the Agent is authorized, and an older Server
+// sends nothing at all. Best effort, since the name is only ever a message.
+func rememberOrganization(org, orgID string) {
+	cfg, err := identity.LoadConfig()
+	if err != nil || (cfg.OrganizationName == org && cfg.OrganizationID == orgID) {
+		return
+	}
+	cfg.OrganizationName = org
+	if orgID != "" {
+		cfg.OrganizationID = orgID
+	}
+	_ = identity.SaveConfig(cfg)
+}
+
+func marketplaceURL(serverURL, fromServer string) string {
+	if fromServer != "" {
+		return fromServer
+	}
+	return strings.TrimRight(serverURL, "/") + "/plugins/marketplace"
+}
+
+func authorizationInstructions(marketplaceURL string) string {
+	return fmt.Sprintf("Visit the Plugin marketplace: %s\n\nWaiting for authorization from the web console (approve it at your console › Agents)...", marketplaceURL)
 }
 
 // Uninstall removes the Agent from this host: it unregisters from the Server
@@ -244,10 +287,10 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 	if !installed {
 		fmt.Println("No easySSL Agent registration found on this host; removing any leftover files.")
 	} else {
-		fmt.Printf("easySSL Agent %q (%s) is registered with %s.\n", cfg.DisplayName, cfg.AgentID, cfg.ServerURL)
+		fmt.Printf("easySSL Agent %q (%s) is registered with %s in %s.\n", cfg.DisplayName, cfg.AgentID, cfg.ServerURL, cfg.Organization())
 	}
 
-	if !assumeYes && !confirmUninstall(installed) {
+	if !assumeYes && !confirmUninstall(installed, cfg.Organization()) {
 		fmt.Println("Aborted; nothing was changed.")
 		return nil
 	}
@@ -261,7 +304,7 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 			fmt.Println("! no local token, so this host may still appear in the console; remove it there")
 		default:
 			if err := serverapi.New(cfg.ServerURL).Unregister(ctx, token); err == nil || isUnknownToken(err) {
-				fmt.Println("✓ unregistered from the organization")
+				fmt.Printf("✓ unregistered from %s\n", cfg.Organization())
 			} else {
 				fmt.Printf("! could not reach the Server (%v); remove this Agent from the console\n", err)
 			}
@@ -365,7 +408,7 @@ func exists(path string) bool {
 // confirmUninstall asks before destroying local state. With no terminal (an
 // automated run) it declines rather than assuming consent; --yes is the
 // explicit way to say yes without one.
-func confirmUninstall(registered bool) bool {
+func confirmUninstall(registered bool, organization string) bool {
 	t := openTerminal()
 	if t == nil {
 		fmt.Println("Refusing to uninstall without confirmation: re-run with --yes.")
@@ -374,7 +417,10 @@ func confirmUninstall(registered bool) bool {
 	defer t.close()
 	what := "the Agent and its files"
 	if registered {
-		what = "this Agent from the organization, and its files"
+		// Named, because an operator who administers several organizations
+		// cannot tell from "the organization" which one they are removing this
+		// host from.
+		what = "this Agent from " + organization + ", and its files"
 	}
 	return strings.EqualFold(t.prompt(fmt.Sprintf("Remove %s? [y/N]: ", what)), "y")
 }
@@ -442,7 +488,9 @@ func register(ctx context.Context, api *serverapi.Client, key, name, serverURL s
 
 // waitForAuthorization polls until the Agent is active, the token is rejected,
 // or the context is canceled. Transient network errors are retried.
-func waitForAuthorization(ctx context.Context, api *serverapi.Client, token string, pollSeconds int) error {
+// Returns the organization's name, which the check-in carries and which is
+// therefore known only once the Server answers.
+func waitForAuthorization(ctx context.Context, api *serverapi.Client, token string, pollSeconds int) (name, id string, err error) {
 	if pollSeconds <= 0 {
 		pollSeconds = 3
 	}
@@ -450,18 +498,18 @@ func waitForAuthorization(ctx context.Context, api *serverapi.Client, token stri
 		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: Version})
 		switch {
 		case err == nil && resp.Status == wire.StatusActive:
-			return nil
+			return resp.OrganizationName, resp.OrganizationID, nil
 		case err == nil:
 			pollSeconds = resp.NextPollSeconds
 		default:
 			if isUnknownToken(err) {
-				return errors.New("registration was rejected (or the token was revoked)")
+				return "", "", errors.New("registration was rejected (or the token was revoked)")
 			}
 			// transient error: keep the current cadence and retry
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return "", "", ctx.Err()
 		case <-time.After(time.Duration(pollSeconds) * time.Second):
 		}
 	}
