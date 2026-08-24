@@ -71,8 +71,18 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 		return err
 	}
 	host, _ := os.Hostname()
-	name := confirmName(t, opts.Name, host)
-	fmt.Printf("✓ agent name  %s\n", name)
+	name, err := confirmName(t, opts.Name, proposedName(host), host)
+	if err != nil {
+		return err
+	}
+	// The whole hostname beside the name, because the case for trimming it is
+	// that nothing is lost by doing so (FR-001c). Omitted when there is nothing
+	// to add: a single-label hostname is already the name.
+	if host != "" && host != name {
+		fmt.Printf("✓ agent name  %s  (host %s)\n", name, host)
+	} else {
+		fmt.Printf("✓ agent name  %s\n", name)
+	}
 
 	api := serverapi.New(opts.ServerURL)
 	resp, agentID, err := register(ctx, api, key, name, opts.ServerURL)
@@ -442,18 +452,53 @@ func resolveKey(t *terminal, fromFlag string) (string, error) {
 // confirmName resolves the Agent's name: an explicit --name
 // wins, otherwise the operator edits the hostname-derived default at the
 // prompt, and a non-interactive install keeps the default.
-func confirmName(t *terminal, fromFlag, defaultName string) string {
+// proposedName trims a hostname to its first label, which is what the installer
+// offers as the Agent name (FR-001c): `web-01` from `web-01.nw.internal`. A name
+// shaped like a domain invites being read as an address, which an Agent name is
+// not — it identifies nothing, the Server's own identifier does that, and it is
+// edited freely. Nothing is lost by trimming: the whole hostname goes to the
+// Server as a host diagnostic (FR-004) and is printed beside the name.
+//
+// Empty when the host reports no name, which is the caller's signal to ask.
+func proposedName(hostname string) string {
+	label, _, _ := strings.Cut(hostname, ".")
+	return label
+}
+
+// confirmName settles the Agent name: the flag or environment value if one was
+// given, otherwise the proposal, editable at the prompt. hostname is the whole
+// one, shown beside the proposal when it differs so the reader can see what was
+// trimmed.
+//
+// With no proposal and no terminal there is nothing to offer and nobody to ask.
+// FR-001c makes that an error rather than a silent empty name, which the Server
+// would refuse anyway and later than it needs to.
+func confirmName(t *terminal, fromFlag, proposed, hostname string) (string, error) {
 	if fromFlag != "" {
-		return fromFlag
+		return fromFlag, nil
+	}
+	label := "Agent name"
+	if hostname != "" && hostname != proposed {
+		label = fmt.Sprintf("Agent name (host %s)", hostname)
 	}
 	if t == nil {
-		return defaultName
+		if proposed == "" {
+			return "", errors.New("this host reports no hostname to name the Agent after: pass --name or set AGENT_NAME")
+		}
+		return proposed, nil
 	}
-	v := t.prompt(fmt.Sprintf("Agent name [%s]: ", defaultName))
+	if proposed == "" {
+		v := t.prompt(label + ": ")
+		if v == "" {
+			return "", errors.New("an Agent name is required: this host reports no hostname to propose one from")
+		}
+		return v, nil
+	}
+	v := t.prompt(fmt.Sprintf("%s [%s]: ", label, proposed))
 	if v == "" {
-		return defaultName
+		return proposed, nil
 	}
-	return v
+	return v, nil
 }
 
 // register submits a fresh registration. No identifier goes with it: the
