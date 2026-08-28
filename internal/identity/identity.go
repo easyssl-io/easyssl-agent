@@ -26,9 +26,9 @@ type Config struct {
 	AgentID     string `json:"agentId"`
 	DisplayName string `json:"displayName"`
 	ServerURL   string `json:"serverUrl"`
-	// OrganizationName is what the web console calls the organization this host is
+	// OrganizationName is what the web console calls the Organization this host is
 	// registered with, kept so a message on the host can name it rather than
-	// saying "the organization" to somebody who administers several. The
+	// saying "the Organization" to somebody who administers several. The
 	// Server sends it on registration and on every check-in; absent on a host
 	// registered before the field existed, and every use falls back.
 	OrganizationName string `json:"organizationName,omitempty"`
@@ -38,7 +38,7 @@ type Config struct {
 	OrganizationID string `json:"organizationId,omitempty"`
 }
 
-// Organization is how to refer to this host's organization in a message: the
+// Organization is how to refer to this host's Organization in a message: the
 // name with its id, since the name alone does not identify one. Falls back
 // through what is known, to wording that names none, for a host registered
 // against a Server older than these fields.
@@ -51,7 +51,7 @@ func (c Config) Organization() string {
 	case c.OrganizationID != "":
 		return c.OrganizationID
 	default:
-		return "its organization"
+		return "its Organization"
 	}
 }
 

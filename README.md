@@ -30,7 +30,7 @@ not need root.
 
 A host runs a single Agent. `register` runs an interactive line-based session:
 
-1. Resolves the organization registration key from `--key` or the
+1. Resolves the Organization registration key from `--key` or the
    `REGISTRATION_KEY` environment variable, prompting for it when neither is set.
 2. Resolves the Agent's name: `--name` or `AGENT_NAME` if given, otherwise the
    host's hostname offered as an editable default at the prompt.

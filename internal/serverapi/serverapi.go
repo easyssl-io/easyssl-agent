@@ -74,7 +74,7 @@ func (c *Client) RegistrationStatus(ctx context.Context, token string) (wire.Reg
 	return out, err
 }
 
-// Unregister removes this Agent from its organization, so an uninstalled host
+// Unregister removes this Agent from its Organization, so an uninstalled host
 // disappears from the Server without the operator also removing it there.
 func (c *Client) Unregister(ctx context.Context, token string) error {
 	return c.do(ctx, http.MethodDelete, wire.RouteRegistration, token, nil, nil)

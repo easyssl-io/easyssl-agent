@@ -133,7 +133,7 @@ func rootOnlyError(cmd string) error {
 func cmdRegister(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("register", flag.ExitOnError)
 	server := fs.String("server", "", "easySSL Server base URL (required)")
-	key := fs.String("key", os.Getenv("REGISTRATION_KEY"), "organization registration key (defaults to $REGISTRATION_KEY)")
+	key := fs.String("key", os.Getenv("REGISTRATION_KEY"), "Organization registration key (defaults to $REGISTRATION_KEY)")
 	name := fs.String("name", os.Getenv("AGENT_NAME"), "Agent name (defaults to $AGENT_NAME, else the hostname; prompted when interactive)")
 	_ = fs.Parse(args)
 	if *server == "" {
@@ -212,7 +212,7 @@ func cmdRun(ctx context.Context, args []string) error {
 					cfg.OrganizationID = resp.OrganizationID
 				}
 				if err := identity.SaveConfig(cfg); err != nil {
-					logger.Warn("could not record the organization name", "err", err)
+					logger.Warn("could not record the Organization name", "err", err)
 				}
 			}
 			poll = resp.NextPollSeconds
@@ -375,7 +375,7 @@ func cmdStatus(args []string) error {
 	fmt.Printf("name       %s\n", cfg.DisplayName)
 	fmt.Printf("server     %s\n", cfg.ServerURL)
 	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
-		fmt.Printf("organization %s\n", cfg.Organization())
+		fmt.Printf("Organization %s\n", cfg.Organization())
 	}
 	fmt.Printf("service    %s (%s)\n", identity.ServiceName(), sysd.State())
 	if tokenErr == nil {

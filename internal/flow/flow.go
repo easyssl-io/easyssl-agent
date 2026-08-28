@@ -50,7 +50,7 @@ func Register(ctx context.Context, opts Options) error {
 	}
 
 	fmt.Printf("easySSL agent installer · v%s\n", Version)
-	fmt.Println("Registering this host to an easySSL organization...")
+	fmt.Println("Registering this host to an easySSL Organization...")
 	fmt.Println()
 
 	t := openTerminal()
@@ -242,7 +242,7 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 		}
 		return err
 	}
-	// The organization is named here because this is the moment it becomes
+	// The Organization is named here because this is the moment it becomes
 	// true, and the installer's output is what the operator keeps.
 	if organization != "" {
 		rememberOrganization(organization, organizationID)
@@ -427,8 +427,8 @@ func confirmUninstall(registered bool, organization string) bool {
 	defer t.close()
 	what := "the Agent and its files"
 	if registered {
-		// Named, because an operator who administers several organizations
-		// cannot tell from "the organization" which one they are removing this
+		// Named, because an operator who administers several Organizations
+		// cannot tell from "the Organization" which one they are removing this
 		// host from.
 		what = "this Agent from " + organization + ", and its files"
 	}
@@ -533,7 +533,7 @@ func register(ctx context.Context, api *serverapi.Client, key, name, serverURL s
 
 // waitForAuthorization polls until the Agent is active, the token is rejected,
 // or the context is canceled. Transient network errors are retried.
-// Returns the organization's name, which the check-in carries and which is
+// Returns the Organization's name, which the check-in carries and which is
 // therefore known only once the Server answers.
 func waitForAuthorization(ctx context.Context, api *serverapi.Client, token string, pollSeconds int) (name, id string, err error) {
 	if pollSeconds <= 0 {
