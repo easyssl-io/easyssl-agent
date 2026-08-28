@@ -226,7 +226,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		} else if isUnknownToken(err) {
 			// Removed from the web console, or the token revoked. The service keeps
 			// running and stops doing work: this Agent belongs to the host, not
-			// to the Server (Constitution Principle II), so a decision taken in
+			// to the Server, so a decision taken in
 			// the web console does not stop a unit here, remove a file, or leave a
 			// failed unit in `systemctl --failed` for a host that is behaving
 			// correctly. Uninstalling stays the operator's action, and the
@@ -464,7 +464,7 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 	// authorization is given and it grants more than it looks like: a Plugin
 	// runs with this Agent's privileges, which is root wherever the Agent is
 	// a system service, and there is no boundary between the two past the
-	// digest check (FR-008c). Skipped for --json, which is a machine's call,
+	// digest check. Skipped for --json, which is a machine's call,
 	// and for --yes, which is the person saying they know.
 	if !*asJSON && !*yes {
 		// One line per paragraph, wrapped by the terminal rather than here. A
@@ -543,8 +543,7 @@ func confirm(question string) (bool, error) {
 }
 
 // cmdPluginCatalog lists what the Marketplace offers for this host, so a Plugin
-// can be found and installed without knowing its name in advance (FR-005,
-// FR-007).
+// can be found and installed without knowing its name in advance.
 func cmdPluginCatalog(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("plugin catalog", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "print JSON")

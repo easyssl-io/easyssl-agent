@@ -240,9 +240,9 @@ func (c *Client) SubmitCSR(ctx context.Context, token, certificateID, csrPEM str
 }
 
 // ReportPlugin tells the Server what this Agent installed: the version, the
-// artifact digest, and the settings the Plugin declares for itself (S4
-// FR-008a). The Server answers every later question from this record, so
-// nothing ever queries the host.
+// artifact digest, and the settings the Plugin declares for itself. The Server
+// answers every later question from this record, so nothing ever queries the
+// host.
 func (c *Client) ReportPlugin(ctx context.Context, token, pluginID string, rep wire.PluginReport) error {
 	return c.do(ctx, http.MethodPut, "/api/v1/agent/plugins/"+pluginID, token, rep, nil)
 }

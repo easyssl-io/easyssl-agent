@@ -32,8 +32,8 @@ func TestAuthorizationInstructionsPutMarketplaceBeforeWait(t *testing.T) {
 	}
 }
 
-// FR-001c: the installer offers the hostname's first label, not the whole
-// hostname. Every host exercised during development had a single-label
+// The installer offers the hostname's first label, not the whole hostname.
+// Every host exercised during development had a single-label
 // hostname, where trimming and not trimming agree, which is why this went
 // unnoticed; the domain-qualified case is the one that matters.
 func TestProposedNameIsTheHostnamesFirstLabel(t *testing.T) {
@@ -69,8 +69,8 @@ func TestConfirmName(t *testing.T) {
 		}
 	})
 
-	// FR-001c: with no hostname there is nothing to propose. Unattended there is
-	// also nobody to ask, so it fails here rather than registering an empty name
+	// With no hostname there is nothing to propose. Unattended there is also
+	// nobody to ask, so it fails here rather than registering an empty name
 	// the Server would refuse later.
 	t.Run("unattended with no hostname is an error, not an empty name", func(t *testing.T) {
 		if _, err := confirmName(nil, "", "", ""); err == nil {

@@ -154,8 +154,8 @@ func (m *Manager) Install(ctx context.Context, token, pluginID, goos, goarch str
 	// The catalog said which bytes these would be, so a mismatch means the
 	// download was not what was offered. Refuse rather than install it: this is
 	// integrity, not authentication — it catches a truncated, stale or
-	// wrong-architecture artifact, and it is the plumbing FR-008's verification
-	// slice will build on.
+	// wrong-architecture artifact and provides the digest comparison that later
+	// installed-build verification can reuse.
 	if artifact.Digest != "" && digest != artifact.Digest {
 		_ = os.Remove(path)
 		return Installed{}, DigestMismatchError{PluginID: pluginID, Want: artifact.Digest, Got: digest}

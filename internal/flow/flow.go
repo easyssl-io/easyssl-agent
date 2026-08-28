@@ -76,7 +76,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 		return err
 	}
 	// The whole hostname beside the name, because the case for trimming it is
-	// that nothing is lost by doing so (FR-001c). Omitted when there is nothing
+	// that nothing is lost by doing so. Omitted when there is nothing
 	// to add: a single-label hostname is already the name.
 	if host != "" && host != name {
 		fmt.Printf("✓ agent name  %s  (host %s)\n", name, host)
@@ -453,11 +453,11 @@ func resolveKey(t *terminal, fromFlag string) (string, error) {
 // wins, otherwise the operator edits the hostname-derived default at the
 // prompt, and a non-interactive install keeps the default.
 // proposedName trims a hostname to its first label, which is what the installer
-// offers as the Agent name (FR-001c): `web-01` from `web-01.nw.internal`. A name
+// offers as the Agent name: `web-01` from `web-01.nw.internal`. A name
 // shaped like a domain invites being read as an address, which an Agent name is
 // not — it identifies nothing, the Server's own identifier does that, and it is
 // edited freely. Nothing is lost by trimming: the whole hostname goes to the
-// Server as a host diagnostic (FR-004) and is printed beside the name.
+// Server as a host diagnostic and is printed beside the name.
 //
 // Empty when the host reports no name, which is the caller's signal to ask.
 func proposedName(hostname string) string {
@@ -470,9 +470,9 @@ func proposedName(hostname string) string {
 // one, shown beside the proposal when it differs so the reader can see what was
 // trimmed.
 //
-// With no proposal and no terminal there is nothing to offer and nobody to ask.
-// FR-001c makes that an error rather than a silent empty name, which the Server
-// would refuse anyway and later than it needs to.
+// With no proposal and no terminal there is nothing to offer and nobody to ask,
+// so this returns an error rather than a silent empty name that the Server would
+// refuse later.
 func confirmName(t *terminal, fromFlag, proposed, hostname string) (string, error) {
 	if fromFlag != "" {
 		return fromFlag, nil
