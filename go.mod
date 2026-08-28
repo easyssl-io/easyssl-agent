@@ -2,7 +2,7 @@ module github.com/easyssl-io/easyssl-agent
 
 go 1.26.6
 
-require github.com/easyssl-io/easyssl-contract v0.2.0
+require github.com/easyssl-io/easyssl-contract v0.0.1
 
 // Umbrella-dev resolution for the unpublished contract module. The Go workspace
 // (go.work) handles dev builds; this replace lets the public module also build
