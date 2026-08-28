@@ -372,9 +372,9 @@ func cmdStatus(args []string) error {
 	}
 
 	line := func(label, value string) { fmt.Printf("%-12s %s\n", label, value) }
-	line("agent", cfg.AgentID)
+	line("Agent", cfg.AgentID)
 	line("name", cfg.DisplayName)
-	line("server", cfg.ServerURL)
+	line("Server", cfg.ServerURL)
 	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
 		line("Organization", cfg.Organization())
 	}
@@ -597,7 +597,7 @@ func cmdPluginList(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(installed)
 	}
 	if len(installed) == 0 {
-		fmt.Println("No plugins installed. Install one with: easyssl-agent plugin install generic-cli")
+		fmt.Println("No Plugins installed. Install one with: easyssl-agent plugin install generic-cli")
 		return nil
 	}
 	for _, p := range installed {

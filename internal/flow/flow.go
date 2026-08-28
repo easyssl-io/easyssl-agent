@@ -49,7 +49,7 @@ func Register(ctx context.Context, opts Options) error {
 		return errors.New("register must run as root: use sudo, or run it from a root shell")
 	}
 
-	fmt.Printf("easySSL agent installer · v%s\n", Version)
+	fmt.Printf("easySSL Agent installer · v%s\n", Version)
 	fmt.Println("Registering this host to an easySSL Organization...")
 	fmt.Println()
 
@@ -79,9 +79,9 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	// that nothing is lost by doing so. Omitted when there is nothing
 	// to add: a single-label hostname is already the name.
 	if host != "" && host != name {
-		fmt.Printf("✓ agent name  %s  (host %s)\n", name, host)
+		fmt.Printf("✓ Agent name  %s  (host %s)\n", name, host)
 	} else {
-		fmt.Printf("✓ agent name  %s\n", name)
+		fmt.Printf("✓ Agent name  %s\n", name)
 	}
 
 	api := serverapi.New(opts.ServerURL)
@@ -103,7 +103,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	if err := identity.SaveToken(resp.AgentToken); err != nil {
 		return fmt.Errorf("save token: %w", err)
 	}
-	fmt.Printf("✓ agent token stored in %s\n", identity.TokenPath())
+	fmt.Printf("✓ Agent token stored in %s\n", identity.TokenPath())
 
 	if err := sysd.Install(); err != nil {
 		return fmt.Errorf("installing systemd unit: %w", err)
@@ -224,7 +224,7 @@ func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Op
 	if err := identity.SaveToken(resp.AgentToken); err != nil {
 		return "", "", 0, fmt.Errorf("save token: %w", err)
 	}
-	fmt.Printf("✓ re-registered, new agent token stored in %s\n", identity.TokenPath())
+	fmt.Printf("✓ re-registered, new Agent token stored in %s\n", identity.TokenPath())
 	return resp.AgentToken, wire.StatusPending, resp.NextPollSeconds, nil
 }
 
@@ -367,12 +367,12 @@ func reportPluginsLeftBehind() {
 	installed, err := pluginmgr.New(nil, nil).List()
 	switch {
 	case err != nil:
-		fmt.Printf("\n! plugins may remain in %s and were NOT deleted (listing them failed: %v).\n",
+		fmt.Printf("\n! Plugins may remain in %s and were NOT deleted (listing them failed: %v).\n",
 			pluginmgr.InstallDir, err)
 	case len(installed) == 0:
 		return
 	default:
-		fmt.Printf("\n! %d plugin executable(s) remain in %s and were NOT deleted:\n",
+		fmt.Printf("\n! %d Plugin executable(s) remain in %s and were NOT deleted:\n",
 			len(installed), pluginmgr.InstallDir)
 		for _, p := range installed {
 			fmt.Printf("    %s v%s\n", p.ID, p.Version)
@@ -406,7 +406,7 @@ func reportKeysLeftBehind() {
 		fmt.Printf("\n! %d private keys remain in %s and were NOT deleted.\n", n, keystore.Dir())
 	}
 	fmt.Println("  They are the only copy on this host. Delete that directory by hand if this")
-	fmt.Println("  machine is being decommissioned, and keep a copy first if the certificates")
+	fmt.Println("  machine is being decommissioned, and keep a copy first if the Certificates")
 	fmt.Println("  using them are still in service.")
 }
 
