@@ -43,7 +43,7 @@ A host runs a single Agent. `register` runs an interactive line-based session:
    keeps only the token's hash.
 5. Installs and starts the systemd unit `easyssl-agent.service`, which runs
    `run` to check in periodically.
-6. Prints the web-console Plugin Marketplace URL, then waits for an operator to
+6. Prints the web console Plugin Marketplace URL, then waits for an operator to
    authorize the Agent. The URL remains visible if the wait is interrupted;
    the installed service keeps polling, so authorization can complete later.
 
