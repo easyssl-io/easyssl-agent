@@ -201,7 +201,7 @@ func cmdRun(ctx context.Context, args []string) error {
 				sdnotify.Status("Checking in.")
 				removedSince = time.Time{}
 			}
-			// A rename in the console reaches the host here rather than
+			// A rename in the web console reaches the host here rather than
 			// waiting for a re-registration that may never happen.
 			if (resp.OrganizationName != "" && resp.OrganizationName != cfg.OrganizationName) ||
 				(resp.OrganizationID != "" && resp.OrganizationID != cfg.OrganizationID) {
@@ -224,10 +224,10 @@ func cmdRun(ctx context.Context, args []string) error {
 				runner.Reconcile(ctx)
 			}
 		} else if isUnknownToken(err) {
-			// Removed from the console, or the token revoked. The service keeps
+			// Removed from the web console, or the token revoked. The service keeps
 			// running and stops doing work: this Agent belongs to the host, not
 			// to the Server (Constitution Principle II), so a decision taken in
-			// the console does not stop a unit here, remove a file, or leave a
+			// the web console does not stop a unit here, remove a file, or leave a
 			// failed unit in `systemctl --failed` for a host that is behaving
 			// correctly. Uninstalling stays the operator's action, and the
 			// message names both ways out.
@@ -352,7 +352,7 @@ func cmdStatus(args []string) error {
 	// owns it and can drop an Agent without telling the host, so a stored token
 	// proves only that one was issued once. Ask the Server. This is a read
 	// (GET), not a check-in, so running status never refreshes last-seen and
-	// therefore cannot make a stopped Agent look alive in the console.
+	// therefore cannot make a stopped Agent look alive in the web console.
 	stateCode, stateDetail := serverState(cfg, token, tokenErr)
 
 	if *asJSON {
@@ -375,7 +375,7 @@ func cmdStatus(args []string) error {
 	fmt.Printf("name       %s\n", cfg.DisplayName)
 	fmt.Printf("server     %s\n", cfg.ServerURL)
 	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
-		fmt.Printf("org        %s\n", cfg.Organization())
+		fmt.Printf("organization %s\n", cfg.Organization())
 	}
 	fmt.Printf("service    %s (%s)\n", identity.ServiceName(), sysd.State())
 	if tokenErr == nil {
@@ -389,12 +389,12 @@ func cmdStatus(args []string) error {
 
 // serverState asks the Server what this Agent actually is right now, which a
 // host cannot tell from its own files: it has no way to know it was removed
-// from the console. Read-only, so status stays free of side effects.
+// from the web console. Read-only, so status stays free of side effects.
 //
 // It returns a short stable code for machines and a sentence for people. The
 // wire calls an authorized Agent "active", which printed next to a stopped
 // systemd unit reads as if the Agent were running, when it only means the
-// operator admitted it; the console says "Authorized" and so does this.
+// operator admitted it; the web console says "Authorized" and so does this.
 func serverState(cfg identity.Config, token string, tokenErr error) (code, detail string) {
 	if tokenErr != nil {
 		return "not-registered", "not registered (no local token)"

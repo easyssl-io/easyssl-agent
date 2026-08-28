@@ -50,7 +50,7 @@ A host runs a single Agent. `register` runs an interactive line-based session:
 Re-running the installer on an already-registered host is idempotent: it
 refreshes the binary, restarts the service, and reports the current state
 instead of registering a second Agent. If the Agent was removed from the
-console, the reinstall re-registers it under the same instance ID.
+web console, the reinstall re-registers it under the same instance ID.
 
 The installer is served by the Server, so the usual one-liner is:
 
@@ -142,7 +142,7 @@ then stops and removes the systemd unit, deletes the config and token from
 run unattended unless `--yes` is passed, and is idempotent on a host with
 nothing or only remnants installed. If the Server cannot be reached the local
 removal still completes and you are told the Agent may still be listed in the
-console.
+web console.
 
 **Private keys are not deleted, and uninstall says so.** They are the only copy
 on this host, and an uninstall is too ordinary a command to destroy something

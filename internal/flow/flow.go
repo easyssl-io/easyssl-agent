@@ -1,10 +1,10 @@
 // Package flow drives the interactive line-based registration session.
 // A host runs one Agent: the first run generates and persists the
 // registers, stores the Server-minted Agent ID and token, installs the systemd unit, and waits
-// for the operator to authorize from the console. A later run on an
+// for the operator to authorize from the web console. A later run on an
 // already-registered host is idempotent: it refreshes the service onto the
 // updated binary and reports state instead of registering a second Agent. It is
-// plain stdin/stdout, no full-screen TUI in this slice.
+// plain stdin/stdout, no full-screen TUI shell in this slice.
 package flow
 
 import (
@@ -115,7 +115,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 }
 
 // reinstall handles a host that is already registered. It reconciles the token
-// (re-registering under the same Agent ID if it was removed from the console),
+// (re-registering under the same Agent ID if it was removed from the web console),
 // then refreshes and restarts the service onto the freshly installed binary, and
 // reports state. Reconciling the token BEFORE the restart is essential: restarting
 // first would run the service with the stale token, and a revoked token makes the
@@ -125,8 +125,8 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	// An installer is downloaded from one Server and carries that Server's URL,
 	// so a mismatch means this host belongs to a different one. Continuing
 	// against the stored URL is the wrong answer twice over: the operator is
-	// watching the console they installed from, where this host will never
-	// appear, and the registration key they supplied belongs to that console
+	// watching the web console they installed from, where this host will never
+	// appear, and the registration key they supplied belongs to that web console
 	// too. Moving the host is not done silently either, because it detaches
 	// this host from whatever the old Server still deploys to it.
 	if opts.ServerURL != "" && opts.ServerURL != cfg.ServerURL {
@@ -170,7 +170,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 
 // reconcileToken returns a token the service can run with, plus the Agent's
 // current status and poll cadence. It checks in with the stored token; if that
-// token is missing or was removed from the console it re-registers under the same
+// token is missing or was removed from the web console it re-registers under the same
 // Agent ID. status is "" (poll unused) when the Server could not be reached.
 func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (token, status string, poll int, err error) {
 	if token, err = identity.LoadToken(); err == nil {
@@ -179,7 +179,7 @@ func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opt
 		case cerr == nil:
 			return token, resp.Status, resp.NextPollSeconds, nil
 		case isUnknownToken(cerr):
-			fmt.Println("The previous registration was removed from the console; re-registering this host.")
+			fmt.Println("The previous registration was removed from the web console; re-registering this host.")
 			// fall through to re-register
 		default:
 			// Keep the token and let the service retry: the Server may simply
@@ -212,7 +212,7 @@ func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Op
 		if apiErr, ok := errors.AsType[*serverapi.APIError](err); ok {
 			switch apiErr.Code {
 			case wire.CodeAgentIDTaken:
-				return "", "", 0, errors.New("registration failed: this host is already registered; remove it from the console, then reinstall")
+				return "", "", 0, errors.New("registration failed: this host is already registered; remove it from the web console, then reinstall")
 			case wire.CodeUnknownAgentID:
 				return "", "", 0, fmt.Errorf("registration failed: the Server does not know this Agent (%s). If the Server was reset, remove %s and register fresh", cfg.AgentID, identity.ConfigPath())
 			case wire.CodeInvalidRegistrationKey:
@@ -234,7 +234,7 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 	fmt.Println()
 	fmt.Println(authorizationInstructions(marketplaceURL))
 
-	org, orgID, err := waitForAuthorization(ctx, api, token, pollSeconds)
+	organization, organizationID, err := waitForAuthorization(ctx, api, token, pollSeconds)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			fmt.Println("\n(installer interrupted; the systemd service keeps polling, so authorize any time)")
@@ -244,8 +244,8 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 	}
 	// The organization is named here because this is the moment it becomes
 	// true, and the installer's output is what the operator keeps.
-	if org != "" {
-		rememberOrganization(org, orgID)
+	if organization != "" {
+		rememberOrganization(organization, organizationID)
 		cfg, _ := identity.LoadConfig()
 		fmt.Printf("\n✓ %s was authorized and is now ACTIVE in %s.\n", name, cfg.Organization())
 	} else {
@@ -258,14 +258,14 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 // rememberOrganization records a name learned after the config was written:
 // registration answers before the Agent is authorized, and an older Server
 // sends nothing at all. Best effort, since the name is only ever a message.
-func rememberOrganization(org, orgID string) {
+func rememberOrganization(organization, organizationID string) {
 	cfg, err := identity.LoadConfig()
-	if err != nil || (cfg.OrganizationName == org && cfg.OrganizationID == orgID) {
+	if err != nil || (cfg.OrganizationName == organization && cfg.OrganizationID == organizationID) {
 		return
 	}
-	cfg.OrganizationName = org
-	if orgID != "" {
-		cfg.OrganizationID = orgID
+	cfg.OrganizationName = organization
+	if organizationID != "" {
+		cfg.OrganizationID = organizationID
 	}
 	_ = identity.SaveConfig(cfg)
 }
@@ -278,7 +278,7 @@ func marketplaceURL(serverURL, fromServer string) string {
 }
 
 func authorizationInstructions(marketplaceURL string) string {
-	return fmt.Sprintf("Visit the Plugin marketplace: %s\n\nWaiting for authorization from the web console (approve it at your console › Agents)...", marketplaceURL)
+	return fmt.Sprintf("Visit the Plugin marketplace: %s\n\nWaiting for authorization from the web console (approve it at your web console › Agents)...", marketplaceURL)
 }
 
 // Uninstall removes the Agent from this host: it unregisters from the Server
@@ -307,16 +307,16 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 
 	// Unregister first, while the token still exists on disk. Best-effort: an
 	// unreachable Server must not block an operator from cleaning up a host,
-	// so failure only leaves a row to remove from the console.
+	// so failure only leaves a row to remove from the web console.
 	if installed {
 		switch token, err := identity.LoadToken(); {
 		case err != nil:
-			fmt.Println("! no local token, so this host may still appear in the console; remove it there")
+			fmt.Println("! no local token, so this host may still appear in the web console; remove it there")
 		default:
 			if err := serverapi.New(cfg.ServerURL).Unregister(ctx, token); err == nil || isUnknownToken(err) {
 				fmt.Printf("✓ unregistered from %s\n", cfg.Organization())
 			} else {
-				fmt.Printf("! could not reach the Server (%v); remove this Agent from the console\n", err)
+				fmt.Printf("! could not reach the Server (%v); remove this Agent from the web console\n", err)
 			}
 		}
 	}
