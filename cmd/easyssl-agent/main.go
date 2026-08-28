@@ -371,19 +371,20 @@ func cmdStatus(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(out)
 	}
 
-	fmt.Printf("agent     %s\n", cfg.AgentID)
-	fmt.Printf("name       %s\n", cfg.DisplayName)
-	fmt.Printf("server     %s\n", cfg.ServerURL)
+	line := func(label, value string) { fmt.Printf("%-12s %s\n", label, value) }
+	line("agent", cfg.AgentID)
+	line("name", cfg.DisplayName)
+	line("server", cfg.ServerURL)
 	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
-		fmt.Printf("Organization %s\n", cfg.Organization())
+		line("Organization", cfg.Organization())
 	}
-	fmt.Printf("service    %s (%s)\n", identity.ServiceName(), sysd.State())
+	line("service", fmt.Sprintf("%s (%s)", identity.ServiceName(), sysd.State()))
 	if tokenErr == nil {
-		fmt.Printf("token      stored in %s\n", identity.TokenPath())
+		line("token", "stored in "+identity.TokenPath())
 	} else {
-		fmt.Printf("token      missing, so this Agent cannot authenticate\n")
+		line("token", "missing, so this Agent cannot authenticate")
 	}
-	fmt.Printf("state      %s\n", stateDetail)
+	line("state", stateDetail)
 	return nil
 }
 
