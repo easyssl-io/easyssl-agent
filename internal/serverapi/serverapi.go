@@ -1,8 +1,12 @@
-// Package serverapi is the Agent's single HTTP wrapper for every Server call.
-// Routing all Server interactions through one place is what will let a future
-// audit mode record every request with no unaudited paths, so new Server calls
-// belong here rather than in ad-hoc HTTP code. Standard library only, so the
-// Agent stays small and auditable.
+// Package serverapi is the Agent's HTTP wrapper, and where a Server call
+// belongs. Routing Server interactions through one place is what will let a
+// future audit mode record every request with no unaudited paths, so new Server
+// calls go here rather than into ad-hoc HTTP code.
+//
+// It is not yet every call. internal/pluginmgr fetches the Marketplace catalog
+// and downloads a Plugin artifact with its own client, so those two paths would
+// go unrecorded and the wrapper cannot be described as complete until they move
+// here. Standard library only, so the Agent stays small and auditable.
 package serverapi
 
 import (
