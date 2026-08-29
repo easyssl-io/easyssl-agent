@@ -3,12 +3,15 @@
 // future audit mode record every request with no unaudited paths, so new Server
 // calls go here rather than into ad-hoc HTTP code.
 //
-// It is not yet every call. internal/pluginmgr fetches the Marketplace catalog
-// and downloads a Plugin artifact without coming through here, on the
-// process-wide http.DefaultClient rather than a client of its own, so those
-// requests carry no timeout and would go unrecorded. The wrapper cannot be
-// described as complete until they move here. Standard library only, so the
-// Agent stays small and auditable.
+// It is not yet every call. pluginmgr.HTTPCatalog makes two kinds of request
+// without coming through here, fetching the Marketplace catalog and downloading
+// a Plugin artifact, issued from three call sites. Both of its construction
+// sites in cmd/easyssl-agent leave the HTTP field unset, so those requests run
+// on the process-wide http.DefaultClient and carry no timeout, and they would
+// go unrecorded. The rest of pluginmgr does come through here; it reports an
+// installed Plugin with ReportPlugin. The wrapper cannot be described as
+// complete until those three call sites move here. Standard library only, so
+// the Agent stays small and auditable.
 package serverapi
 
 import (
