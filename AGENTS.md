@@ -36,11 +36,14 @@ verify what it does. Flag any of the following.
   itself; that is a host-side decision.
 - **Server traffic goes through `internal/serverapi`, with one exception that is
   a known gap.** It is meant to be a single funnel so an audit mode can later
-  record every interaction with no unaudited paths. `internal/pluginmgr` is not
-  in it: it fetches the Marketplace catalog and downloads a Plugin artifact
-  without going through `serverapi`, leaving its own `HTTP` field nil so the
+  record every interaction with no unaudited paths. `pluginmgr.HTTPCatalog` is
+  not in it: its two requests, fetching the Marketplace catalog and downloading
+  a Plugin artifact, reach the Server without going through `serverapi`. Both
+  construction sites in `cmd/easyssl-agent` leave its `HTTP` field unset, so the
   requests run on the process-wide `http.DefaultClient`, which carries no
-  timeout. The funnel is not complete until those move behind the wrapper.
+  timeout. Three call sites issue them, and the funnel is not complete until all
+  three move behind the wrapper. The rest of `pluginmgr` is in it: it reports an
+  installed Plugin through `serverapi` like everything else.
   Anywhere else, a direct `http.Get` or a new `http.Client` is a finding even
   when it works. Inside `serverapi`, `SubscribeCommands` builds its own
   client deliberately, the shared 30-second timeout being one that would sever a
