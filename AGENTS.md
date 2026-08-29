@@ -37,9 +37,10 @@ verify what it does. Flag any of the following.
 - **Server traffic goes through `internal/serverapi`, with one exception that is
   a known gap.** It is meant to be a single funnel so an audit mode can later
   record every interaction with no unaudited paths. `internal/pluginmgr` is not
-  in it: it fetches the Marketplace catalog and downloads a Plugin artifact with
-  its own client, so the funnel is not complete until those move behind the
-  wrapper. Anywhere else, a direct `http.Get` or a new `http.Client` is a finding
+  in it: it fetches the Marketplace catalog and downloads a Plugin artifact
+  without going through `serverapi`, leaving its own `HTTP` field nil so the
+  requests run on the process-wide `http.DefaultClient`, which carries no
+  timeout. The funnel is not complete until those move behind the wrapper. Anywhere else, a direct `http.Get` or a new `http.Client` is a finding
   even when it works. Inside `serverapi`, `SubscribeCommands` builds its own
   client deliberately, the shared 30-second timeout being one that would sever a
   stream meant to stay open.

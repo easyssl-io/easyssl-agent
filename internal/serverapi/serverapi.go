@@ -4,9 +4,11 @@
 // calls go here rather than into ad-hoc HTTP code.
 //
 // It is not yet every call. internal/pluginmgr fetches the Marketplace catalog
-// and downloads a Plugin artifact with its own client, so those two paths would
-// go unrecorded and the wrapper cannot be described as complete until they move
-// here. Standard library only, so the Agent stays small and auditable.
+// and downloads a Plugin artifact without coming through here, on the
+// process-wide http.DefaultClient rather than a client of its own, so those
+// requests carry no timeout and would go unrecorded. The wrapper cannot be
+// described as complete until they move here. Standard library only, so the
+// Agent stays small and auditable.
 package serverapi
 
 import (
