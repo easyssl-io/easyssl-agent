@@ -40,8 +40,9 @@ verify what it does. Flag any of the following.
   in it: it fetches the Marketplace catalog and downloads a Plugin artifact
   without going through `serverapi`, leaving its own `HTTP` field nil so the
   requests run on the process-wide `http.DefaultClient`, which carries no
-  timeout. The funnel is not complete until those move behind the wrapper. Anywhere else, a direct `http.Get` or a new `http.Client` is a finding
-  even when it works. Inside `serverapi`, `SubscribeCommands` builds its own
+  timeout. The funnel is not complete until those move behind the wrapper.
+  Anywhere else, a direct `http.Get` or a new `http.Client` is a finding even
+  when it works. Inside `serverapi`, `SubscribeCommands` builds its own
   client deliberately, the shared 30-second timeout being one that would sever a
   stream meant to stay open.
 - **No private key material reaches the Server**, sent or logged. P0.
