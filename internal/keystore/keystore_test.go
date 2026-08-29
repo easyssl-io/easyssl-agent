@@ -5,12 +5,14 @@
 package keystore
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -419,4 +421,84 @@ func countFiles(t *testing.T, dir string) int {
 		}
 	}
 	return n
+}
+
+// TestLoadReturnsTheStoredKeyAndRefusesWhenThereIsNone covers the read-out path
+// FR-001i's sibling: Load is how a key leaves this package for a Plugin, and it
+// is the one function here whose whole job is to hand private material to
+// another program. Three properties matter. It returns the same key Ensure
+// stored, so a Deployment installs the key the certificate was issued against.
+// It reports ErrNoKey rather than generating, because a host that never held
+// this key cannot be given one that matches an already-issued certificate. And
+// it refuses a non-root caller like every other entry point, since the file
+// permissions are the whole of the at-rest protection.
+func TestLoadReturnsTheStoredKeyAndRefusesWhenThereIsNone(t *testing.T) {
+	withTempBase(t)
+
+	if _, err := Load(certificateA); !errors.Is(err, ErrNoKey) {
+		t.Fatalf("Load on a host holding no key: want ErrNoKey, got %v", err)
+	}
+
+	stored, err := Ensure(certificateA)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	loaded, err := Load(certificateA)
+	if err != nil {
+		t.Fatalf("Load after Ensure: %v", err)
+	}
+	if !loaded.Equal(stored) {
+		t.Error("Load returned a different key from the one Ensure stored")
+	}
+
+	// A second certificate is a separate key, so Load must not fall back to
+	// whatever key happens to be on the host.
+	if _, err := Load(certificateB); !errors.Is(err, ErrNoKey) {
+		t.Errorf("Load for an unheld certificate: want ErrNoKey, got %v", err)
+	}
+
+	euid = func() int { return 1000 }
+	if _, err := Load(certificateA); err == nil {
+		t.Error("a non-root caller was allowed to read a private key out")
+	}
+}
+
+// TestEncodePrivateKeyPEMRoundTrips covers the form the key is handed over in.
+// The Plugin receives this string and writes it where the Target needs it, so a
+// wrong encoding is a Deployment that installs an unusable key, and the failure
+// would surface on the host rather than here.
+func TestEncodePrivateKeyPEMRoundTrips(t *testing.T) {
+	withTempBase(t)
+
+	key, err := Ensure(certificateA)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	encoded, err := EncodePrivateKeyPEM(key)
+	if err != nil {
+		t.Fatalf("EncodePrivateKeyPEM: %v", err)
+	}
+
+	block, rest := pem.Decode([]byte(encoded))
+	if block == nil {
+		t.Fatal("EncodePrivateKeyPEM did not produce a PEM block")
+	}
+	if block.Type != "PRIVATE KEY" {
+		t.Errorf("PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		t.Error("EncodePrivateKeyPEM produced trailing data after the block")
+	}
+
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("the encoded key does not parse as PKCS#8: %v", err)
+	}
+	back, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("decoded key is %T, want *ecdsa.PrivateKey", parsed)
+	}
+	if !back.Equal(key) {
+		t.Error("the key did not survive the encode/decode round trip")
+	}
 }
