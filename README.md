@@ -30,7 +30,7 @@ not need root.
 
 A host runs a single Agent. `register` runs an interactive line-based session:
 
-1. Resolves the organization registration key from `--key` or the
+1. Resolves the Organization registration key from `--key` or the
    `REGISTRATION_KEY` environment variable, prompting for it when neither is set.
 2. Resolves the Agent's name: `--name` or `AGENT_NAME` if given, otherwise the
    host's hostname offered as an editable default at the prompt.
@@ -43,14 +43,14 @@ A host runs a single Agent. `register` runs an interactive line-based session:
    keeps only the token's hash.
 5. Installs and starts the systemd unit `easyssl-agent.service`, which runs
    `run` to check in periodically.
-6. Prints the web-console Plugin Marketplace URL, then waits for an operator to
+6. Prints the web console Plugin Marketplace URL, then waits for an operator to
    authorize the Agent. The URL remains visible if the wait is interrupted;
    the installed service keeps polling, so authorization can complete later.
 
 Re-running the installer on an already-registered host is idempotent: it
 refreshes the binary, restarts the service, and reports the current state
 instead of registering a second Agent. If the Agent was removed from the
-console, the reinstall re-registers it under the same instance ID.
+web console, the reinstall re-registers it under the same instance ID.
 
 The installer is served by the Server, so the usual one-liner is:
 
@@ -142,7 +142,7 @@ then stops and removes the systemd unit, deletes the config and token from
 run unattended unless `--yes` is passed, and is idempotent on a host with
 nothing or only remnants installed. If the Server cannot be reached the local
 removal still completes and you are told the Agent may still be listed in the
-console.
+web console.
 
 **Private keys are not deleted, and uninstall says so.** They are the only copy
 on this host, and an uninstall is too ordinary a command to destroy something

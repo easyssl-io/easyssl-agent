@@ -43,7 +43,7 @@ const runTimeout = 10 * time.Minute
 // dropped instead of leaving a silently short transcript.
 const maxOutput = 256 << 10
 
-// hostLock serializes Plugin execution across this process (FR-011a). Two
+// hostLock serializes Plugin execution across this process. Two
 // Deployments landing together would otherwise write and reload the same
 // service at the same time, and the second could reload a half-written file.
 // Queued Deployments simply wait here and stay pending.
@@ -121,8 +121,8 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	case err != nil:
 		return failed("", fmt.Sprintf("could not read this host's plugin record: %v", err))
 	case !found:
-		// FR-005a: the Plugin left the host, or was never installed here. Name
-		// it, because the fix is to install it and the Server cannot know that.
+		// The Plugin left the host, or was never installed here. Name it, because
+		// the fix is to install it and the Server cannot know that.
 		return failed("", fmt.Sprintf(
 			"the %s plugin is not installed on this host, so nothing could install this certificate.\n"+
 				"Install it there and deploy again:\n    easyssl-agent plugin install %s",
@@ -179,7 +179,7 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 		Settings:        work.Settings,
 	}
 
-	// One Plugin at a time on this host (FR-011a).
+	// One Plugin at a time on this host.
 	hostLock.Lock()
 	defer hostLock.Unlock()
 

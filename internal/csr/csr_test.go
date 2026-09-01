@@ -18,7 +18,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 )
 
-const certID = "3f2b9c44-1a77-4ce0-8d21-0d5e8f6a4b72"
+const certificateID = "3f2b9c44-1a77-4ce0-8d21-0d5e8f6a4b72"
 
 // fakeAPI stands in for the Server wrapper. Keys still come from real keystore
 // code paths where possible: only Ensure is replaced (it requires root and a
@@ -65,11 +65,11 @@ func newHandler(t *testing.T, api *fakeAPI) func(context.Context, wire.Command) 
 }
 
 func work(domains ...string) wire.CSRWork {
-	return wire.CSRWork{CertificateID: certID, Domains: domains, KeyType: wire.KeyTypeECP256}
+	return wire.CSRWork{CertificateID: certificateID, Domains: domains, KeyType: wire.KeyTypeECP256}
 }
 
 func command() wire.Command {
-	return wire.Command{ID: "cmd-1", Type: wire.CommandRequestCSR, RefID: certID}
+	return wire.Command{ID: "cmd-1", Type: wire.CommandRequestCSR, RefID: certificateID}
 }
 
 func TestBuildsAndSubmitsAVerifiableCSR(t *testing.T) {
@@ -180,8 +180,8 @@ func TestTransportTroubleLeavesTheCommandPending(t *testing.T) {
 // retry, and the command's expiry is what reports the certificate stuck.
 func TestUnperformableWorkIsAckedWithoutSubmitting(t *testing.T) {
 	cases := map[string]wire.CSRWork{
-		"unknown key type": {CertificateID: certID, Domains: []string{"a.example.test"}, KeyType: "ml-dsa-44"},
-		"no domains":       {CertificateID: certID, Domains: nil, KeyType: wire.KeyTypeECP256},
+		"unknown key type": {CertificateID: certificateID, Domains: []string{"a.example.test"}, KeyType: "ml-dsa-44"},
+		"no domains":       {CertificateID: certificateID, Domains: nil, KeyType: wire.KeyTypeECP256},
 	}
 	for name, w := range cases {
 		api := &fakeAPI{work: w}

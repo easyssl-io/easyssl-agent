@@ -5,12 +5,14 @@
 package keystore
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -18,8 +20,8 @@ import (
 )
 
 const (
-	certA = "crt-testkeystorea2"
-	certB = "crt-testkeystoreb2"
+	certificateA = "crt-testkeystorea2"
+	certificateB = "crt-testkeystoreb2"
 )
 
 // withTempBase points the keystore at a directory this test owns, and reports
@@ -42,7 +44,7 @@ func TestNonRootIsRefused(t *testing.T) {
 	base := withTempBase(t)
 	euid = func() int { return 1000 }
 
-	if _, err := Ensure(certA); err == nil {
+	if _, err := Ensure(certificateA); err == nil {
 		t.Fatal("a non-root caller was allowed to write a private key")
 	}
 	if n := countFiles(t, filepath.Join(base, "keys")); n != 0 {
@@ -57,7 +59,7 @@ func TestNonRootIsRefused(t *testing.T) {
 func TestLayoutAndPermissions(t *testing.T) {
 	base := withTempBase(t)
 
-	key, err := Ensure(certA)
+	key, err := Ensure(certificateA)
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
@@ -96,9 +98,9 @@ func TestLayoutAndPermissions(t *testing.T) {
 	}
 
 	var rec record
-	readJSON(t, filepath.Join(base, "certs", certA+".json"), &rec)
-	if rec.CertificateID != certA {
-		t.Errorf("record certificateId = %q, want %q", rec.CertificateID, certA)
+	readJSON(t, filepath.Join(base, "certs", certificateA+".json"), &rec)
+	if rec.CertificateID != certificateA {
+		t.Errorf("record certificateId = %q, want %q", rec.CertificateID, certificateA)
 	}
 	if rec.KeyFingerprint != want {
 		t.Errorf("record keyFingerprint = %q, want %q", rec.KeyFingerprint, want)
@@ -117,11 +119,11 @@ func TestLayoutAndPermissions(t *testing.T) {
 func TestEnsureIsIdempotentAndPerCertificate(t *testing.T) {
 	base := withTempBase(t)
 
-	first, err := Ensure(certA)
+	first, err := Ensure(certificateA)
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-	again, err := Ensure(certA)
+	again, err := Ensure(certificateA)
 	if err != nil {
 		t.Fatalf("second Ensure: %v", err)
 	}
@@ -135,7 +137,7 @@ func TestEnsureIsIdempotentAndPerCertificate(t *testing.T) {
 		t.Errorf("records after two calls for one certificate = %d, want 1", n)
 	}
 
-	other, err := Ensure(certB)
+	other, err := Ensure(certificateB)
 	if err != nil {
 		t.Fatalf("Ensure other: %v", err)
 	}
@@ -149,7 +151,7 @@ func TestEnsureIsIdempotentAndPerCertificate(t *testing.T) {
 	// Case is not a second identity: the Server only ever mints lowercase, so
 	// an uppercase spelling is refused outright rather than normalized into a
 	// second record for the same certificate.
-	if _, err := Ensure(strings.ToUpper(certA)); err == nil {
+	if _, err := Ensure(strings.ToUpper(certificateA)); err == nil {
 		t.Error("an uppercase certificate id was accepted; it must be refused")
 	}
 }
@@ -160,7 +162,7 @@ func TestEnsureIsIdempotentAndPerCertificate(t *testing.T) {
 func TestCSRMatchesStoredKey(t *testing.T) {
 	withTempBase(t)
 
-	key, err := Ensure(certA)
+	key, err := Ensure(certificateA)
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
@@ -203,14 +205,14 @@ func TestMalformedIdentifierIsRefused(t *testing.T) {
 
 	for _, id := range []string{
 		"../../etc/passwd",
-		"../" + certA,
-		certA + "/../../escape",
+		"../" + certificateA,
+		certificateA + "/../../escape",
 		"",
 		"not-a-certificate-id",
-		certA + "extra",      // too long
-		certA[:len(certA)-1], // too short
-		"cert-testkeystore2", // wrong prefix
-		"crt-testkeystore19", // '1' and '9' are outside base32's a-z2-7
+		certificateA + "extra",             // too long
+		certificateA[:len(certificateA)-1], // too short
+		"cert-testkeystore2",               // wrong prefix
+		"crt-testkeystore19",               // '1' and '9' are outside base32's a-z2-7
 	} {
 		if _, err := Ensure(id); err == nil {
 			t.Errorf("Ensure(%q) was accepted; it must be refused", id)
@@ -238,7 +240,7 @@ func TestMalformedIdentifierIsRefused(t *testing.T) {
 func TestInconsistentStateIsRefused(t *testing.T) {
 	t.Run("record naming an absent key", func(t *testing.T) {
 		base := withTempBase(t)
-		key, err := Ensure(certA)
+		key, err := Ensure(certificateA)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -246,7 +248,7 @@ func TestInconsistentStateIsRefused(t *testing.T) {
 		if err := os.Remove(filepath.Join(base, "keys", fp+".key")); err != nil {
 			t.Fatal(err)
 		}
-		_, err = Ensure(certA)
+		_, err = Ensure(certificateA)
 		if err == nil {
 			t.Fatal("a record naming a missing key was accepted")
 		}
@@ -257,7 +259,7 @@ func TestInconsistentStateIsRefused(t *testing.T) {
 
 	t.Run("key file that does not parse", func(t *testing.T) {
 		base := withTempBase(t)
-		key, err := Ensure(certA)
+		key, err := Ensure(certificateA)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -266,7 +268,7 @@ func TestInconsistentStateIsRefused(t *testing.T) {
 		if err := os.WriteFile(path, []byte("not a key\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Ensure(certA); err == nil {
+		if _, err := Ensure(certificateA); err == nil {
 			t.Fatal("an unparseable key file was accepted")
 		}
 		body, err := os.ReadFile(path)
@@ -280,14 +282,14 @@ func TestInconsistentStateIsRefused(t *testing.T) {
 
 	t.Run("key whose contents do not match its name", func(t *testing.T) {
 		base := withTempBase(t)
-		key, err := Ensure(certA)
+		key, err := Ensure(certificateA)
 		if err != nil {
 			t.Fatal(err)
 		}
 		fp, _ := fingerprint(key.Public())
 
 		// Put a different, perfectly valid key under the first key's name.
-		other, err := Ensure(certB)
+		other, err := Ensure(certificateB)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -299,20 +301,20 @@ func TestInconsistentStateIsRefused(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(base, "keys", fp+".key"), body, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Ensure(certA); err == nil {
+		if _, err := Ensure(certificateA); err == nil {
 			t.Fatal("a key filed under another key's name was accepted")
 		}
 	})
 
 	t.Run("record disagreeing with its own filename", func(t *testing.T) {
 		base := withTempBase(t)
-		if _, err := Ensure(certA); err != nil {
+		if _, err := Ensure(certificateA); err != nil {
 			t.Fatal(err)
 		}
-		path := filepath.Join(base, "certs", certA+".json")
+		path := filepath.Join(base, "certs", certificateA+".json")
 		var rec record
 		readJSON(t, path, &rec)
-		rec.CertificateID = certB
+		rec.CertificateID = certificateB
 		body, err := json.Marshal(rec)
 		if err != nil {
 			t.Fatal(err)
@@ -320,7 +322,7 @@ func TestInconsistentStateIsRefused(t *testing.T) {
 		if err := os.WriteFile(path, body, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Ensure(certA); err == nil {
+		if _, err := Ensure(certificateA); err == nil {
 			t.Fatal("a record disagreeing with its filename was accepted; neither value may be chosen")
 		}
 	})
@@ -337,7 +339,7 @@ func TestCreatesMissingDirectories(t *testing.T) {
 	baseDir, euid = filepath.Join(root, "deep", "etc", "easyssl"), func() int { return 0 }
 	t.Cleanup(func() { baseDir, euid = oldBase, oldEuid })
 
-	if _, err := Ensure(certA); err != nil {
+	if _, err := Ensure(certificateA); err != nil {
 		t.Fatalf("Ensure into a tree that does not exist yet: %v", err)
 	}
 	for _, dir := range []string{
@@ -363,10 +365,10 @@ func TestCountReportsKeys(t *testing.T) {
 	if n, err := Count(); err != nil || n != 0 {
 		t.Fatalf("Count on an empty host = %d, %v; want 0, nil", n, err)
 	}
-	if _, err := Ensure(certA); err != nil {
+	if _, err := Ensure(certificateA); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Ensure(certB); err != nil {
+	if _, err := Ensure(certificateB); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := Count(); err != nil || n != 2 {
@@ -419,4 +421,84 @@ func countFiles(t *testing.T, dir string) int {
 		}
 	}
 	return n
+}
+
+// TestLoadReturnsTheStoredKeyAndRefusesWhenThereIsNone covers the read-out path
+// FR-001i's sibling: Load is how a key leaves this package for a Plugin, and it
+// is the one function here whose whole job is to hand private material to
+// another program. Three properties matter. It returns the same key Ensure
+// stored, so a Deployment installs the key the certificate was issued against.
+// It reports ErrNoKey rather than generating, because a host that never held
+// this key cannot be given one that matches an already-issued certificate. And
+// it refuses a non-root caller like every other entry point, since the file
+// permissions are the whole of the at-rest protection.
+func TestLoadReturnsTheStoredKeyAndRefusesWhenThereIsNone(t *testing.T) {
+	withTempBase(t)
+
+	if _, err := Load(certificateA); !errors.Is(err, ErrNoKey) {
+		t.Fatalf("Load on a host holding no key: want ErrNoKey, got %v", err)
+	}
+
+	stored, err := Ensure(certificateA)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	loaded, err := Load(certificateA)
+	if err != nil {
+		t.Fatalf("Load after Ensure: %v", err)
+	}
+	if !loaded.Equal(stored) {
+		t.Error("Load returned a different key from the one Ensure stored")
+	}
+
+	// A second certificate is a separate key, so Load must not fall back to
+	// whatever key happens to be on the host.
+	if _, err := Load(certificateB); !errors.Is(err, ErrNoKey) {
+		t.Errorf("Load for an unheld certificate: want ErrNoKey, got %v", err)
+	}
+
+	euid = func() int { return 1000 }
+	if _, err := Load(certificateA); err == nil {
+		t.Error("a non-root caller was allowed to read a private key out")
+	}
+}
+
+// TestEncodePrivateKeyPEMRoundTrips covers the form the key is handed over in.
+// The Plugin receives this string and writes it where the Target needs it, so a
+// wrong encoding is a Deployment that installs an unusable key, and the failure
+// would surface on the host rather than here.
+func TestEncodePrivateKeyPEMRoundTrips(t *testing.T) {
+	withTempBase(t)
+
+	key, err := Ensure(certificateA)
+	if err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	encoded, err := EncodePrivateKeyPEM(key)
+	if err != nil {
+		t.Fatalf("EncodePrivateKeyPEM: %v", err)
+	}
+
+	block, rest := pem.Decode([]byte(encoded))
+	if block == nil {
+		t.Fatal("EncodePrivateKeyPEM did not produce a PEM block")
+	}
+	if block.Type != "PRIVATE KEY" {
+		t.Errorf("PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		t.Error("EncodePrivateKeyPEM produced trailing data after the block")
+	}
+
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("the encoded key does not parse as PKCS#8: %v", err)
+	}
+	back, ok := parsed.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("decoded key is %T, want *ecdsa.PrivateKey", parsed)
+	}
+	if !back.Equal(key) {
+		t.Error("the key did not survive the encode/decode round trip")
+	}
 }

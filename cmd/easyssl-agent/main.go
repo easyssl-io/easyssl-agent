@@ -133,7 +133,7 @@ func rootOnlyError(cmd string) error {
 func cmdRegister(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("register", flag.ExitOnError)
 	server := fs.String("server", "", "easySSL Server base URL (required)")
-	key := fs.String("key", os.Getenv("REGISTRATION_KEY"), "organization registration key (defaults to $REGISTRATION_KEY)")
+	key := fs.String("key", os.Getenv("REGISTRATION_KEY"), "Organization registration key (defaults to $REGISTRATION_KEY)")
 	name := fs.String("name", os.Getenv("AGENT_NAME"), "Agent name (defaults to $AGENT_NAME, else the hostname; prompted when interactive)")
 	_ = fs.Parse(args)
 	if *server == "" {
@@ -201,7 +201,7 @@ func cmdRun(ctx context.Context, args []string) error {
 				sdnotify.Status("Checking in.")
 				removedSince = time.Time{}
 			}
-			// A rename in the console reaches the host here rather than
+			// A rename in the web console reaches the host here rather than
 			// waiting for a re-registration that may never happen.
 			if (resp.OrganizationName != "" && resp.OrganizationName != cfg.OrganizationName) ||
 				(resp.OrganizationID != "" && resp.OrganizationID != cfg.OrganizationID) {
@@ -212,7 +212,7 @@ func cmdRun(ctx context.Context, args []string) error {
 					cfg.OrganizationID = resp.OrganizationID
 				}
 				if err := identity.SaveConfig(cfg); err != nil {
-					logger.Warn("could not record the organization name", "err", err)
+					logger.Warn("could not record the Organization name", "err", err)
 				}
 			}
 			poll = resp.NextPollSeconds
@@ -224,10 +224,10 @@ func cmdRun(ctx context.Context, args []string) error {
 				runner.Reconcile(ctx)
 			}
 		} else if isUnknownToken(err) {
-			// Removed from the console, or the token revoked. The service keeps
+			// Removed from the web console, or the token revoked. The service keeps
 			// running and stops doing work: this Agent belongs to the host, not
-			// to the Server (Constitution Principle II), so a decision taken in
-			// the console does not stop a unit here, remove a file, or leave a
+			// to the Server, so a decision taken in
+			// the web console does not stop a unit here, remove a file, or leave a
 			// failed unit in `systemctl --failed` for a host that is behaving
 			// correctly. Uninstalling stays the operator's action, and the
 			// message names both ways out.
@@ -352,7 +352,7 @@ func cmdStatus(args []string) error {
 	// owns it and can drop an Agent without telling the host, so a stored token
 	// proves only that one was issued once. Ask the Server. This is a read
 	// (GET), not a check-in, so running status never refreshes last-seen and
-	// therefore cannot make a stopped Agent look alive in the console.
+	// therefore cannot make a stopped Agent look alive in the web console.
 	stateCode, stateDetail := serverState(cfg, token, tokenErr)
 
 	if *asJSON {
@@ -371,30 +371,31 @@ func cmdStatus(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(out)
 	}
 
-	fmt.Printf("agent     %s\n", cfg.AgentID)
-	fmt.Printf("name       %s\n", cfg.DisplayName)
-	fmt.Printf("server     %s\n", cfg.ServerURL)
+	line := func(label, value string) { fmt.Printf("%-12s %s\n", label, value) }
+	line("Agent", cfg.AgentID)
+	line("name", cfg.DisplayName)
+	line("Server", cfg.ServerURL)
 	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
-		fmt.Printf("org        %s\n", cfg.Organization())
+		line("Organization", cfg.Organization())
 	}
-	fmt.Printf("service    %s (%s)\n", identity.ServiceName(), sysd.State())
+	line("service", fmt.Sprintf("%s (%s)", identity.ServiceName(), sysd.State()))
 	if tokenErr == nil {
-		fmt.Printf("token      stored in %s\n", identity.TokenPath())
+		line("token", "stored in "+identity.TokenPath())
 	} else {
-		fmt.Printf("token      missing, so this Agent cannot authenticate\n")
+		line("token", "missing, so this Agent cannot authenticate")
 	}
-	fmt.Printf("state      %s\n", stateDetail)
+	line("state", stateDetail)
 	return nil
 }
 
 // serverState asks the Server what this Agent actually is right now, which a
 // host cannot tell from its own files: it has no way to know it was removed
-// from the console. Read-only, so status stays free of side effects.
+// from the web console. Read-only, so status stays free of side effects.
 //
 // It returns a short stable code for machines and a sentence for people. The
 // wire calls an authorized Agent "active", which printed next to a stopped
 // systemd unit reads as if the Agent were running, when it only means the
-// operator admitted it; the console says "Authorized" and so does this.
+// operator admitted it; the web console says "Authorized" and so does this.
 func serverState(cfg identity.Config, token string, tokenErr error) (code, detail string) {
 	if tokenErr != nil {
 		return "not-registered", "not registered (no local token)"
@@ -464,7 +465,7 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 	// authorization is given and it grants more than it looks like: a Plugin
 	// runs with this Agent's privileges, which is root wherever the Agent is
 	// a system service, and there is no boundary between the two past the
-	// digest check (FR-008c). Skipped for --json, which is a machine's call,
+	// digest check. Skipped for --json, which is a machine's call,
 	// and for --yes, which is the person saying they know.
 	if !*asJSON && !*yes {
 		// One line per paragraph, wrapped by the terminal rather than here. A
@@ -543,8 +544,7 @@ func confirm(question string) (bool, error) {
 }
 
 // cmdPluginCatalog lists what the Marketplace offers for this host, so a Plugin
-// can be found and installed without knowing its name in advance (FR-005,
-// FR-007).
+// can be found and installed without knowing its name in advance.
 func cmdPluginCatalog(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("plugin catalog", flag.ExitOnError)
 	asJSON := fs.Bool("json", false, "print JSON")
@@ -597,7 +597,7 @@ func cmdPluginList(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(installed)
 	}
 	if len(installed) == 0 {
-		fmt.Println("No plugins installed. Install one with: easyssl-agent plugin install generic-cli")
+		fmt.Println("No Plugins installed. Install one with: easyssl-agent plugin install generic-cli")
 		return nil
 	}
 	for _, p := range installed {

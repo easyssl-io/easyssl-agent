@@ -1,10 +1,10 @@
 // Package flow drives the interactive line-based registration session.
 // A host runs one Agent: the first run generates and persists the
 // registers, stores the Server-minted Agent ID and token, installs the systemd unit, and waits
-// for the operator to authorize from the console. A later run on an
+// for the operator to authorize from the web console. A later run on an
 // already-registered host is idempotent: it refreshes the service onto the
 // updated binary and reports state instead of registering a second Agent. It is
-// plain stdin/stdout, no full-screen TUI in this slice.
+// plain stdin/stdout, no full-screen TUI shell in this slice.
 package flow
 
 import (
@@ -49,8 +49,8 @@ func Register(ctx context.Context, opts Options) error {
 		return errors.New("register must run as root: use sudo, or run it from a root shell")
 	}
 
-	fmt.Printf("easySSL agent installer · v%s\n", Version)
-	fmt.Println("Registering this host to an easySSL organization...")
+	fmt.Printf("easySSL Agent installer · v%s\n", Version)
+	fmt.Println("Registering this host to an easySSL Organization...")
 	fmt.Println()
 
 	t := openTerminal()
@@ -76,12 +76,12 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 		return err
 	}
 	// The whole hostname beside the name, because the case for trimming it is
-	// that nothing is lost by doing so (FR-001c). Omitted when there is nothing
+	// that nothing is lost by doing so. Omitted when there is nothing
 	// to add: a single-label hostname is already the name.
 	if host != "" && host != name {
-		fmt.Printf("✓ agent name  %s  (host %s)\n", name, host)
+		fmt.Printf("✓ Agent name  %s  (host %s)\n", name, host)
 	} else {
-		fmt.Printf("✓ agent name  %s\n", name)
+		fmt.Printf("✓ Agent name  %s\n", name)
 	}
 
 	api := serverapi.New(opts.ServerURL)
@@ -103,7 +103,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	if err := identity.SaveToken(resp.AgentToken); err != nil {
 		return fmt.Errorf("save token: %w", err)
 	}
-	fmt.Printf("✓ agent token stored in %s\n", identity.TokenPath())
+	fmt.Printf("✓ Agent token stored in %s\n", identity.TokenPath())
 
 	if err := sysd.Install(); err != nil {
 		return fmt.Errorf("installing systemd unit: %w", err)
@@ -115,7 +115,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 }
 
 // reinstall handles a host that is already registered. It reconciles the token
-// (re-registering under the same Agent ID if it was removed from the console),
+// (re-registering under the same Agent ID if it was removed from the web console),
 // then refreshes and restarts the service onto the freshly installed binary, and
 // reports state. Reconciling the token BEFORE the restart is essential: restarting
 // first would run the service with the stale token, and a revoked token makes the
@@ -125,8 +125,8 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	// An installer is downloaded from one Server and carries that Server's URL,
 	// so a mismatch means this host belongs to a different one. Continuing
 	// against the stored URL is the wrong answer twice over: the operator is
-	// watching the console they installed from, where this host will never
-	// appear, and the registration key they supplied belongs to that console
+	// watching the web console they installed from, where this host will never
+	// appear, and the registration key they supplied belongs to that web console
 	// too. Moving the host is not done silently either, because it detaches
 	// this host from whatever the old Server still deploys to it.
 	if opts.ServerURL != "" && opts.ServerURL != cfg.ServerURL {
@@ -170,7 +170,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 
 // reconcileToken returns a token the service can run with, plus the Agent's
 // current status and poll cadence. It checks in with the stored token; if that
-// token is missing or was removed from the console it re-registers under the same
+// token is missing or was removed from the web console it re-registers under the same
 // Agent ID. status is "" (poll unused) when the Server could not be reached.
 func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (token, status string, poll int, err error) {
 	if token, err = identity.LoadToken(); err == nil {
@@ -179,7 +179,7 @@ func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opt
 		case cerr == nil:
 			return token, resp.Status, resp.NextPollSeconds, nil
 		case isUnknownToken(cerr):
-			fmt.Println("The previous registration was removed from the console; re-registering this host.")
+			fmt.Println("The previous registration was removed from the web console; re-registering this host.")
 			// fall through to re-register
 		default:
 			// Keep the token and let the service retry: the Server may simply
@@ -212,7 +212,7 @@ func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Op
 		if apiErr, ok := errors.AsType[*serverapi.APIError](err); ok {
 			switch apiErr.Code {
 			case wire.CodeAgentIDTaken:
-				return "", "", 0, errors.New("registration failed: this host is already registered; remove it from the console, then reinstall")
+				return "", "", 0, errors.New("registration failed: this host is already registered; remove it from the web console, then reinstall")
 			case wire.CodeUnknownAgentID:
 				return "", "", 0, fmt.Errorf("registration failed: the Server does not know this Agent (%s). If the Server was reset, remove %s and register fresh", cfg.AgentID, identity.ConfigPath())
 			case wire.CodeInvalidRegistrationKey:
@@ -224,7 +224,7 @@ func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Op
 	if err := identity.SaveToken(resp.AgentToken); err != nil {
 		return "", "", 0, fmt.Errorf("save token: %w", err)
 	}
-	fmt.Printf("✓ re-registered, new agent token stored in %s\n", identity.TokenPath())
+	fmt.Printf("✓ re-registered, new Agent token stored in %s\n", identity.TokenPath())
 	return resp.AgentToken, wire.StatusPending, resp.NextPollSeconds, nil
 }
 
@@ -234,7 +234,7 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 	fmt.Println()
 	fmt.Println(authorizationInstructions(marketplaceURL))
 
-	org, orgID, err := waitForAuthorization(ctx, api, token, pollSeconds)
+	organization, organizationID, err := waitForAuthorization(ctx, api, token, pollSeconds)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			fmt.Println("\n(installer interrupted; the systemd service keeps polling, so authorize any time)")
@@ -242,10 +242,10 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 		}
 		return err
 	}
-	// The organization is named here because this is the moment it becomes
+	// The Organization is named here because this is the moment it becomes
 	// true, and the installer's output is what the operator keeps.
-	if org != "" {
-		rememberOrganization(org, orgID)
+	if organization != "" {
+		rememberOrganization(organization, organizationID)
 		cfg, _ := identity.LoadConfig()
 		fmt.Printf("\n✓ %s was authorized and is now ACTIVE in %s.\n", name, cfg.Organization())
 	} else {
@@ -258,14 +258,14 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 // rememberOrganization records a name learned after the config was written:
 // registration answers before the Agent is authorized, and an older Server
 // sends nothing at all. Best effort, since the name is only ever a message.
-func rememberOrganization(org, orgID string) {
+func rememberOrganization(organization, organizationID string) {
 	cfg, err := identity.LoadConfig()
-	if err != nil || (cfg.OrganizationName == org && cfg.OrganizationID == orgID) {
+	if err != nil || (cfg.OrganizationName == organization && cfg.OrganizationID == organizationID) {
 		return
 	}
-	cfg.OrganizationName = org
-	if orgID != "" {
-		cfg.OrganizationID = orgID
+	cfg.OrganizationName = organization
+	if organizationID != "" {
+		cfg.OrganizationID = organizationID
 	}
 	_ = identity.SaveConfig(cfg)
 }
@@ -278,7 +278,7 @@ func marketplaceURL(serverURL, fromServer string) string {
 }
 
 func authorizationInstructions(marketplaceURL string) string {
-	return fmt.Sprintf("Visit the Plugin marketplace: %s\n\nWaiting for authorization from the web console (approve it at your console › Agents)...", marketplaceURL)
+	return fmt.Sprintf("Visit the Plugin marketplace: %s\n\nWaiting for authorization from the web console (approve it at your web console › Agents)...", marketplaceURL)
 }
 
 // Uninstall removes the Agent from this host: it unregisters from the Server
@@ -307,16 +307,16 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 
 	// Unregister first, while the token still exists on disk. Best-effort: an
 	// unreachable Server must not block an operator from cleaning up a host,
-	// so failure only leaves a row to remove from the console.
+	// so failure only leaves a row to remove from the web console.
 	if installed {
 		switch token, err := identity.LoadToken(); {
 		case err != nil:
-			fmt.Println("! no local token, so this host may still appear in the console; remove it there")
+			fmt.Println("! no local token, so this host may still appear in the web console; remove it there")
 		default:
 			if err := serverapi.New(cfg.ServerURL).Unregister(ctx, token); err == nil || isUnknownToken(err) {
 				fmt.Printf("✓ unregistered from %s\n", cfg.Organization())
 			} else {
-				fmt.Printf("! could not reach the Server (%v); remove this Agent from the console\n", err)
+				fmt.Printf("! could not reach the Server (%v); remove this Agent from the web console\n", err)
 			}
 		}
 	}
@@ -367,12 +367,12 @@ func reportPluginsLeftBehind() {
 	installed, err := pluginmgr.New(nil, nil).List()
 	switch {
 	case err != nil:
-		fmt.Printf("\n! plugins may remain in %s and were NOT deleted (listing them failed: %v).\n",
+		fmt.Printf("\n! Plugins may remain in %s and were NOT deleted (listing them failed: %v).\n",
 			pluginmgr.InstallDir, err)
 	case len(installed) == 0:
 		return
 	default:
-		fmt.Printf("\n! %d plugin executable(s) remain in %s and were NOT deleted:\n",
+		fmt.Printf("\n! %d Plugin executable(s) remain in %s and were NOT deleted:\n",
 			len(installed), pluginmgr.InstallDir)
 		for _, p := range installed {
 			fmt.Printf("    %s v%s\n", p.ID, p.Version)
@@ -406,7 +406,7 @@ func reportKeysLeftBehind() {
 		fmt.Printf("\n! %d private keys remain in %s and were NOT deleted.\n", n, keystore.Dir())
 	}
 	fmt.Println("  They are the only copy on this host. Delete that directory by hand if this")
-	fmt.Println("  machine is being decommissioned, and keep a copy first if the certificates")
+	fmt.Println("  machine is being decommissioned, and keep a copy first if the Certificates")
 	fmt.Println("  using them are still in service.")
 }
 
@@ -427,8 +427,8 @@ func confirmUninstall(registered bool, organization string) bool {
 	defer t.close()
 	what := "the Agent and its files"
 	if registered {
-		// Named, because an operator who administers several organizations
-		// cannot tell from "the organization" which one they are removing this
+		// Named, because an operator who administers several Organizations
+		// cannot tell from "the Organization" which one they are removing this
 		// host from.
 		what = "this Agent from " + organization + ", and its files"
 	}
@@ -453,11 +453,11 @@ func resolveKey(t *terminal, fromFlag string) (string, error) {
 // wins, otherwise the operator edits the hostname-derived default at the
 // prompt, and a non-interactive install keeps the default.
 // proposedName trims a hostname to its first label, which is what the installer
-// offers as the Agent name (FR-001c): `web-01` from `web-01.nw.internal`. A name
+// offers as the Agent name: `web-01` from `web-01.nw.internal`. A name
 // shaped like a domain invites being read as an address, which an Agent name is
 // not — it identifies nothing, the Server's own identifier does that, and it is
 // edited freely. Nothing is lost by trimming: the whole hostname goes to the
-// Server as a host diagnostic (FR-004) and is printed beside the name.
+// Server as a host diagnostic and is printed beside the name.
 //
 // Empty when the host reports no name, which is the caller's signal to ask.
 func proposedName(hostname string) string {
@@ -470,9 +470,9 @@ func proposedName(hostname string) string {
 // one, shown beside the proposal when it differs so the reader can see what was
 // trimmed.
 //
-// With no proposal and no terminal there is nothing to offer and nobody to ask.
-// FR-001c makes that an error rather than a silent empty name, which the Server
-// would refuse anyway and later than it needs to.
+// With no proposal and no terminal there is nothing to offer and nobody to ask,
+// so this returns an error rather than a silent empty name that the Server would
+// refuse later.
 func confirmName(t *terminal, fromFlag, proposed, hostname string) (string, error) {
 	if fromFlag != "" {
 		return fromFlag, nil
@@ -533,7 +533,7 @@ func register(ctx context.Context, api *serverapi.Client, key, name, serverURL s
 
 // waitForAuthorization polls until the Agent is active, the token is rejected,
 // or the context is canceled. Transient network errors are retried.
-// Returns the organization's name, which the check-in carries and which is
+// Returns the Organization's name, which the check-in carries and which is
 // therefore known only once the Server answers.
 func waitForAuthorization(ctx context.Context, api *serverapi.Client, token string, pollSeconds int) (name, id string, err error) {
 	if pollSeconds <= 0 {

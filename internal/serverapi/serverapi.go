@@ -1,8 +1,17 @@
-// Package serverapi is the Agent's single HTTP wrapper for every Server call.
-// Routing all Server interactions through one place is what will let a future
-// audit mode record every request with no unaudited paths, so new Server calls
-// belong here rather than in ad-hoc HTTP code. Standard library only, so the
-// Agent stays small and auditable.
+// Package serverapi is the Agent's HTTP wrapper, and where a Server call
+// belongs. Routing Server interactions through one place is what will let a
+// future audit mode record every request with no unaudited paths, so new Server
+// calls go here rather than into ad-hoc HTTP code.
+//
+// It is not yet every call. pluginmgr.HTTPCatalog makes two kinds of request
+// without coming through here, fetching the Marketplace catalog and downloading
+// a Plugin artifact, issued from three call sites. Both of its construction
+// sites in cmd/easyssl-agent leave the HTTP field unset, so those requests run
+// on the process-wide http.DefaultClient and carry no timeout, and they would
+// go unrecorded. The rest of pluginmgr does come through here; it reports an
+// installed Plugin with ReportPlugin. The wrapper cannot be described as
+// complete until those three call sites move here. Standard library only, so
+// the Agent stays small and auditable.
 package serverapi
 
 import (
@@ -74,7 +83,7 @@ func (c *Client) RegistrationStatus(ctx context.Context, token string) (wire.Reg
 	return out, err
 }
 
-// Unregister removes this Agent from its organization, so an uninstalled host
+// Unregister removes this Agent from its Organization, so an uninstalled host
 // disappears from the Server without the operator also removing it there.
 func (c *Client) Unregister(ctx context.Context, token string) error {
 	return c.do(ctx, http.MethodDelete, wire.RouteRegistration, token, nil, nil)
@@ -240,9 +249,9 @@ func (c *Client) SubmitCSR(ctx context.Context, token, certificateID, csrPEM str
 }
 
 // ReportPlugin tells the Server what this Agent installed: the version, the
-// artifact digest, and the settings the Plugin declares for itself (S4
-// FR-008a). The Server answers every later question from this record, so
-// nothing ever queries the host.
+// artifact digest, and the settings the Plugin declares for itself. The Server
+// answers every later question from this record, so nothing ever queries the
+// host.
 func (c *Client) ReportPlugin(ctx context.Context, token, pluginID string, rep wire.PluginReport) error {
 	return c.do(ctx, http.MethodPut, "/api/v1/agent/plugins/"+pluginID, token, rep, nil)
 }

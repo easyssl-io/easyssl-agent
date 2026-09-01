@@ -8,7 +8,7 @@ import (
 // A Plugin is arbitrary code and is handed the private key on its stdin, so one
 // that echoes its request, prints the file it was given, or dumps its
 // environment on failure puts the key in its output. Reporting that verbatim
-// would store a usable key in the Server's database and show it in the console.
+// would store a usable key in the Server's database and show it in the web console.
 // These cover the shapes that output actually arrives in.
 
 const secretBody = "MIIBSECRETKEYBYTESmustNeverBeReported"

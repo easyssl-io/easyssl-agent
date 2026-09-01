@@ -34,9 +34,20 @@ verify what it does. Flag any of the following.
 - **The Agent only ever dials out.** No listening socket, no inbound callback,
   no Server-triggered action. The Server can never make an Agent uninstall
   itself; that is a host-side decision.
-- **All Server traffic goes through `internal/serverapi`.** It is a single funnel
-  so an audit mode can later record every interaction with no unaudited paths. A
-  direct `http.Get` or a second `http.Client` is a finding even when it works.
+- **Server traffic goes through `internal/serverapi`, with one exception that is
+  a known gap.** It is meant to be a single funnel so an audit mode can later
+  record every interaction with no unaudited paths. `pluginmgr.HTTPCatalog` is
+  not in it: its two requests, fetching the Marketplace catalog and downloading
+  a Plugin artifact, reach the Server without going through `serverapi`. Both
+  construction sites in `cmd/easyssl-agent` leave its `HTTP` field unset, so the
+  requests run on the process-wide `http.DefaultClient`, which carries no
+  timeout. Three call sites issue them, and the funnel is not complete until all
+  three move behind the wrapper. The rest of `pluginmgr` is in it: it reports an
+  installed Plugin through `serverapi` like everything else.
+  Anywhere else, a direct `http.Get` or a new `http.Client` is a finding even
+  when it works. Inside `serverapi`, `SubscribeCommands` builds its own
+  client deliberately, the shared 30-second timeout being one that would sever a
+  stream meant to stay open.
 - **No private key material reaches the Server**, sent or logged. P0.
 - **Secrets stay root-only**, `0600` under `/etc/easyssl/`, never printed.
 - **Local state is not proof.** A stored token means one was issued once, not
@@ -53,9 +64,9 @@ verify what it does. Flag any of the following.
 
 ## Conventions
 
-American English. "Agent" and "Server" are capitalized when they mean the
-easySSL components, so that a reader can tell them from an ordinary agent or an
-ordinary server. A third-party ACME client stays lowercase, being somebody
-else's software. This repository is public and self-contained: never cite a
-document, identifier, or issue that lives in a private repository. State the
-property directly instead.
+American English. Capitalize Organization, Agent, Server, Plugin, Certificate,
+Target and Deployment whenever they name easySSL's own records or components;
+write "web console" in full for easySSL's browser UI. Keep a genuinely generic
+technical role lowercase, such as an ACME client or a CNAME target. This
+repository is public and self-contained: never cite a document, identifier, or
+issue that lives in a private repository. State the property directly instead.
