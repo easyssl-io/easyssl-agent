@@ -44,6 +44,13 @@ NotifyAccess=main
 ExecStart=` + binaryPath + ` run
 Restart=on-failure
 RestartSec=10
+# A private /tmp, so the directory a Deployment writes the private key into is
+# not shared with anything else on the host. The key is already 0700 root-owned
+# under a random name and is removed on every path, so this closes the class
+# rather than a known hole. Deliberately alone: NoNewPrivileges and
+# ProtectSystem would also reach a Plugin's reload command, which may call sudo
+# or systemctl, so they need their own decision.
+PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target
