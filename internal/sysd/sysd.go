@@ -60,11 +60,10 @@ WantedBy=multi-user.target
 // ErrNotRoot is returned when systemd operations are attempted without root.
 var ErrNotRoot = fmt.Errorf("must run as root to manage systemd units (this slice is root-only)")
 
-// Install (re)writes the unit (idempotent), enables it at boot, and restarts it
-// so the service runs the currently installed binary. Restart starts the service
-// when it is stopped and bounces it onto a new binary when it is already running,
-// which makes both first install and reinstall converge on the same state. It
-// requires root.
+// Install (re)writes the unit (idempotent) and enables it at boot. It does not
+// start it: Start does that, and the two are separate because the installer
+// waits for the operator to authorize this host before it wants a second
+// process polling the Server. It requires root.
 func Install() error {
 	if os.Geteuid() != 0 {
 		return ErrNotRoot
@@ -75,8 +74,17 @@ func Install() error {
 	if err := run("systemctl", "daemon-reload"); err != nil {
 		return err
 	}
-	if err := run("systemctl", "enable", unitName); err != nil {
-		return err
+	return run("systemctl", "enable", unitName)
+}
+
+// Start runs the service on the currently installed binary. It is `systemctl
+// restart` rather than `start` because that is the one verb whose result does
+// not depend on what was running: it starts a stopped service and bounces a
+// running one onto the new binary, so a first install and a reinstall converge
+// on the same state. It requires root.
+func Start() error {
+	if os.Geteuid() != 0 {
+		return ErrNotRoot
 	}
 	return run("systemctl", "restart", unitName)
 }

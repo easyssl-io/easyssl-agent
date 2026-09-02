@@ -109,6 +109,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 		return fmt.Errorf("installing systemd unit: %w", err)
 	}
 	fmt.Printf("✓ systemd service installed: %s\n", identity.ServiceName())
+	defer startServiceOnExit()
 
 	return awaitAuthorization(ctx, api, name, resp.AgentToken, resp.NextPollSeconds,
 		marketplaceURL(opts.ServerURL, resp.MarketplaceURL))
@@ -145,13 +146,15 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 		return err
 	}
 
-	// (Re)start the service now that a valid token is on disk, so it runs the
-	// freshly installed binary and keeps polling regardless of whether the
-	// operator waits below.
+	// Refresh the unit now that a valid token is on disk. Starting it is
+	// deferred to the end of this function, so it runs the freshly installed
+	// binary whichever branch below returns, and without polling alongside the
+	// wait in the pending one.
 	if err := sysd.Install(); err != nil {
 		return fmt.Errorf("updating systemd unit: %w", err)
 	}
-	fmt.Printf("✓ %s updated and restarted\n", identity.ServiceName())
+	fmt.Printf("✓ %s updated\n", identity.ServiceName())
+	defer startServiceOnExit()
 
 	switch status {
 	case wire.StatusActive:
@@ -226,6 +229,26 @@ func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Op
 	}
 	fmt.Printf("✓ re-registered, new Agent token stored in %s\n", identity.TokenPath())
 	return resp.AgentToken, wire.StatusPending, resp.NextPollSeconds, nil
+}
+
+// startServiceOnExit hands the polling over to the systemd service once this
+// installer is finished with it, however that happens: authorized, failed, or
+// interrupted with Ctrl-C. It is deferred rather than run at install time
+// because the installer watches the Server itself while it waits, and a service
+// started before that wait polls the same Server with the same token at the
+// same cadence, which is the Server being asked twice as often as it said.
+//
+// A failure here is reported rather than returned: the registration itself
+// succeeded, the unit is written and enabled, and the operator needs to know
+// the one thing that did not happen rather than to see the whole install
+// reported as failed.
+func startServiceOnExit() {
+	if err := sysd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr,
+			"! could not start %s: %v\n"+
+				"  The unit is installed and enabled, so `systemctl start %s`, or a reboot, starts it.\n",
+			identity.ServiceName(), err, identity.ServiceName())
+	}
 }
 
 // awaitAuthorization waits for the operator to authorize, printing the outcome.
