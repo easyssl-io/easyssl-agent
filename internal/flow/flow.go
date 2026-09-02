@@ -556,25 +556,31 @@ func register(ctx context.Context, api *serverapi.Client, key, name, serverURL s
 
 // waitForAuthorization polls until the Agent is active, the token is rejected,
 // or the context is canceled. Transient network errors are retried.
-// Returns the Organization's name, which the check-in carries and which is
-// therefore known only once the Server answers.
+// Returns the Organization's name, which the Server's answer carries and which
+// is therefore known only once it replies.
+//
+// It reads the registration rather than checking in. Both answer the question,
+// but a check-in also refreshes the Agent's last-seen, and this installer is
+// not the process whose liveness that records: the service is. The read is
+// documented as free of side effects for exactly this reason, so whoever else
+// is watching, one process decides whether the host looks Online.
+//
+// The cadence therefore stays as registration set it. The read carries no
+// NextPollSeconds of its own, and it does not need one: this wait lasts as long
+// as an operator takes to click Authorize.
 func waitForAuthorization(ctx context.Context, api *serverapi.Client, token string, pollSeconds int) (name, id string, err error) {
 	if pollSeconds <= 0 {
 		pollSeconds = 3
 	}
 	for {
-		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: Version})
-		switch {
-		case err == nil && resp.Status == wire.StatusActive:
+		resp, err := api.RegistrationStatus(ctx, token)
+		if err == nil && resp.Status == wire.StatusActive {
 			return resp.OrganizationName, resp.OrganizationID, nil
-		case err == nil:
-			pollSeconds = resp.NextPollSeconds
-		default:
-			if isUnknownToken(err) {
-				return "", "", errors.New("registration was rejected (or the token was revoked)")
-			}
-			// transient error: keep the current cadence and retry
 		}
+		if err != nil && isUnknownToken(err) {
+			return "", "", errors.New("registration was rejected (or the token was revoked)")
+		}
+		// Still pending, or a transient error: wait and ask again.
 		select {
 		case <-ctx.Done():
 			return "", "", ctx.Err()
