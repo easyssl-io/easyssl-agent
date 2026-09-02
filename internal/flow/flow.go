@@ -29,6 +29,18 @@ import (
 // Version is the Agent version reported to the Server.
 const Version = "0.0.1"
 
+// CheckinBody is what this host says about itself on every poll.
+//
+// It is a function rather than a struct literal at each caller because there
+// are two callers, the installer and the long-running service, and they must
+// report the same thing. A field added to the wire struct and filled in only
+// one of them would leave the Server's record correct or stale depending on
+// which process happened to check in last, which is not a difference anything
+// would report.
+func CheckinBody() wire.CheckinRequest {
+	return wire.CheckinRequest{AgentVersion: Version, ProtocolVersion: wire.ProtocolVersion}
+}
+
 // Options configures a registration session.
 type Options struct {
 	ServerURL       string // required
@@ -177,7 +189,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 // Agent ID. status is "" (poll unused) when the Server could not be reached.
 func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (token, status string, poll int, err error) {
 	if token, err = identity.LoadToken(); err == nil {
-		resp, cerr := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: Version})
+		resp, cerr := api.Checkin(ctx, token, CheckinBody())
 		switch {
 		case cerr == nil:
 			return token, resp.Status, resp.NextPollSeconds, nil

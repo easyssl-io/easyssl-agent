@@ -190,7 +190,7 @@ func cmdRun(ctx context.Context, args []string) error {
 
 	poll := 60
 	for {
-		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: flow.Version})
+		resp, err := api.Checkin(ctx, token, flow.CheckinBody())
 		if err == nil {
 			if !removedSince.IsZero() {
 				// Nothing recovers a revoked token by itself, so this only
