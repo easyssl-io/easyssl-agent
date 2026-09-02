@@ -221,7 +221,9 @@ func cmdRun(ctx context.Context, args []string) error {
 				// still awaiting authorization, exactly as the check-in does,
 				// so subscribing earlier would just loop on 401s.
 				streaming.Do(func() { go streamCommands(ctx, api, token, runner, logger) })
-				runner.Reconcile(ctx)
+				if shouldReconcile(resp) {
+					runner.Reconcile(ctx)
+				}
 			}
 		} else if isUnknownToken(err) {
 			// Removed from the web console, or the token revoked. The service keeps
@@ -265,6 +267,29 @@ func cmdRun(ctx context.Context, args []string) error {
 // connections, and the check-in loop keeps delivering commands the whole time.
 // So this reconnects quietly and never ends the service. The one thing it will
 // not retry is a rejected credential, which no amount of waiting repairs.
+// shouldReconcile decides whether a check-in has to be followed by the
+// reconcile fetch.
+//
+// A reported zero is the Server saying it has nothing outstanding for this
+// host, and is the only case worth skipping. On a fleet that is mostly idle
+// that removes one request per Agent per cadence whose answer was an empty
+// list.
+//
+// nil is not zero. It is a Server that does not report the count, which is
+// every Server older than the field, and it means fetch exactly as before.
+// Reading a missing field as zero would make this Agent stop fetching commands
+// from an older Server and never notice, which is the one outcome this cannot
+// have.
+//
+// The count may be stale by the time it is read, because a command can be
+// created immediately after it was taken. That costs at most one cadence: the
+// event stream nudges, and the next check-in counts again. Nothing here
+// concludes that a command exists, only that none did, so a stale count delays
+// work rather than inventing or losing it.
+func shouldReconcile(resp wire.CheckinResponse) bool {
+	return resp.PendingCommands == nil || *resp.PendingCommands > 0
+}
+
 func streamCommands(ctx context.Context, api *serverapi.Client, token string, runner *commands.Runner, logger *slog.Logger) {
 	const (
 		minBackoff = 2 * time.Second
