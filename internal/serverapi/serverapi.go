@@ -162,9 +162,11 @@ func (c *Client) AckCommand(ctx context.Context, token, commandID, status string
 	return c.do(ctx, http.MethodPost, path, token, wire.AckRequest{Status: status}, nil)
 }
 
-// SubscribeCommands opens the long-lived event stream and calls onCommand for
-// every command id the Server pushes, until the context is canceled or the
-// stream drops. It returns nil when the stream simply ended, which is ordinary
+// SubscribeCommands opens the long-lived event stream and calls onCommand every
+// time the Server says something is waiting, until the context is canceled or
+// the stream drops. The event carries nothing, and could not usefully: what is
+// waiting is read over REST, which is also what delivers whatever arrived while
+// this Agent was disconnected. It returns nil when the stream simply ended, which is ordinary
 // rather than an error: the caller reconnects and keeps polling meanwhile.
 //
 // onConnect fires once the Server has accepted the stream. The caller cannot
@@ -175,7 +177,7 @@ func (c *Client) AckCommand(ctx context.Context, token, commandID, status string
 // Deliberately built on net/http and bufio rather than an SSE library. The
 // grammar this needs is two field names, and everything shipped to a host that
 // handles someone's private keys has to earn its place.
-func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect func(), onCommand func(commandID string)) error {
+func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect func(), onCommand func()) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+wire.RouteEvents, nil)
 	if err != nil {
 		return err
@@ -210,17 +212,13 @@ func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect 
 		case strings.HasPrefix(line, "event:"):
 			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			// The line's content is not read. The event carries no body, and
+			// this arm exists because SSE dispatches an event only when a data
+			// field arrives, so this is where a complete event lands.
 			if event != wire.EventCommand {
 				continue // unknown event name: ignore, same as an unknown command type
 			}
-			var ev wire.CommandEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
-				continue // malformed: the poll will find the work anyway
-			}
-			if ev.CommandID != "" {
-				onCommand(ev.CommandID)
-			}
+			onCommand()
 		}
 	}
 	return scanner.Err()

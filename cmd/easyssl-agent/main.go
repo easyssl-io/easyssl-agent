@@ -310,9 +310,10 @@ func streamCommands(ctx context.Context, api *serverapi.Client, token string, ru
 		err := api.SubscribeCommands(ctx, token, func() {
 			connectedAt = time.Now()
 			logger.Info("command stream connected")
-		}, func(commandID string) {
-			// The id is a nudge, not the work. Reconcile reads authoritative
-			// state, which also picks up anything this Agent missed.
+		}, func() {
+			// The event is a nudge and carries nothing. Reconcile reads
+			// authoritative state, which also picks up anything this Agent
+			// missed while the stream was down.
 			runner.Reconcile(ctx)
 		})
 		if ctx.Err() != nil {
