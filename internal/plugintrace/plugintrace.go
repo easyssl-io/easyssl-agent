@@ -281,6 +281,11 @@ func (b *LimitedBuffer) Write(p []byte) (int, error) {
 
 func (b *LimitedBuffer) Bytes() []byte { return b.buf }
 
+// Produced is how much the Plugin wrote, which is not always how much was
+// kept. Reported alongside the text so a clipped stream is visible as a string
+// shorter than its count, rather than through a flag that can disagree with it.
+func (b *LimitedBuffer) Produced() int { return len(b.buf) + b.dropped }
+
 func (b *LimitedBuffer) String() string {
 	if b.dropped == 0 {
 		return string(b.buf)

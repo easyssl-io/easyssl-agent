@@ -186,16 +186,23 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	hostLock.Lock()
 	defer hostLock.Unlock()
 
-	out, err := runPlugin(ctx, installed.Path, req, logger,
+	out, run, err := runPlugin(ctx, installed.Path, req, logger,
 		"deployment", work.ID, "certificate", work.CertificateID,
 		"plugin", installed.ID, "plugin_version", installed.Version)
 	if err != nil {
-		return failed(installed.Version, err.Error())
+		// The Agent's sentence and the process's facts, side by side and never
+		// merged: what the Plugin printed is on `run`, so this says only what
+		// the Agent concluded.
+		return wire.DeploymentResult{
+			PluginVersion: installed.Version,
+			AgentMessage:  err.Error(),
+			PluginRun:     run,
+		}
 	}
 	return wire.DeploymentResult{
 		OK:            out.OK,
 		PluginVersion: installed.Version,
-		Output:        report(out.Output),
+		PluginRun:     run,
 	}
 }
 
@@ -207,11 +214,11 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 // what comes back to the Server is the Plugin's own account of itself, so an
 // argument the Agent got wrong, or a Plugin failing before it printed anything,
 // leaves no evidence anywhere else.
-func runPlugin(ctx context.Context, path string, req plugincontract.InstallRequest, logger *slog.Logger, attrs ...any) (plugincontract.InstallResponse, error) {
+func runPlugin(ctx context.Context, path string, req plugincontract.InstallRequest, logger *slog.Logger, attrs ...any) (plugincontract.InstallResponse, *wire.PluginRun, error) {
 	var out plugincontract.InstallResponse
 	body, err := json.Marshal(req)
 	if err != nil {
-		return out, fmt.Errorf("encoding the install request: %w", err)
+		return out, nil, fmt.Errorf("encoding the install request: %w", err)
 	}
 
 	rctx, cancel := context.WithTimeout(ctx, runTimeout)
@@ -228,20 +235,29 @@ func runPlugin(ctx context.Context, path string, req plugincontract.InstallReque
 
 	started := time.Now()
 	stdout, stderr, code, runErr := runBounded(rctx, cmd)
+	elapsed := time.Since(started)
 	plugintrace.Record(logger, plugintrace.Exchange{
 		Op: plugincontract.OpInstall, Path: path, Args: []string{plugincontract.OpInstall},
-		Stdin: body, Stdout: stdout, Stderr: stderr,
-		ExitCode: code, Duration: time.Since(started), Err: runErr, Attrs: attrs,
+		Stdin: body, Stdout: stdout.Bytes(), Stderr: stderr.Bytes(),
+		ExitCode: code, Duration: elapsed, Err: runErr, Attrs: attrs,
 	})
+	// Reported whatever happened, including a run that was killed: the facts
+	// of the process are what explain a failure, and formatting them into a
+	// sentence is what used to make them unreadable.
+	run := &wire.PluginRun{
+		ExitStatus: code, DurationMs: elapsed.Milliseconds(),
+		Stdout: report(stdout.String()), Stderr: report(stderr.String()),
+		StdoutBytes: stdout.Produced(), StderrBytes: stderr.Produced(),
+	}
 	if runErr != nil {
-		return out, runErr
+		return out, run, runErr
 	}
-	if err := json.Unmarshal(stdout, &out); err != nil {
-		// A Plugin that answered with something unparseable failed, and what it
-		// did say is the only evidence of why.
-		return out, fmt.Errorf("the plugin's install output is not JSON: %w\noutput:\n%s", err, report(string(stdout)))
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		// A Plugin that answered with something unparseable failed. The bytes
+		// it did print are already on `run`, so this says only what went wrong.
+		return out, run, fmt.Errorf("the plugin's answer is not the JSON this contract expects: %w", err)
 	}
-	return out, nil
+	return out, run, nil
 }
 
 // runBounded runs cmd, killing its whole process group if the context expires.
@@ -249,14 +265,13 @@ func runPlugin(ctx context.Context, path string, req plugincontract.InstallReque
 // whether or not it succeeded, because the caller records the exchange either
 // way and a failed run is the one worth reading. Stderr is the Plugin's own
 // diagnostics and never goes to the Server; it explains a failure here.
-func runBounded(ctx context.Context, cmd *exec.Cmd) (outBytes, errBytes []byte, exitCode int, err error) {
-	var stdout, stderr plugintrace.LimitedBuffer
-	stdout.Max, stderr.Max = maxOutput, maxOutput
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+func runBounded(ctx context.Context, cmd *exec.Cmd) (stdout, stderr *plugintrace.LimitedBuffer, exitCode int, err error) {
+	stdout, stderr = &plugintrace.LimitedBuffer{Max: maxOutput}, &plugintrace.LimitedBuffer{Max: maxOutput}
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	if startErr := cmd.Start(); startErr != nil {
-		return nil, nil, -1, fmt.Errorf("could not start the plugin: %w", startErr)
+		return stdout, stderr, -1, fmt.Errorf("could not start the plugin: %w", startErr)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -269,16 +284,14 @@ func runBounded(ctx context.Context, cmd *exec.Cmd) (outBytes, errBytes []byte, 
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 		<-done
-		return stdout.Bytes(), stderr.Bytes(), -1,
-			fmt.Errorf("the plugin did not finish within %s and was killed.\noutput so far:\n%s",
-				runTimeout, report(stdout.String()+stderr.String()))
+		return stdout, stderr, -1,
+			fmt.Errorf("the plugin did not finish within %s and was killed", runTimeout)
 	case waitErr := <-done:
 		code := cmd.ProcessState.ExitCode()
 		if waitErr != nil {
-			return stdout.Bytes(), stderr.Bytes(), code,
-				fmt.Errorf("the plugin exited with an error: %w\n%s", waitErr, report(stderr.String()))
+			return stdout, stderr, code, fmt.Errorf("the plugin exited with an error: %w", waitErr)
 		}
-		return stdout.Bytes(), stderr.Bytes(), code, nil
+		return stdout, stderr, code, nil
 	}
 }
 
@@ -300,12 +313,14 @@ func runnable(path string) error {
 	return nil
 }
 
-// failed builds a result for an attempt whose explanation is the Agent's, not
-// a Plugin's: either no Plugin ran, or the one that did could not answer. The
-// text goes to Message, leaving Output for what a Plugin actually printed, and
-// still through the same funnel, because a killed run's error may quote it.
+// failed builds a result for an attempt no Plugin ran at all: it was not
+// installed, its artifact could not be executed, this host holds no key. There
+// is no PluginRun on these, and its absence is the fact that nothing ran.
+//
+// Still through the same funnel, because one of these messages quotes a path
+// and a redaction that only applies to some of them is one somebody forgets.
 func failed(pluginVersion, message string) wire.DeploymentResult {
-	return wire.DeploymentResult{OK: false, PluginVersion: pluginVersion, Message: report(message)}
+	return wire.DeploymentResult{OK: false, PluginVersion: pluginVersion, AgentMessage: report(message)}
 }
 
 // report prepares any text for the Server: the key is removed first and the
