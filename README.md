@@ -26,6 +26,29 @@ specific file or contacting the Server when run as another user, and names the
 corresponding `sudo easyssl-agent …` command. Top-level help and usage errors do
 not need root.
 
+## The connection to the Server
+
+`--server` must be an `https://` URL, and the Agent refuses to start with
+anything else. Everything it sends is either a credential or a secret: the
+Organization registration key, the bearer token that stands for this host
+afterwards, and the private key material of every certificate it installs.
+
+Certificate verification is never relaxed. There is no flag, environment
+variable or configuration file entry that turns it off, and no code path that
+sets one: the Agent uses Go's defaults, which verify the chain against the
+host's trust store and the hostname against the URL. Add your CA to the host's
+trust store if the Server presents a private certificate.
+
+A redirect that changes the scheme is refused rather than followed. Go drops
+the `Authorization` header when a redirect crosses to an unrelated host, but it
+compares hostnames only, so a redirect from `https://server` to `http://server`
+would otherwise send the bearer token in the clear.
+
+`http://` is accepted for `localhost`, `127.0.0.0/8` and `::1`, so a Server
+running on the same machine during development needs no certificate. It is
+restricted to loopback deliberately: no real host can be reached that way, so
+there is nothing to get wrong by copying a working command off a laptop.
+
 ## How registration works
 
 A host runs a single Agent. `register` runs an interactive line-based session:

@@ -68,7 +68,14 @@ func start(t *testing.T, states ...string) (*serverapi.Client, *registrationFake
 	fake := &registrationFake{states: states}
 	srv := httptest.NewServer(fake.handler())
 	t.Cleanup(srv.Close)
-	return serverapi.New(srv.URL), fake
+	// httptest serves plain http on 127.0.0.1, which is exactly the loopback
+	// case serverapi.CheckBaseURL allows; a client built here failing would
+	// mean that exception had been narrowed to nothing.
+	api, err := serverapi.New(srv.URL)
+	if err != nil {
+		t.Fatalf("serverapi.New(%q): %v", srv.URL, err)
+	}
+	return api, fake
 }
 
 func TestWaitForAuthorizationReadsTheRegistrationAndNeverChecksIn(t *testing.T) {

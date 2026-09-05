@@ -61,6 +61,14 @@ func Register(ctx context.Context, opts Options) error {
 		return errors.New("register must run as root: use sudo, or run it from a root shell")
 	}
 
+	// Before the first prompt, so a --server this Agent will not talk to fails
+	// while there is still nothing to lose: no key typed in, no token issued,
+	// nothing written to disk. Options.ServerURL is required, and the register
+	// command refuses an empty one, so this always has something to check.
+	if err := serverapi.CheckBaseURL(opts.ServerURL); err != nil {
+		return err
+	}
+
 	fmt.Printf("easySSL Agent installer · v%s\n", Version)
 	fmt.Println("Registering this host to an easySSL Organization...")
 	fmt.Println()
@@ -96,7 +104,10 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 		fmt.Printf("✓ Agent name  %s\n", name)
 	}
 
-	api := serverapi.New(opts.ServerURL)
+	api, err := serverapi.New(opts.ServerURL)
+	if err != nil {
+		return err
+	}
 	resp, agentID, err := register(ctx, api, key, name, opts.ServerURL)
 	if err != nil {
 		return err
@@ -152,7 +163,10 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	fmt.Printf("This host is already registered as %q (instance %s) on %s.\n",
 		cfg.DisplayName, cfg.AgentID, cfg.ServerURL)
 
-	api := serverapi.New(cfg.ServerURL)
+	api, err := serverapi.New(cfg.ServerURL)
+	if err != nil {
+		return err
+	}
 	token, status, poll, err := reconcileToken(ctx, t, api, opts, cfg)
 	if err != nil {
 		return err
@@ -348,10 +362,19 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 		case err != nil:
 			fmt.Println("! no local token, so this host may still appear in the web console; remove it there")
 		default:
-			if err := serverapi.New(cfg.ServerURL).Unregister(ctx, token); err == nil || isUnknownToken(err) {
-				fmt.Printf("✓ unregistered from %s\n", cfg.Organization())
-			} else {
-				fmt.Printf("! could not reach the Server (%v); remove this Agent from the web console\n", err)
+			api, aerr := serverapi.New(cfg.ServerURL)
+			switch {
+			case aerr != nil:
+				// Uninstalling is never blocked by this: the point of the run
+				// is to remove the Agent from this host, and it does that
+				// whether or not the Server can be told.
+				fmt.Printf("! %v; remove this Agent from the web console\n", aerr)
+			default:
+				if err := api.Unregister(ctx, token); err == nil || isUnknownToken(err) {
+					fmt.Printf("✓ unregistered from %s\n", cfg.Organization())
+				} else {
+					fmt.Printf("! could not reach the Server (%v); remove this Agent from the web console\n", err)
+				}
 			}
 		}
 	}

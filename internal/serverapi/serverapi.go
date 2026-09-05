@@ -12,6 +12,12 @@
 // installed Plugin with ReportPlugin. The wrapper cannot be described as
 // complete until those three call sites move here. Standard library only, so
 // the Agent stays small and auditable.
+//
+// Those three call sites now miss something else as well: the transport policy
+// in transport.go, which is what requires TLS and refuses a redirect that drops
+// it. They carry no bearer token, so the downgrade matters less there than it
+// does here, and a Plugin artifact is checked against the catalog's digest
+// afterwards. It is still one more reason for them to move.
 package serverapi
 
 import (
@@ -35,12 +41,21 @@ type Client struct {
 	http    *http.Client
 }
 
-// New builds a Client for the given Server base URL (e.g. https://server:8080).
-func New(baseURL string) *Client {
+// New builds a Client for the given Server base URL (e.g. https://server:8080),
+// or fails if that URL is one this Agent must not talk to. CheckBaseURL in
+// transport.go says which those are and why; the check lives here, on the only
+// constructor, so no caller can hold a Client that skipped it.
+func New(baseURL string) (*Client, error) {
+	if err := CheckBaseURL(baseURL); err != nil {
+		return nil, err
+	}
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Timeout: 30 * time.Second},
-	}
+		http: &http.Client{
+			Timeout:       30 * time.Second,
+			CheckRedirect: noSchemeChange,
+		},
+	}, nil
 }
 
 // APIError is a non-2xx Server response. Code is the wire error code (e.g.
@@ -186,8 +201,11 @@ func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect 
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	// No timeout on this one: the stream is meant to stay open, so the shared
-	// 30s client would sever it on schedule.
-	res, err := (&http.Client{}).Do(req)
+	// 30s client would sever it on schedule. Everything else about it matches,
+	// the redirect policy above all: this request carries the bearer token like
+	// any other, and a client built bare here would be the one path that
+	// followed a downgrade with it.
+	res, err := (&http.Client{CheckRedirect: noSchemeChange}).Do(req)
 	if err != nil {
 		return err
 	}

@@ -162,7 +162,10 @@ func cmdRun(ctx context.Context, args []string) error {
 		return stateError("run", err)
 	}
 
-	api := serverapi.New(cfg.ServerURL)
+	api, err := serverapi.New(cfg.ServerURL)
+	if err != nil {
+		return stateError("run", err)
+	}
 	logger := agentLogger()
 	// So key generation is reported in the same format as everything else the
 	// service writes, rather than through the default handler.
@@ -446,7 +449,17 @@ func serverState(cfg identity.Config, token string, tokenErr error) (code, detai
 	// Short: status must stay snappy on a host that cannot reach the Server.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, err := serverapi.New(cfg.ServerURL).RegistrationStatus(ctx, token)
+	api, err := serverapi.New(cfg.ServerURL)
+	if err != nil {
+		// The URL on disk is not one this Agent will talk to, so nothing was
+		// asked and the answer is genuinely unknown rather than "no": this host
+		// may well be registered and authorized. Saying so here is what keeps
+		// it from reading as an unreachable Server, which is what it would look
+		// like otherwise on a host that is perfectly well connected, and which
+		// resolves on its own where this never will.
+		return "unknown", fmt.Sprintf("unknown (%v)", err)
+	}
+	resp, err := api.RegistrationStatus(ctx, token)
 	switch {
 	case err == nil && resp.Status == wire.StatusActive:
 		return "authorized", "authorized"
@@ -535,9 +548,13 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 		}
 	}
 
+	api, err := serverapi.New(cfg.ServerURL)
+	if err != nil {
+		return err
+	}
 	mgr := pluginmgr.New(
 		pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL},
-		serverapi.New(cfg.ServerURL),
+		api,
 		agentLogger(),
 	)
 	// The host's own platform: an Agent installs for the machine it runs on,
