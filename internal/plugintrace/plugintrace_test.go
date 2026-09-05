@@ -227,3 +227,41 @@ func TestHandlerDefaultsToText(t *testing.T) {
 		}
 	}
 }
+
+// All three streams are bounded, so the count beside each is the only sign the
+// Agent clipped one: a body ending abruptly next to a number that did not stop
+// there is what tells a reader the Plugin said more than this.
+func TestRecordCountsAllThreeStreams(t *testing.T) {
+	logger, out := debugLogger()
+	plugintrace.Record(logger, plugintrace.Exchange{
+		Op: "install", Path: "/p",
+		Stdin: []byte("12345"), Stdout: []byte("123"), Stderr: []byte("1234567"),
+	})
+	for _, want := range []string{"stdin_bytes=5", "stdout_bytes=3", "stderr_bytes=7"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("the log is missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+// A Plugin is arbitrary code and can print without limit. Both operations run
+// one, so both have to hold it to the same bound; describe used to collect
+// stderr into a buffer with no bound at all.
+func TestLimitedBufferStopsAtItsBound(t *testing.T) {
+	b := plugintrace.LimitedBuffer{Max: 10}
+	if _, err := b.Write([]byte(strings.Repeat("a", 25))); err != nil {
+		t.Fatal(err)
+	}
+	// The writer is told everything was accepted: a Plugin must not fail
+	// because the Agent stopped keeping its output.
+	if _, err := b.Write([]byte("more")); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Bytes()) != 10 {
+		t.Fatalf("kept %d bytes, want 10", len(b.Bytes()))
+	}
+	// And it says so, rather than leaving a silently short transcript.
+	if !strings.Contains(b.String(), "19 further bytes discarded") {
+		t.Fatalf("the truncation is not reported: %q", b.String())
+	}
+}

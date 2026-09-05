@@ -10,7 +10,6 @@
 package pluginmgr
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -322,7 +321,10 @@ func describeByExec(ctx context.Context, path string, logger *slog.Logger) (plug
 	// #nosec G204 -- path is InstallDir joined with a name matched against
 	// validPluginID, so it names a file this Agent just wrote.
 	cmd := exec.CommandContext(ctx, path, plugincontract.OpDescribe)
-	var stderr bytes.Buffer
+	// Bounded like the install path's. A Plugin describing itself is the same
+	// arbitrary code, and an unbounded buffer here meant one that flooded
+	// stderr was limited by nothing but this Agent's memory.
+	stderr := plugintrace.LimitedBuffer{Max: plugintrace.MaxPluginOutput}
 	cmd.Stderr = &stderr
 	started := time.Now()
 	stdout, err := cmd.Output()
@@ -336,8 +338,8 @@ func describeByExec(ctx context.Context, path string, logger *slog.Logger) (plug
 		Duration: time.Since(started), Err: err,
 	})
 	if err != nil {
-		if stderr.Len() > 0 {
-			return out, fmt.Errorf("%w: %s", err, stderr.Bytes())
+		if len(stderr.Bytes()) > 0 {
+			return out, fmt.Errorf("%w: %s", err, stderr.String())
 		}
 		return out, err
 	}

@@ -104,6 +104,10 @@ func Record(logger *slog.Logger, ex Exchange) {
 		"duration", ex.Duration.Round(time.Millisecond).String(),
 		"stdin_bytes", len(ex.Stdin),
 		"stdout_bytes", len(ex.Stdout),
+		// Counted like the other two, and for the same reason: all three are
+		// bounded, so a body that ends abruptly next to a count that did not
+		// stop there is the only sign the Agent clipped it.
+		"stderr_bytes", len(ex.Stderr),
 	}
 	attrs = append(attrs, ex.Attrs...)
 	if len(ex.Stdin) > 0 {
@@ -235,4 +239,51 @@ func RedactPrivateKeys(s string) string {
 		return s // closed, and already redacted above
 	}
 	return s[:start[1]] + KeyPlaceholder
+}
+
+// MaxPluginOutput bounds how much of a Plugin's output the Agent will hold.
+// A Plugin is arbitrary code and can print without limit; nothing downstream
+// wants more than this either, since what reaches the Server is truncated to
+// the same bound.
+const MaxPluginOutput = 256 << 10
+
+// LimitedBuffer collects output up to Max, so a Plugin printing without limit
+// cannot exhaust this Agent's memory.
+//
+// Here rather than beside either caller because both plugin operations need
+// it, and only one of them used to have it: `install` bounded both streams
+// while `describe` collected stderr into an unbounded buffer, so a Plugin that
+// flooded stderr while describing itself was limited by nothing. The same type
+// in both is what makes "a Plugin cannot exhaust the Agent" a property of the
+// Agent rather than of one code path.
+type LimitedBuffer struct {
+	buf []byte
+	Max int
+	// dropped counts what was discarded, so the truncation is reported rather
+	// than silent.
+	dropped int
+}
+
+func (b *LimitedBuffer) Write(p []byte) (int, error) {
+	room := b.Max - len(b.buf)
+	if room <= 0 {
+		b.dropped += len(p)
+		return len(p), nil
+	}
+	if len(p) > room {
+		b.buf = append(b.buf, p[:room]...)
+		b.dropped += len(p) - room
+		return len(p), nil
+	}
+	b.buf = append(b.buf, p...)
+	return len(p), nil
+}
+
+func (b *LimitedBuffer) Bytes() []byte { return b.buf }
+
+func (b *LimitedBuffer) String() string {
+	if b.dropped == 0 {
+		return string(b.buf)
+	}
+	return fmt.Sprintf("%s\n… %d further bytes discarded by the Agent …\n", b.buf, b.dropped)
 }

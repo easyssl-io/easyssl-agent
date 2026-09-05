@@ -41,7 +41,10 @@ const runTimeout = 10 * time.Minute
 // limit and the Server stores this text, so it is truncated here rather than
 // there: head and tail are what a reader needs, and the marker says what was
 // dropped instead of leaving a silently short transcript.
-const maxOutput = 256 << 10
+//
+// The same bound the Agent collects a Plugin's output at, deliberately:
+// collecting more than the Server would keep buys nothing.
+const maxOutput = plugintrace.MaxPluginOutput
 
 // hostLock serializes Plugin execution across this process. Two
 // Deployments landing together would otherwise write and reload the same
@@ -247,8 +250,8 @@ func runPlugin(ctx context.Context, path string, req plugincontract.InstallReque
 // way and a failed run is the one worth reading. Stderr is the Plugin's own
 // diagnostics and never goes to the Server; it explains a failure here.
 func runBounded(ctx context.Context, cmd *exec.Cmd) (outBytes, errBytes []byte, exitCode int, err error) {
-	var stdout, stderr limitedBuffer
-	stdout.max, stderr.max = maxOutput, maxOutput
+	var stdout, stderr plugintrace.LimitedBuffer
+	stdout.Max, stderr.Max = maxOutput, maxOutput
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
@@ -321,41 +324,6 @@ func truncate(s string) string {
 	head := maxOutput / 2
 	tail := maxOutput - head - len(marker) - 8
 	return s[:head] + fmt.Sprintf(marker, len(s)-head-tail) + s[len(s)-tail:]
-}
-
-// limitedBuffer collects output up to a bound, so a Plugin printing without
-// limit cannot exhaust this Agent's memory while the Server would only have
-// stored a truncated copy anyway.
-type limitedBuffer struct {
-	buf []byte
-	max int
-	// dropped counts what was discarded, so the truncation is reported rather
-	// than silent.
-	dropped int
-}
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	room := b.max - len(b.buf)
-	if room <= 0 {
-		b.dropped += len(p)
-		return len(p), nil
-	}
-	if len(p) > room {
-		b.buf = append(b.buf, p[:room]...)
-		b.dropped += len(p) - room
-		return len(p), nil
-	}
-	b.buf = append(b.buf, p...)
-	return len(p), nil
-}
-
-func (b *limitedBuffer) Bytes() []byte { return b.buf }
-
-func (b *limitedBuffer) String() string {
-	if b.dropped == 0 {
-		return string(b.buf)
-	}
-	return fmt.Sprintf("%s\n… %d further bytes discarded by the Agent …\n", b.buf, b.dropped)
 }
 
 // bytesReader avoids importing bytes for one call.
