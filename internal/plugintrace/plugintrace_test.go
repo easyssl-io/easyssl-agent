@@ -1,6 +1,7 @@
 package plugintrace_test
 
 import (
+	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -165,5 +166,64 @@ func TestTraceWritesTheLiteralBytesToItsOwnFile(t *testing.T) {
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("trace file mode %o, want 600: it holds private keys", perm)
+	}
+}
+
+// The reason KeyPlaceholder carries no newline. Nearly everything redacted here
+// is a JSON document with the key inside a string value, and a real newline
+// there makes the whole document unparseable — which costs a debugging session
+// `jq` in exchange for a prettier rendering of the one part that is gone.
+func TestRedactedJSONIsStillJSON(t *testing.T) {
+	req := map[string]string{
+		"certificatePem": "-----BEGIN CERTIFICATE-----\nPUBLIC\n-----END CERTIFICATE-----\n",
+		"privateKeyPem":  "-----BEGIN PRIVATE KEY-----\n" + secretBody + "\n-----END PRIVATE KEY-----\n",
+		"workDir":        "/tmp/easyssl-deploy-1",
+	}
+	raw, err := json.Marshal(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	redacted := plugintrace.RedactPrivateKeys(string(raw))
+	if strings.Contains(redacted, secretBody) {
+		t.Fatalf("the key survived:\n%s", redacted)
+	}
+	var back map[string]string
+	if err := json.Unmarshal([]byte(redacted), &back); err != nil {
+		t.Fatalf("redaction broke the JSON, so nothing can parse the log line: %v\n%s", err, redacted)
+	}
+	if !strings.Contains(back["certificatePem"], "PUBLIC") {
+		t.Fatal("the certificate did not survive the round trip")
+	}
+	if !strings.Contains(back["privateKeyPem"], "redacted by the easySSL Agent") {
+		t.Fatalf("the placeholder is not where the key was: %q", back["privateKeyPem"])
+	}
+}
+
+// The format switch exists so a debug session is one `jq` call instead of a
+// parser for Go's quoting, so what matters is that the line parses.
+func TestHandlerJSONFormatIsParseable(t *testing.T) {
+	var b strings.Builder
+	slog.New(plugintrace.Handler(&b, "debug", "json")).Debug("plugin exchange", "op", "install")
+	var line map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(b.String())), &line); err != nil {
+		t.Fatalf("the json format did not produce JSON: %v\n%s", err, b.String())
+	}
+	if line["op"] != "install" || line["msg"] != "plugin exchange" {
+		t.Fatalf("the line lost its fields: %v", line)
+	}
+}
+
+// Text stays the default: someone reading `journalctl` with no pipeline should
+// not have to.
+func TestHandlerDefaultsToText(t *testing.T) {
+	for _, format := range []string{"", "text", "yaml"} {
+		var b strings.Builder
+		slog.New(plugintrace.Handler(&b, "debug", format)).Debug("hello", "op", "install")
+		if strings.HasPrefix(strings.TrimSpace(b.String()), "{") {
+			t.Fatalf("format %q produced JSON: %s", format, b.String())
+		}
+		if !strings.Contains(b.String(), "op=install") {
+			t.Fatalf("format %q is not the text handler: %s", format, b.String())
+		}
 	}
 }

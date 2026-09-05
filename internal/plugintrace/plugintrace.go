@@ -21,6 +21,7 @@ package plugintrace
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"regexp"
@@ -36,6 +37,23 @@ const TraceEnv = "EASYSSL_PLUGIN_TRACE"
 // LevelEnv sets the Agent's log level: debug, info, warn or error. Anything
 // else, or nothing, leaves it at info.
 const LevelEnv = "EASYSSL_LOG_LEVEL"
+
+// FormatEnv chooses between the Agent's two log formats. `json` gives the same
+// shape the Server writes, which is what makes a debug session one `jq` call
+// rather than a parser for Go's quoting; anything else keeps the text handler,
+// which is what a person reading `journalctl` without a pipeline wants.
+const FormatEnv = "EASYSSL_LOG_FORMAT"
+
+// Handler builds the Agent's log handler from the two variables. Everything the
+// Agent logs goes through it, so the service and the subcommands cannot end up
+// configured differently.
+func Handler(w io.Writer, level, format string) slog.Handler {
+	opts := &slog.HandlerOptions{Level: Level(level)}
+	if strings.EqualFold(strings.TrimSpace(format), "json") {
+		return slog.NewJSONHandler(w, opts)
+	}
+	return slog.NewTextHandler(w, opts)
+}
 
 // Level reads LevelEnv. Unset or unrecognized is info, deliberately rather than
 // an error: a typo in a unit file must not stop an Agent from running.
@@ -177,7 +195,14 @@ var (
 
 // KeyPlaceholder stands in for what was removed, and says who removed it so a
 // reader does not go looking for a truncated file.
-const KeyPlaceholder = "\n****** private key redacted by the easySSL Agent ******\n"
+//
+// It carries no newline of its own, and that is load-bearing rather than
+// cosmetic. Most of what passes through here is a JSON document with the key
+// inside a string value, and a real newline there makes the document
+// unparseable: the debug log stops being something `jq` can read, for a
+// prettier rendering of the one part that has been removed. The markers on
+// either side already show where the key was.
+const KeyPlaceholder = " ****** private key redacted by the easySSL Agent ****** "
 
 // RedactPrivateKeys masks the body of any PEM private key in text.
 //

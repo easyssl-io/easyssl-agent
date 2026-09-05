@@ -293,14 +293,14 @@ func cmdRun(ctx context.Context, args []string) error {
 // `easyssl-agent plugin install` shows the same Plugin exchange the service
 // would log rather than a second, differently-configured view of it.
 //
-// The level is an environment variable rather than a flag so that turning
-// debug on needs no edit to the shipped unit: `systemctl edit easyssl-agent`,
-// one Environment= line, restart. Nothing about the Agent's behavior changes
-// with it, only how much of what it already does is written down.
+// The level and the format are environment variables rather than flags so that
+// turning debug on needs no edit to the shipped unit: `systemctl edit
+// easyssl-agent`, one Environment= line, restart. Nothing about the Agent's
+// behavior changes with either, only how much of what it already does is
+// written down and in what shape.
 func agentLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-		Level: plugintrace.Level(os.Getenv(plugintrace.LevelEnv)),
-	}))
+	return slog.New(plugintrace.Handler(os.Stderr,
+		os.Getenv(plugintrace.LevelEnv), os.Getenv(plugintrace.FormatEnv)))
 }
 
 func shouldReconcile(resp wire.CheckinResponse) bool {

@@ -127,6 +127,20 @@ service in the way. That is usually the one you want while writing a Plugin:
 what a build declares about itself is where it most often disagrees with what
 its author meant.
 
+**`EASYSSL_LOG_FORMAT=json`** switches the Agent to the same JSON lines the
+Server writes, which turns reading an exchange into one `jq` call rather than a
+parser for Go's quoting:
+
+```sh
+journalctl -u easyssl-agent -f -o cat \
+  | jq -r 'select(.msg == "plugin exchange") | .stdin'
+```
+
+The redacted request stays valid JSON — the placeholder that replaces the key
+carries no newline of its own, for exactly this reason — so `| jq .` on that
+output works too. Text remains the default, since somebody reading
+`journalctl` without a pipeline should not have to.
+
 **`EASYSSL_PLUGIN_TRACE=<path>`** writes the literal bytes of every exchange to
 that file, private key included, mode 600, with a warning at the top of the
 file and one in the journal saying it is on. Only for the rare case where the
