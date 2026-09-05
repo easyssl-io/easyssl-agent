@@ -189,23 +189,35 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	run, err := runPlugin(ctx, installed.Path, req, logger,
 		"deployment", work.ID, "certificate", work.CertificateID,
 		"plugin", installed.ID, "plugin_version", installed.Version)
+	result := wire.DeploymentResult{
+		OK:            succeeded(err, run),
+		PluginVersion: installed.Version,
+		PluginRun:     run,
+	}
 	if err != nil {
 		// The Agent's sentence and the process's facts, side by side and never
 		// merged: what the Plugin printed is on `run`, so this says only what
 		// the Agent concluded.
-		return wire.DeploymentResult{
-			PluginVersion: installed.Version,
-			AgentMessage:  err.Error(),
-			PluginRun:     run,
-		}
+		result.AgentMessage = err.Error()
 	}
-	// The exit status is the answer. There is no field a Plugin sets that could
-	// say otherwise, which is the whole reason the answer document went.
-	return wire.DeploymentResult{
-		OK:            run.ExitStatus == 0,
-		PluginVersion: installed.Version,
-		PluginRun:     run,
-	}
+	return result
+}
+
+// succeeded is the whole of how this Agent decides a Deployment worked: the
+// Plugin's process ended, and it ended with status 0.
+//
+// One function because it used to be two struct literals, one computing the
+// field and one omitting it and taking Go's zero. Those agreed only because
+// `cmd.Wait` errors exactly when the status is non-zero; a later path that
+// failed with a zero status — a check after the run, a decode — would have
+// parted them without a compile error, a vet warning or a failing test, which
+// is what a field left out of a struct literal costs.
+//
+// The error is checked as well as the status because a run that never started
+// has no status of the Plugin's own, and the -1 standing in for one must not be
+// read as though the Plugin chose it.
+func succeeded(err error, run *wire.PluginRun) bool {
+	return err == nil && run != nil && run.ExitStatus == 0
 }
 
 // runPlugin executes the Plugin's install operation: the operation name on
