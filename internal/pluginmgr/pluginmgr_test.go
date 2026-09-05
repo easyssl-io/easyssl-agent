@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -294,4 +295,37 @@ func asDigestMismatch(err error, out *DigestMismatchError) bool {
 		*out = m
 	}
 	return ok
+}
+
+// A Plugin that marks two settings summary is refused at install rather than
+// installed and reported, because "at most one" is what makes an unlabeled
+// Target's name a decision somebody made rather than an artifact of the order
+// the Plugin listed its settings in. Refused here as well as by the Server, and
+// here first: this is where the Plugin's author finds out.
+func TestInstallRefusesTwoSummarySettings(t *testing.T) {
+	srv := newMarketplace(t, "")
+	rep := &fakeReporter{}
+	desc := declaration()
+	desc.Settings = append(desc.Settings,
+		plugincontract.SettingDeclaration{Key: "server_name", Type: plugincontract.SettingTypeText, Summary: true},
+		plugincontract.SettingDeclaration{Key: "site", Type: plugincontract.SettingTypeText, Summary: true},
+	)
+	m := newManager(t, srv, rep, desc, nil)
+
+	_, err := m.Install(context.Background(), "esat_token", "generic-cli", "linux", "amd64")
+	var tooMany *plugincontract.TooManySummaryError
+	if !errors.As(err, &tooMany) {
+		t.Fatalf("install accepted two summary settings: %v", err)
+	}
+	// Nothing was left behind and nothing was reported: a Plugin the Server
+	// would reject must not sit on the host claiming to be installed.
+	if len(rep.got) != 0 {
+		t.Fatalf("a refused Plugin was reported: %+v", rep.got)
+	}
+	if entries, _ := os.ReadDir(m.installDir); len(entries) != 0 {
+		t.Fatalf("the artifact was left on the host: %v", entries)
+	}
+	if _, err := m.List(); err != nil {
+		t.Fatalf("the record was left unreadable: %v", err)
+	}
 }

@@ -179,6 +179,14 @@ func (m *Manager) Install(ctx context.Context, token, pluginID, goos, goarch str
 		_ = os.Remove(path)
 		return Installed{}, fmt.Errorf("pluginmgr: the artifact for %q calls itself %q", pluginID, desc.Name)
 	}
+	// Refused here as well as by the Server, and here first, because this is
+	// where a Plugin's author finds out. A declaration set the Server rejects
+	// after the artifact is already on the host leaves a Plugin installed and
+	// unreported, which is worse than not installing it.
+	if err := plugincontract.ValidateSettings(desc.Settings); err != nil {
+		_ = os.Remove(path)
+		return Installed{}, fmt.Errorf("the plugin's settings are not usable, so it was not installed: %w", err)
+	}
 
 	inst := Installed{
 		ID: pluginID, Version: desc.Version, Digest: digest,
