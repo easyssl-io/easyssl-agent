@@ -126,7 +126,8 @@ print. `--json` reports a short stable code (`authorized`, `pending`,
 ## Seeing what a Plugin was asked to do
 
 The Agent hands work to a Plugin over stdio: the operation on argv, JSON in,
-JSON out. None of that is visible by default, and what reaches the Server is
+and out either JSON (`describe`) or the process's own exit status and streams
+(`deploy`). None of that is visible by default, and what reaches the Server is
 only the Plugin's own account of itself, so an argument the Agent got wrong, or
 a Plugin that failed before printing anything, leaves no trace anywhere.
 
@@ -169,7 +170,7 @@ that file, private key included, mode 600, with a warning at the top of the
 file and one in the journal saying it is on. Only for the rare case where the
 exact bytes matter, and never set by the installer.
 
-An install request carries the certificate's private key, which is why the two
+A deploy request carries the certificate's private key, which is why the two
 are not one switch: the journal persists, is readable by anyone in
 `systemd-journal`, and is usually shipped off the host, so enabling key logging
 has to be a decision of its own. Naming a file for the keys to go into is what

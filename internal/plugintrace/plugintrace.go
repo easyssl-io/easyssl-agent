@@ -11,7 +11,7 @@
 //     that file and nowhere else.
 //
 // A single switch that did both is the one that gets left on. An install
-// request carries privateKeyPem (plugincontract.InstallRequest), so logging the
+// request carries privateKeyPem (plugincontract.DeployRequest), so logging the
 // exchange verbatim into the journal would put usable private keys somewhere
 // that persists, that anyone in `systemd-journal` can read, and that log
 // shipping copies off the host. Enabling that has to be a decision of its own,

@@ -173,7 +173,7 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 		}
 	}()
 
-	req := plugincontract.InstallRequest{
+	req := plugincontract.DeployRequest{
 		ContractVersion: plugincontract.ContractVersion,
 		CertificatePem:  work.CertificatePem,
 		ChainPem:        work.ChainPem,
@@ -220,7 +220,7 @@ func succeeded(err error, run *wire.PluginRun) bool {
 	return err == nil && run != nil && run.ExitStatus == 0
 }
 
-// runPlugin executes the Plugin's install operation: the operation name on
+// runPlugin executes the Plugin's deploy operation: the operation name on
 // argv, the request on stdin, the response on stdout.
 //
 // The whole exchange goes to plugintrace, which does nothing unless the
@@ -228,10 +228,10 @@ func succeeded(err error, run *wire.PluginRun) bool {
 // what comes back to the Server is the Plugin's own account of itself, so an
 // argument the Agent got wrong, or a Plugin failing before it printed anything,
 // leaves no evidence anywhere else.
-func runPlugin(ctx context.Context, path string, req plugincontract.InstallRequest, logger *slog.Logger, attrs ...any) (*wire.PluginRun, error) {
+func runPlugin(ctx context.Context, path string, req plugincontract.DeployRequest, logger *slog.Logger, attrs ...any) (*wire.PluginRun, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("encoding the install request: %w", err)
+		return nil, fmt.Errorf("encoding the deploy request: %w", err)
 	}
 
 	rctx, cancel := context.WithTimeout(ctx, runTimeout)
@@ -239,7 +239,7 @@ func runPlugin(ctx context.Context, path string, req plugincontract.InstallReque
 
 	// #nosec G204 -- path comes from this Agent's own record of what it
 	// installed, not from the Server or the request.
-	cmd := exec.Command(path, plugincontract.OpInstall)
+	cmd := exec.Command(path, plugincontract.OpDeploy)
 	cmd.Stdin = bytesReader(body)
 	// Its own process group, so the kill below reaches whatever the reload
 	// command started. A script that backgrounds a process would otherwise
@@ -250,7 +250,7 @@ func runPlugin(ctx context.Context, path string, req plugincontract.InstallReque
 	captured, code, runErr := runBounded(rctx, cmd)
 	elapsed := time.Since(started)
 	plugintrace.Record(logger, plugintrace.Exchange{
-		Op: plugincontract.OpInstall, Path: path, Args: []string{plugincontract.OpInstall},
+		Op: plugincontract.OpDeploy, Path: path, Args: []string{plugincontract.OpDeploy},
 		Stdin:    body,
 		Stdout:   []byte(captured.Text(plugintrace.StreamStdout)),
 		Stderr:   []byte(captured.Text(plugintrace.StreamStderr)),
