@@ -18,7 +18,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"regexp"
 	"sync"
 	"syscall"
 	"time"
@@ -26,6 +25,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/commands"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
+	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
 	"github.com/easyssl-io/easyssl-contract/wire"
@@ -183,7 +183,9 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	hostLock.Lock()
 	defer hostLock.Unlock()
 
-	out, err := runPlugin(ctx, installed.Path, req)
+	out, err := runPlugin(ctx, installed.Path, req, logger,
+		"deployment", work.ID, "certificate", work.CertificateID,
+		"plugin", installed.ID, "plugin_version", installed.Version)
 	if err != nil {
 		return failed(installed.Version, err.Error())
 	}
@@ -196,7 +198,13 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 
 // runPlugin executes the Plugin's install operation: the operation name on
 // argv, the request on stdin, the response on stdout.
-func runPlugin(ctx context.Context, path string, req plugincontract.InstallRequest) (plugincontract.InstallResponse, error) {
+//
+// The whole exchange goes to plugintrace, which does nothing unless the
+// operator turned it on. That is the only place this conversation is visible:
+// what comes back to the Server is the Plugin's own account of itself, so an
+// argument the Agent got wrong, or a Plugin failing before it printed anything,
+// leaves no evidence anywhere else.
+func runPlugin(ctx context.Context, path string, req plugincontract.InstallRequest, logger *slog.Logger, attrs ...any) (plugincontract.InstallResponse, error) {
 	var out plugincontract.InstallResponse
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -215,7 +223,13 @@ func runPlugin(ctx context.Context, path string, req plugincontract.InstallReque
 	// outlive the timeout and hold nothing accountable.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	stdout, runErr := runBounded(rctx, cmd)
+	started := time.Now()
+	stdout, stderr, code, runErr := runBounded(rctx, cmd)
+	plugintrace.Record(logger, plugintrace.Exchange{
+		Op: plugincontract.OpInstall, Path: path, Args: []string{plugincontract.OpInstall},
+		Stdin: body, Stdout: stdout, Stderr: stderr,
+		ExitCode: code, Duration: time.Since(started), Err: runErr, Attrs: attrs,
+	})
 	if runErr != nil {
 		return out, runErr
 	}
@@ -227,17 +241,19 @@ func runPlugin(ctx context.Context, path string, req plugincontract.InstallReque
 	return out, nil
 }
 
-// runBounded runs cmd, killing its whole process group if the context expires,
-// and returns stdout. Stderr is the Plugin's own diagnostics, kept only to
-// explain a failure.
-func runBounded(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
+// runBounded runs cmd, killing its whole process group if the context expires.
+// It returns everything the run produced — stdout, stderr and the exit code —
+// whether or not it succeeded, because the caller records the exchange either
+// way and a failed run is the one worth reading. Stderr is the Plugin's own
+// diagnostics and never goes to the Server; it explains a failure here.
+func runBounded(ctx context.Context, cmd *exec.Cmd) (outBytes, errBytes []byte, exitCode int, err error) {
 	var stdout, stderr limitedBuffer
 	stdout.max, stderr.max = maxOutput, maxOutput
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("could not start the plugin: %w", err)
+	if startErr := cmd.Start(); startErr != nil {
+		return nil, nil, -1, fmt.Errorf("could not start the plugin: %w", startErr)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -250,13 +266,16 @@ func runBounded(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 		<-done
-		return nil, fmt.Errorf("the plugin did not finish within %s and was killed.\noutput so far:\n%s",
-			runTimeout, report(stdout.String()+stderr.String()))
-	case err := <-done:
-		if err != nil {
-			return nil, fmt.Errorf("the plugin exited with an error: %w\n%s", err, report(stderr.String()))
+		return stdout.Bytes(), stderr.Bytes(), -1,
+			fmt.Errorf("the plugin did not finish within %s and was killed.\noutput so far:\n%s",
+				runTimeout, report(stdout.String()+stderr.String()))
+	case waitErr := <-done:
+		code := cmd.ProcessState.ExitCode()
+		if waitErr != nil {
+			return stdout.Bytes(), stderr.Bytes(), code,
+				fmt.Errorf("the plugin exited with an error: %w\n%s", waitErr, report(stderr.String()))
 		}
-		return stdout.Bytes(), nil
+		return stdout.Bytes(), stderr.Bytes(), code, nil
 	}
 }
 
@@ -286,58 +305,10 @@ func failed(pluginVersion, message string) wire.DeploymentResult {
 	return wire.DeploymentResult{OK: false, PluginVersion: pluginVersion, Message: report(message)}
 }
 
-// privateKeyBlock matches a PEM private key however it is framed. The body is
-// `[\s\S]` rather than `.` so it spans real newlines, and the same match
-// covers a key echoed inside JSON, where the newlines are two-character `\n`
-// escapes and the whole block is one line.
-var privateKeyBlock = regexp.MustCompile(
-	`(-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----)([\s\S]*?)(-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----)`)
-
-// keyBegin and keyEnd locate the markers on their own, for the case below where
-// a key has no end marker left.
-var (
-	keyBegin = regexp.MustCompile(`-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----`)
-	keyEnd   = regexp.MustCompile(`-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----`)
-)
-
-// redactPrivateKeys masks the body of any PEM private key in text a Plugin
-// produced.
-//
-// A Plugin is arbitrary code and receives the key on its stdin, so one that
-// echoes its request — or simply prints the file it was handed — puts the key
-// in its output. Reporting that verbatim would store a usable private key in
-// the Server's database and show it in the web console, which is a worse
-// exposure than the one the whole design avoids by never sending a key over the
-// wire. The markers are kept so the redaction is visible rather than looking
-// like a Plugin that said nothing.
-func redactPrivateKeys(s string) string {
-	s = privateKeyBlock.ReplaceAllString(s, "${1}"+keyPlaceholder+"${3}")
-	// Whatever survives the pass above is a key with no end marker, which is
-	// what a bounded or interrupted echo leaves. Only the last begin marker can
-	// be unclosed — every earlier one was closed, or it would have swallowed
-	// the rest — so the tail from it is dropped. Done by index rather than by a
-	// second pattern: a pattern anchored to the end would also match the begin
-	// marker the pass above deliberately kept, and take the whole output after
-	// a redacted key with it.
-	last := keyBegin.FindAllStringIndex(s, -1)
-	if len(last) == 0 {
-		return s
-	}
-	start := last[len(last)-1]
-	if keyEnd.FindStringIndex(s[start[1]:]) != nil {
-		return s // closed, and already redacted above
-	}
-	return s[:start[1]] + keyPlaceholder
-}
-
-// keyPlaceholder stands in for what was removed, and says who removed it so a
-// reader does not go looking for a truncated file.
-const keyPlaceholder = "\n****** private key redacted by the easySSL Agent ******\n"
-
 // report prepares any text for the Server: the key is removed first and the
 // result bounded afterwards, in that order, because truncating first can cut a
 // key's end marker off and leave the head of one unredactable.
-func report(s string) string { return truncate(redactPrivateKeys(s)) }
+func report(s string) string { return truncate(plugintrace.RedactPrivateKeys(s)) }
 
 // truncate bounds reported text, keeping the head and the tail around a marker
 // naming what was dropped: the start says what the script set out to do and the

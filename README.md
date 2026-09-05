@@ -100,6 +100,44 @@ the state is reported as unknown with the reason, and the local facts still
 print. `--json` reports a short stable code (`authorized`, `pending`,
 `not-registered`, `unknown`) instead of the sentence.
 
+## Seeing what a Plugin was asked to do
+
+The Agent hands work to a Plugin over stdio: the operation on argv, JSON in,
+JSON out. None of that is visible by default, and what reaches the Server is
+only the Plugin's own account of itself, so an argument the Agent got wrong, or
+a Plugin that failed before printing anything, leaves no trace anywhere.
+
+Two switches make it visible, and they are separate because they differ in one
+respect that matters.
+
+**`EASYSSL_LOG_LEVEL=debug`** logs every exchange with the private key removed:
+the operation, the binary, the arguments, the request, the response, the
+Plugin's stderr, its exit code and how long it took. Safe to leave on, safe on
+somebody else's host, safe to paste into an issue.
+
+```sh
+sudo systemctl edit easyssl-agent      # [Service] / Environment=EASYSSL_LOG_LEVEL=debug
+sudo systemctl restart easyssl-agent
+journalctl -u easyssl-agent -f
+```
+
+The same variable works on the subcommands, so `EASYSSL_LOG_LEVEL=debug
+easyssl-agent plugin install <name>` shows the `describe` exchange without the
+service in the way. That is usually the one you want while writing a Plugin:
+what a build declares about itself is where it most often disagrees with what
+its author meant.
+
+**`EASYSSL_PLUGIN_TRACE=<path>`** writes the literal bytes of every exchange to
+that file, private key included, mode 600, with a warning at the top of the
+file and one in the journal saying it is on. Only for the rare case where the
+exact bytes matter, and never set by the installer.
+
+An install request carries the certificate's private key, which is why the two
+are not one switch: the journal persists, is readable by anyone in
+`systemd-journal`, and is usually shipped off the host, so enabling key logging
+has to be a decision of its own. Naming a file for the keys to go into is what
+makes it one. Delete the file when you are done.
+
 ## Private keys
 
 Every certificate's private key is generated here, on this host, and never sent

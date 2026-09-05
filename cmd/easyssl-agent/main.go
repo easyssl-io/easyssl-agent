@@ -37,6 +37,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
+	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
 	"github.com/easyssl-io/easyssl-agent/internal/sdnotify"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-agent/internal/sysd"
@@ -162,7 +163,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	}
 
 	api := serverapi.New(cfg.ServerURL)
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	logger := agentLogger()
 	// So key generation is reported in the same format as everything else the
 	// service writes, rather than through the default handler.
 	keystore.SetLogger(logger)
@@ -170,7 +171,7 @@ func cmdRun(ctx context.Context, args []string) error {
 	// also what an Agent older than its Server does.
 	runner := commands.NewRunner(api, token, logger, map[string]commands.Handler{
 		wire.CommandRequestCSR: csr.New(api, token, logger),
-		wire.CommandDeploy:     deploy.New(api, pluginmgr.New(nil, nil), token, logger),
+		wire.CommandDeploy:     deploy.New(api, pluginmgr.New(nil, nil, logger), token, logger),
 	})
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -286,6 +287,22 @@ func cmdRun(ctx context.Context, args []string) error {
 // event stream nudges, and the next check-in counts again. Nothing here
 // concludes that a command exists, only that none did, so a stale count delays
 // work rather than inventing or losing it.
+// agentLogger is what this Agent writes with: stderr, which systemd captures
+// into the journal, at the level EASYSSL_LOG_LEVEL asks for. The same function
+// serves the service and the subcommands an operator runs by hand, so
+// `easyssl-agent plugin install` shows the same Plugin exchange the service
+// would log rather than a second, differently-configured view of it.
+//
+// The level is an environment variable rather than a flag so that turning
+// debug on needs no edit to the shipped unit: `systemctl edit easyssl-agent`,
+// one Environment= line, restart. Nothing about the Agent's behavior changes
+// with it, only how much of what it already does is written down.
+func agentLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: plugintrace.Level(os.Getenv(plugintrace.LevelEnv)),
+	}))
+}
+
 func shouldReconcile(resp wire.CheckinResponse) bool {
 	return resp.PendingCommands == nil || *resp.PendingCommands > 0
 }
@@ -521,6 +538,7 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 	mgr := pluginmgr.New(
 		pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL},
 		serverapi.New(cfg.ServerURL),
+		agentLogger(),
 	)
 	// The host's own platform: an Agent installs for the machine it runs on,
 	// never for another, so there is no flag to get this wrong.
@@ -614,7 +632,7 @@ func cmdPluginList(args []string) error {
 	asJSON := fs.Bool("json", false, "print JSON")
 	_ = fs.Parse(args)
 
-	mgr := pluginmgr.New(nil, nil)
+	mgr := pluginmgr.New(nil, nil, nil)
 	installed, err := mgr.List()
 	if err != nil {
 		return err

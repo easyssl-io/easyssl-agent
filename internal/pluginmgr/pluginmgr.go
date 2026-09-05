@@ -10,6 +10,7 @@
 package pluginmgr
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -25,6 +27,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
@@ -95,12 +98,16 @@ type Manager struct {
 	runDescribe func(ctx context.Context, path string) (plugincontract.DescribeResponse, error)
 }
 
-// New builds a Manager writing to the host's real locations.
-func New(catalog Catalog, reporter Reporter) *Manager {
+// New builds a Manager writing to the host's real locations. logger may be nil,
+// and is for a caller that only lists what is installed: describing a Plugin
+// runs one, and that exchange is the thing worth being able to see.
+func New(catalog Catalog, reporter Reporter, logger *slog.Logger) *Manager {
 	return &Manager{
 		catalog: catalog, reporter: reporter,
 		installDir: InstallDir, recordPath: RecordPath,
-		runDescribe: describeByExec,
+		runDescribe: func(ctx context.Context, path string) (plugincontract.DescribeResponse, error) {
+			return describeByExec(ctx, path, logger)
+		},
 	}
 }
 
@@ -297,16 +304,32 @@ func (m *Manager) load() (Record, error) {
 // describeByExec runs the Plugin's describe operation the way every operation
 // runs: the name on argv, JSON on stdout. Nothing is written to its stdin,
 // describe taking no request.
-func describeByExec(ctx context.Context, path string) (plugincontract.DescribeResponse, error) {
+//
+// Recorded through plugintrace like an install, and worth it for the same
+// reason: what a build declares about itself is where a Plugin under
+// development most often disagrees with what it meant to declare, and nothing
+// else on the host shows the answer it actually gave.
+func describeByExec(ctx context.Context, path string, logger *slog.Logger) (plugincontract.DescribeResponse, error) {
 	var out plugincontract.DescribeResponse
 	// #nosec G204 -- path is InstallDir joined with a name matched against
 	// validPluginID, so it names a file this Agent just wrote.
 	cmd := exec.CommandContext(ctx, path, plugincontract.OpDescribe)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	started := time.Now()
 	stdout, err := cmd.Output()
+	code := 0
+	if cmd.ProcessState != nil {
+		code = cmd.ProcessState.ExitCode()
+	}
+	plugintrace.Record(logger, plugintrace.Exchange{
+		Op: plugincontract.OpDescribe, Path: path, Args: []string{plugincontract.OpDescribe},
+		Stdout: stdout, Stderr: stderr.Bytes(), ExitCode: code,
+		Duration: time.Since(started), Err: err,
+	})
 	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && len(exitErr.Stderr) > 0 {
-			return out, fmt.Errorf("%w: %s", err, exitErr.Stderr)
+		if stderr.Len() > 0 {
+			return out, fmt.Errorf("%w: %s", err, stderr.Bytes())
 		}
 		return out, err
 	}
