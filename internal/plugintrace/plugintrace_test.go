@@ -244,24 +244,89 @@ func TestRecordCountsAllThreeStreams(t *testing.T) {
 	}
 }
 
-// A Plugin is arbitrary code and can print without limit. Both operations run
-// one, so both have to hold it to the same bound; describe used to collect
-// stderr into a buffer with no bound at all.
-func TestLimitedBufferStopsAtItsBound(t *testing.T) {
-	b := plugintrace.LimitedBuffer{Max: 10}
-	if _, err := b.Write([]byte(strings.Repeat("a", 25))); err != nil {
+// A Plugin is arbitrary code and can print without limit, and both operations
+// run one, so both hold it to the same bound.
+func TestCaptureStopsAtItsBound(t *testing.T) {
+	c := &plugintrace.Capture{Max: 10}
+	w := c.Writer(plugintrace.StreamStdout)
+	if _, err := w.Write([]byte(strings.Repeat("a", 25) + "\n")); err != nil {
 		t.Fatal(err)
 	}
 	// The writer is told everything was accepted: a Plugin must not fail
 	// because the Agent stopped keeping its output.
-	if _, err := b.Write([]byte("more")); err != nil {
+	if _, err := w.Write([]byte("more\n")); err != nil {
 		t.Fatal(err)
 	}
-	if len(b.Bytes()) != 10 {
-		t.Fatalf("kept %d bytes, want 10", len(b.Bytes()))
+	if kept := c.Text(plugintrace.StreamStdout); kept != "" {
+		t.Fatalf("a line past the bound was kept: %q", kept)
 	}
-	// And it says so, rather than leaving a silently short transcript.
-	if !strings.Contains(b.String(), "19 further bytes discarded") {
-		t.Fatalf("the truncation is not reported: %q", b.String())
+	// And what the Plugin produced is still reported, so a reader can see the
+	// text is short because it was cut rather than because that was all.
+	if got := c.Produced(plugintrace.StreamStdout); got != 31 {
+		t.Fatalf("produced = %d, want 31", got)
+	}
+}
+
+// The order between the streams is the thing two buffers could not hold: a
+// message on stderr means something different before a line of stdout than
+// after it.
+func TestCaptureKeepsTheOrderBetweenStreams(t *testing.T) {
+	c := &plugintrace.Capture{Max: plugintrace.MaxPluginOutput}
+	out, errw := c.Writer(plugintrace.StreamStdout), c.Writer(plugintrace.StreamStderr)
+	// Written in sequence from one goroutine, which is the order the record
+	// must show. (Two goroutines are the real case and are inherently
+	// approximate; that is stated on Capture and is not testable here.)
+	mustWrite(t, out, "starting\n")
+	mustWrite(t, errw, "a warning\n")
+	mustWrite(t, out, "done\n")
+
+	got := c.Chunks()
+	if len(got) != 3 {
+		t.Fatalf("consecutive same-stream lines should merge and alternating ones should not: %+v", got)
+	}
+	want := []plugintrace.Chunk{
+		{Stream: "stdout", Text: "starting\n"},
+		{Stream: "stderr", Text: "a warning\n"},
+		{Stream: "stdout", Text: "done\n"},
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("chunk %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// Consecutive lines from one stream are one chunk, so a Plugin that only ever
+// writes to stdout produces exactly one rather than one per line.
+func TestCaptureMergesConsecutiveLines(t *testing.T) {
+	c := &plugintrace.Capture{Max: plugintrace.MaxPluginOutput}
+	out := c.Writer(plugintrace.StreamStdout)
+	mustWrite(t, out, "one\ntwo\nthree\n")
+	got := c.Chunks()
+	if len(got) != 1 || got[0].Text != "one\ntwo\nthree\n" {
+		t.Fatalf("lines did not merge into one chunk: %+v", got)
+	}
+}
+
+// A program writing "certif" and then "icate\n" produced one line, and a
+// command killed mid-line still wrote something worth reading.
+func TestCaptureBuffersLinesAndFlushesTheLast(t *testing.T) {
+	c := &plugintrace.Capture{Max: plugintrace.MaxPluginOutput}
+	out := c.Writer(plugintrace.StreamStdout)
+	mustWrite(t, out, "certif")
+	mustWrite(t, out, "icate\nno newline here")
+	if got := c.Text(plugintrace.StreamStdout); got != "certificate\n" {
+		t.Fatalf("before the flush: %q", got)
+	}
+	out.Flush()
+	if got := c.Text(plugintrace.StreamStdout); got != "certificate\nno newline here\n" {
+		t.Fatalf("the unterminated last line was dropped: %q", got)
+	}
+}
+
+func mustWrite(t *testing.T, w *plugintrace.StreamWriter, s string) {
+	t.Helper()
+	if _, err := w.Write([]byte(s)); err != nil {
+		t.Fatal(err)
 	}
 }

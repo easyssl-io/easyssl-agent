@@ -19,6 +19,7 @@
 package plugintrace
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -247,48 +248,124 @@ func RedactPrivateKeys(s string) string {
 // the same bound.
 const MaxPluginOutput = 256 << 10
 
-// LimitedBuffer collects output up to Max, so a Plugin printing without limit
-// cannot exhaust this Agent's memory.
+// Capture collects a Plugin's two streams into one ordered record, bounded, so
+// a Plugin printing without limit cannot exhaust this Agent's memory.
 //
-// Here rather than beside either caller because both plugin operations need
-// it, and only one of them used to have it: `install` bounded both streams
-// while `describe` collected stderr into an unbounded buffer, so a Plugin that
-// flooded stderr while describing itself was limited by nothing. The same type
-// in both is what makes "a Plugin cannot exhaust the Agent" a property of the
-// Agent rather than of one code path.
-type LimitedBuffer struct {
-	buf []byte
+// One record rather than two buffers, because the order between the streams is
+// what a reader needs and two buffers cannot hold it: a message on stderr means
+// something quite different before a line of stdout than after it.
+//
+// Approximate between the streams, and honestly so. Each is drained by its own
+// goroutine, so which of two near-simultaneous lines lands first is whatever
+// those goroutines are scheduled in; within a stream it is exact. Merging the
+// pipes would order them perfectly and lose which was which, which is the same
+// trade the other way round.
+type Capture struct {
+	// Max bounds each stream separately, so a flood on one does not push the
+	// other out of the record.
 	Max int
-	// dropped counts what was discarded, so the truncation is reported rather
-	// than silent.
-	dropped int
+
+	mu      sync.Mutex
+	chunks  []Chunk
+	dropped map[string]int
+	kept    map[string]int
 }
 
-func (b *LimitedBuffer) Write(p []byte) (int, error) {
-	room := b.Max - len(b.buf)
-	if room <= 0 {
-		b.dropped += len(p)
-		return len(p), nil
-	}
-	if len(p) > room {
-		b.buf = append(b.buf, p[:room]...)
-		b.dropped += len(p) - room
-		return len(p), nil
-	}
-	b.buf = append(b.buf, p...)
-	return len(p), nil
+// Chunk is a run of consecutive lines from one stream. Chunks rather than
+// lines, so a Plugin that only ever writes to stdout produces exactly one.
+type Chunk struct {
+	Stream string
+	Text   string
 }
 
-func (b *LimitedBuffer) Bytes() []byte { return b.buf }
+// Stream names, matching the wire's.
+const (
+	StreamStdout = "stdout"
+	StreamStderr = "stderr"
+)
 
-// Produced is how much the Plugin wrote, which is not always how much was
-// kept. Reported alongside the text so a clipped stream is visible as a string
-// shorter than its count, rather than through a flag that can disagree with it.
-func (b *LimitedBuffer) Produced() int { return len(b.buf) + b.dropped }
+// Writer returns the io.Writer for one stream, line-buffered: a program writing
+// "certif" and then "icate\n" produced one line and is recorded as one.
+func (c *Capture) Writer(stream string) *StreamWriter {
+	return &StreamWriter{cap: c, stream: stream}
+}
 
-func (b *LimitedBuffer) String() string {
-	if b.dropped == 0 {
-		return string(b.buf)
+// Chunks is the record, oldest first.
+func (c *Capture) Chunks() []Chunk {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.chunks
+}
+
+// Produced is how much the Plugin wrote on one stream, which is not always how
+// much was kept.
+func (c *Capture) Produced(stream string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.kept[stream] + c.dropped[stream]
+}
+
+// Text is one stream's kept text on its own, for the debug log, which reports
+// the two separately because that is how a reader greps them.
+func (c *Capture) Text(stream string) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var b strings.Builder
+	for _, ch := range c.chunks {
+		if ch.Stream == stream {
+			b.WriteString(ch.Text)
+		}
 	}
-	return fmt.Sprintf("%s\n… %d further bytes discarded by the Agent …\n", b.buf, b.dropped)
+	return b.String()
+}
+
+func (c *Capture) append(stream string, line []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.dropped == nil {
+		c.dropped, c.kept = map[string]int{}, map[string]int{}
+	}
+	n := len(line) + 1 // the newline the recorded text carries
+	// Once anything has been dropped from a stream, everything after it goes
+	// too. Judging each line on its own would let a short line land after a
+	// long one was refused, leaving a transcript with a hole in the middle and
+	// nothing saying so; what truncation should leave is a clean prefix.
+	if c.Max > 0 && (c.dropped[stream] > 0 || c.kept[stream]+n > c.Max) {
+		c.dropped[stream] += n
+		return
+	}
+	c.kept[stream] += n
+	if len(c.chunks) > 0 && c.chunks[len(c.chunks)-1].Stream == stream {
+		c.chunks[len(c.chunks)-1].Text += string(line) + "\n"
+		return
+	}
+	c.chunks = append(c.chunks, Chunk{Stream: stream, Text: string(line) + "\n"})
+}
+
+// StreamWriter is one stream's end of a Capture.
+type StreamWriter struct {
+	cap     *Capture
+	stream  string
+	partial []byte
+}
+
+func (w *StreamWriter) Write(p []byte) (int, error) {
+	w.partial = append(w.partial, p...)
+	for {
+		i := bytes.IndexByte(w.partial, '\n')
+		if i < 0 {
+			return len(p), nil
+		}
+		w.cap.append(w.stream, w.partial[:i])
+		w.partial = w.partial[i+1:]
+	}
+}
+
+// Flush records a trailing line that never got its newline, which is what a
+// command killed mid-line leaves behind.
+func (w *StreamWriter) Flush() {
+	if len(w.partial) > 0 {
+		w.cap.append(w.stream, w.partial)
+		w.partial = nil
+	}
 }

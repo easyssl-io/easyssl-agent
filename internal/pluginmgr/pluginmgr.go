@@ -324,22 +324,24 @@ func describeByExec(ctx context.Context, path string, logger *slog.Logger) (plug
 	// Bounded like the install path's. A Plugin describing itself is the same
 	// arbitrary code, and an unbounded buffer here meant one that flooded
 	// stderr was limited by nothing but this Agent's memory.
-	stderr := plugintrace.LimitedBuffer{Max: plugintrace.MaxPluginOutput}
-	cmd.Stderr = &stderr
+	cap := &plugintrace.Capture{Max: plugintrace.MaxPluginOutput}
+	stderr := cap.Writer(plugintrace.StreamStderr)
+	cmd.Stderr = stderr
 	started := time.Now()
 	stdout, err := cmd.Output()
+	stderr.Flush()
 	code := 0
 	if cmd.ProcessState != nil {
 		code = cmd.ProcessState.ExitCode()
 	}
 	plugintrace.Record(logger, plugintrace.Exchange{
 		Op: plugincontract.OpDescribe, Path: path, Args: []string{plugincontract.OpDescribe},
-		Stdout: stdout, Stderr: stderr.Bytes(), ExitCode: code,
+		Stdout: stdout, Stderr: []byte(cap.Text(plugintrace.StreamStderr)), ExitCode: code,
 		Duration: time.Since(started), Err: err,
 	})
 	if err != nil {
-		if len(stderr.Bytes()) > 0 {
-			return out, fmt.Errorf("%w: %s", err, stderr.String())
+		if diag := cap.Text(plugintrace.StreamStderr); diag != "" {
+			return out, fmt.Errorf("%w: %s", err, diag)
 		}
 		return out, err
 	}

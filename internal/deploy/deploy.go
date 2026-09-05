@@ -186,7 +186,7 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	hostLock.Lock()
 	defer hostLock.Unlock()
 
-	out, run, err := runPlugin(ctx, installed.Path, req, logger,
+	run, err := runPlugin(ctx, installed.Path, req, logger,
 		"deployment", work.ID, "certificate", work.CertificateID,
 		"plugin", installed.ID, "plugin_version", installed.Version)
 	if err != nil {
@@ -199,8 +199,10 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 			PluginRun:     run,
 		}
 	}
+	// The exit status is the answer. There is no field a Plugin sets that could
+	// say otherwise, which is the whole reason the answer document went.
 	return wire.DeploymentResult{
-		OK:            out.OK,
+		OK:            run.ExitStatus == 0,
 		PluginVersion: installed.Version,
 		PluginRun:     run,
 	}
@@ -214,11 +216,10 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 // what comes back to the Server is the Plugin's own account of itself, so an
 // argument the Agent got wrong, or a Plugin failing before it printed anything,
 // leaves no evidence anywhere else.
-func runPlugin(ctx context.Context, path string, req plugincontract.InstallRequest, logger *slog.Logger, attrs ...any) (plugincontract.InstallResponse, *wire.PluginRun, error) {
-	var out plugincontract.InstallResponse
+func runPlugin(ctx context.Context, path string, req plugincontract.InstallRequest, logger *slog.Logger, attrs ...any) (*wire.PluginRun, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return out, nil, fmt.Errorf("encoding the install request: %w", err)
+		return nil, fmt.Errorf("encoding the install request: %w", err)
 	}
 
 	rctx, cancel := context.WithTimeout(ctx, runTimeout)
@@ -234,30 +235,43 @@ func runPlugin(ctx context.Context, path string, req plugincontract.InstallReque
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	started := time.Now()
-	stdout, stderr, code, runErr := runBounded(rctx, cmd)
+	captured, code, runErr := runBounded(rctx, cmd)
 	elapsed := time.Since(started)
 	plugintrace.Record(logger, plugintrace.Exchange{
 		Op: plugincontract.OpInstall, Path: path, Args: []string{plugincontract.OpInstall},
-		Stdin: body, Stdout: stdout.Bytes(), Stderr: stderr.Bytes(),
+		Stdin:    body,
+		Stdout:   []byte(captured.Text(plugintrace.StreamStdout)),
+		Stderr:   []byte(captured.Text(plugintrace.StreamStderr)),
 		ExitCode: code, Duration: elapsed, Err: runErr, Attrs: attrs,
 	})
-	// Reported whatever happened, including a run that was killed: the facts
-	// of the process are what explain a failure, and formatting them into a
-	// sentence is what used to make them unreadable.
+
+	// Reported whatever happened, including a run that was killed. Nothing here
+	// interprets what the Plugin wrote: there is no answer document to parse
+	// any more, the exit status is the answer, and the two streams are what it
+	// said while arriving at it.
 	run := &wire.PluginRun{
 		ExitStatus: code, DurationMs: elapsed.Milliseconds(),
-		Stdout: report(stdout.String()), Stderr: report(stderr.String()),
-		StdoutBytes: stdout.Produced(), StderrBytes: stderr.Produced(),
+		Output:      chunks(captured),
+		StdoutBytes: captured.Produced(plugintrace.StreamStdout),
+		StderrBytes: captured.Produced(plugintrace.StreamStderr),
 	}
-	if runErr != nil {
-		return out, run, runErr
+	return run, runErr
+}
+
+// chunks converts the capture to the wire's shape, redacting as it goes. A
+// Plugin that echoes its request or dumps its environment on failure is how a
+// private key reaches its own output, and this is the last point before that
+// output leaves the host.
+func chunks(c *plugintrace.Capture) []wire.OutputChunk {
+	recorded := c.Chunks()
+	if len(recorded) == 0 {
+		return nil
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
-		// A Plugin that answered with something unparseable failed. The bytes
-		// it did print are already on `run`, so this says only what went wrong.
-		return out, run, fmt.Errorf("the plugin's answer is not the JSON this contract expects: %w", err)
+	out := make([]wire.OutputChunk, 0, len(recorded))
+	for _, ch := range recorded {
+		out = append(out, wire.OutputChunk{Stream: ch.Stream, Text: report(ch.Text)})
 	}
-	return out, run, nil
+	return out
 }
 
 // runBounded runs cmd, killing its whole process group if the context expires.
@@ -265,13 +279,18 @@ func runPlugin(ctx context.Context, path string, req plugincontract.InstallReque
 // whether or not it succeeded, because the caller records the exchange either
 // way and a failed run is the one worth reading. Stderr is the Plugin's own
 // diagnostics and never goes to the Server; it explains a failure here.
-func runBounded(ctx context.Context, cmd *exec.Cmd) (stdout, stderr *plugintrace.LimitedBuffer, exitCode int, err error) {
-	stdout, stderr = &plugintrace.LimitedBuffer{Max: maxOutput}, &plugintrace.LimitedBuffer{Max: maxOutput}
-	cmd.Stdout = stdout
-	cmd.Stderr = stderr
+func runBounded(ctx context.Context, cmd *exec.Cmd) (captured *plugintrace.Capture, exitCode int, err error) {
+	captured = &plugintrace.Capture{Max: maxOutput}
+	stdout, stderr := captured.Writer(plugintrace.StreamStdout), captured.Writer(plugintrace.StreamStderr)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	defer func() {
+		// A command killed mid-line still wrote something worth reading.
+		stdout.Flush()
+		stderr.Flush()
+	}()
 
 	if startErr := cmd.Start(); startErr != nil {
-		return stdout, stderr, -1, fmt.Errorf("could not start the plugin: %w", startErr)
+		return captured, -1, fmt.Errorf("could not start the plugin: %w", startErr)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -284,14 +303,13 @@ func runBounded(ctx context.Context, cmd *exec.Cmd) (stdout, stderr *plugintrace
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 		<-done
-		return stdout, stderr, -1,
-			fmt.Errorf("the plugin did not finish within %s and was killed", runTimeout)
+		return captured, -1, fmt.Errorf("the plugin did not finish within %s and was killed", runTimeout)
 	case waitErr := <-done:
 		code := cmd.ProcessState.ExitCode()
 		if waitErr != nil {
-			return stdout, stderr, code, fmt.Errorf("the plugin exited with an error: %w", waitErr)
+			return captured, code, fmt.Errorf("the plugin exited with an error: %w", waitErr)
 		}
-		return stdout, stderr, code, nil
+		return captured, code, nil
 	}
 }
 
