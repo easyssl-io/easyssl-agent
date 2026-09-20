@@ -98,6 +98,12 @@ func (c *Client) RegistrationStatus(ctx context.Context, token string) (wire.Reg
 	return out, err
 }
 
+// ReportInventory PUTs the whole host inventory, replacing what the Server
+// holds for this Agent. Called only when a check-in answered ReportInventory.
+func (c *Client) ReportInventory(ctx context.Context, token string, inv wire.Inventory) error {
+	return c.do(ctx, http.MethodPut, wire.RouteAgentInventory, token, inv, nil)
+}
+
 // Unregister removes this Agent from its Organization, so an uninstalled host
 // disappears from the Server without the operator also removing it there.
 func (c *Client) Unregister(ctx context.Context, token string) error {

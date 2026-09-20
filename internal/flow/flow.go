@@ -37,8 +37,12 @@ const Version = "0.0.1"
 // one of them would leave the Server's record correct or stale depending on
 // which process happened to check in last, which is not a difference anything
 // would report.
-func CheckinBody() wire.CheckinRequest {
-	return wire.CheckinRequest{AgentVersion: Version, ProtocolVersion: wire.ProtocolVersion}
+//
+// inventoryFingerprint is the service's, over the host inventory it computed
+// for this check-in; the installer passes none, having computed no inventory,
+// and the Server then asks the service on its next check-in.
+func CheckinBody(inventoryFingerprint string) wire.CheckinRequest {
+	return wire.CheckinRequest{AgentVersion: Version, ProtocolVersion: wire.ProtocolVersion, InventoryFingerprint: inventoryFingerprint}
 }
 
 // Options configures a registration session.
@@ -203,7 +207,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 // Agent ID. status is "" (poll unused) when the Server could not be reached.
 func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (token, status string, poll int, err error) {
 	if token, err = identity.LoadToken(); err == nil {
-		resp, cerr := api.Checkin(ctx, token, CheckinBody())
+		resp, cerr := api.Checkin(ctx, token, CheckinBody(""))
 		switch {
 		case cerr == nil:
 			return token, resp.Status, resp.NextPollSeconds, nil

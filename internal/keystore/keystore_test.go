@@ -502,3 +502,31 @@ func TestEncodePrivateKeyPEMRoundTrips(t *testing.T) {
 		t.Error("the key did not survive the encode/decode round trip")
 	}
 }
+
+func TestListReportsUsableKeysOnly(t *testing.T) {
+	dir := t.TempDir()
+	oldBase, oldEuid := baseDir, euid
+	baseDir, euid = dir, func() int { return 0 }
+	t.Cleanup(func() { baseDir, euid = oldBase, oldEuid })
+
+	if keys, err := List(); err != nil || len(keys) != 0 {
+		t.Fatalf("empty keystore: %v, %v", keys, err)
+	}
+	key, err := Ensure("crt-aaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp, _ := fingerprint(key.Public())
+	// A misnamed key, which must be left out rather than reported as the key
+	// its name claims.
+	if err := os.WriteFile(filepath.Join(keysDir(), strings.Repeat("f", 64)+".key"), []byte("not a key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].Fingerprint != fp || keys[0].Algorithm != "ec_p256" || keys[0].CreatedAt.IsZero() {
+		t.Fatalf("List() = %+v, want the one usable key %s", keys, fp)
+	}
+}

@@ -40,9 +40,11 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
+	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
 // baseDir is where the keystore lives. A variable rather than a constant only so
@@ -212,6 +214,45 @@ func Count() (int, error) {
 		}
 	}
 	return n, nil
+}
+
+// List reports every key this host holds, by its public half, for the host
+// inventory: fingerprint, algorithm and when the file was created. Never the
+// key. A file that does not parse or whose content does not match its name is
+// logged and left out rather than listed as usable, since the inventory is
+// what the Server offers for reuse; a directory that cannot be read at all is
+// an error, so the caller sends no inventory rather than one saying the host
+// holds nothing.
+func List() ([]wire.KeyInfo, error) {
+	if err := requireRoot(); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(keysDir())
+	if errors.Is(err, os.ErrNotExist) {
+		return []wire.KeyInfo{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("keystore: listing keys: %w", err)
+	}
+	keys := make([]wire.KeyInfo, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".key" {
+			continue
+		}
+		fp := strings.TrimSuffix(e.Name(), ".key")
+		if _, err := loadKey(fp); err != nil {
+			logger().Warn("key left out of the inventory", "file", e.Name(), "err", err)
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			return nil, fmt.Errorf("keystore: %s: %w", e.Name(), err)
+		}
+		// Never modified after creation (a key is written once), so the
+		// modification time is the creation time on every filesystem.
+		keys = append(keys, wire.KeyInfo{Fingerprint: fp, Algorithm: "ec_p256", CreatedAt: info.ModTime().UTC()})
+	}
+	return keys, nil
 }
 
 // readRecord returns the record for a certificate, or found=false when this host

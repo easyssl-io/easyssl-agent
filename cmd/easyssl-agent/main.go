@@ -35,6 +35,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/deploy"
 	"github.com/easyssl-io/easyssl-agent/internal/flow"
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
+	"github.com/easyssl-io/easyssl-agent/internal/inventory"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
@@ -194,7 +195,20 @@ func cmdRun(ctx context.Context, args []string) error {
 
 	poll := 60
 	for {
-		resp, err := api.Checkin(ctx, token, flow.CheckinBody())
+		// The whole inventory, every check-in, so the fingerprint on the wire is
+		// always over what the host is now; the document itself goes only when
+		// the Server says it lacks it. A contributor that could not be read
+		// leaves the fingerprint empty, so the Server keeps its last document
+		// rather than receiving one with a hole where the failure was.
+		inv, invErr := inventory.Collect()
+		fingerprint := ""
+		if invErr != nil {
+			logger.Warn("host inventory not computed this check-in", "err", invErr)
+		} else if fingerprint, invErr = wire.InventoryFingerprint(inv); invErr != nil {
+			logger.Warn("host inventory not fingerprinted", "err", invErr)
+			fingerprint = ""
+		}
+		resp, err := api.Checkin(ctx, token, flow.CheckinBody(fingerprint))
 		if err == nil {
 			if !removedSince.IsZero() {
 				// Nothing recovers a revoked token by itself, so this only
@@ -220,6 +234,15 @@ func cmdRun(ctx context.Context, args []string) error {
 				}
 			}
 			poll = resp.NextPollSeconds
+			if resp.ReportInventory && fingerprint != "" {
+				if err := api.ReportInventory(ctx, token, inv); err != nil {
+					// The next check-in's fingerprint still disagrees with the
+					// Server's, so it asks again; nothing to retry here.
+					logger.Warn("host inventory not accepted", "err", err)
+				} else {
+					logger.Info("host inventory reported", "keys", len(inv.Keys))
+				}
+			}
 			if resp.Status == wire.StatusActive {
 				// Only now: every push-channel route refuses an Agent that is
 				// still awaiting authorization, exactly as the check-in does,
