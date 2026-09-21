@@ -70,7 +70,7 @@ var _ Plugins = (*pluginmgr.Manager)(nil)
 
 // loadKey is keystore.Load, indirected only so tests need no root and no real
 // keystore. Load never generates: a certificate whose key this host does not
-// hold cannot be installed here.
+// hold under the name the Server gave cannot be installed here.
 var loadKey = keystore.Load
 
 // New returns the handler for wire.CommandDeploy.
@@ -144,13 +144,21 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 			work.PluginID, err, work.PluginID))
 	}
 
-	key, err := loadKey(work.CertificateID)
+	// The key is the one the Server named, never one this host picks: the
+	// link between a certificate and its key is the Server's record, and a
+	// host holds only keys named by their own fingerprint.
+	if work.KeyFingerprint == "" {
+		return failed(installed.Version, fmt.Sprintf(
+			"the Server named no private key for %s, so nothing could install it. "+
+				"The Server is older than this Agent.", work.CertificateID))
+	}
+	key, err := loadKey(work.KeyFingerprint)
 	if err != nil {
 		if errors.Is(err, keystore.ErrNoKey) {
 			return failed(installed.Version, fmt.Sprintf(
-				"this host holds no private key for %s, so it cannot install it. "+
-					"A certificate is installable only by the Agent that generated its key.",
-				work.CertificateID))
+				"this host holds no private key %s for %s, so it cannot install it. "+
+					"A certificate is installable only by an Agent holding its key.",
+				work.KeyFingerprint, work.CertificateID))
 		}
 		return failed(installed.Version, fmt.Sprintf("reading the private key: %v", err))
 	}

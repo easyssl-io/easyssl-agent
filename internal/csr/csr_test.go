@@ -5,25 +5,29 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/easyssl-io/easyssl-contract/wire"
 
+	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 )
 
 const certificateID = "3f2b9c44-1a77-4ce0-8d21-0d5e8f6a4b72"
 
 // fakeAPI stands in for the Server wrapper. Keys still come from real keystore
-// code paths where possible: only Ensure is replaced (it requires root and a
-// filesystem), and with a per-certificate memoized key so idempotence is
-// observable.
+// code paths where possible: only Generate and Load are replaced (they require
+// root and a filesystem), with an in-memory keystore keyed by fingerprint so
+// what the Server named is observable.
 type fakeAPI struct {
 	work      wire.CSRWork
 	workErr   error
@@ -40,28 +44,55 @@ func (f *fakeAPI) SubmitCSR(_ context.Context, _, _, csrPEM string) error {
 	return f.submitErr
 }
 
-func memoizedEnsure(t *testing.T) func(string) (*ecdsa.PrivateKey, error) {
+// memoryKeystore stands in for the keystore: Generate mints a key and files it
+// under its fingerprint, Load returns what is filed there or ErrNoKey.
+func memoryKeystore(t *testing.T) {
 	t.Helper()
 	keys := map[string]*ecdsa.PrivateKey{}
-	return func(id string) (*ecdsa.PrivateKey, error) {
-		if k, ok := keys[id]; ok {
-			return k, nil
-		}
+	origGenerate, origLoad := generateKey, loadKey
+	generateKey = func() (string, *ecdsa.PrivateKey, error) {
 		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			t.Fatal(err)
 		}
-		keys[id] = k
-		return k, nil
+		der, err := x509.MarshalPKIXPublicKey(k.Public())
+		if err != nil {
+			t.Fatal(err)
+		}
+		sum := sha256.Sum256(der)
+		fp := hex.EncodeToString(sum[:])
+		keys[fp] = k
+		return fp, k, nil
 	}
+	loadKey = func(fp string) (*ecdsa.PrivateKey, error) {
+		if k, ok := keys[fp]; ok {
+			return k, nil
+		}
+		return nil, keystore.ErrNoKey
+	}
+	t.Cleanup(func() { generateKey, loadKey = origGenerate, origLoad })
 }
 
 func newHandler(t *testing.T, api *fakeAPI) func(context.Context, wire.Command) error {
 	t.Helper()
-	orig := ensureKey
-	ensureKey = memoizedEnsure(t)
-	t.Cleanup(func() { ensureKey = orig })
+	memoryKeystore(t)
 	return New(api, "esat_test", slog.New(slog.NewTextHandler(io.Discard, nil)))
+}
+
+// keyOf is the SPKI fingerprint of the key a PEM CSR was built from.
+func keyOf(t *testing.T, p string) string {
+	t.Helper()
+	block, _ := pem.Decode([]byte(p))
+	req, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKIXPublicKey(req.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(der)
+	return hex.EncodeToString(sum[:])
 }
 
 func work(domains ...string) wire.CSRWork {
@@ -110,16 +141,18 @@ func TestBuildsAndSubmitsAVerifiableCSR(t *testing.T) {
 	}
 }
 
-// A re-run after a crash is handed the same command again; the key must be the
-// one already generated, so the Server's stored CSR (from run one) matches what
-// run two would have sent.
-func TestReRunUsesTheSameKey(t *testing.T) {
+// A re-run after a crash is handed the same command again, and the work now
+// names the stored CSR's key: the build must use that key, not a fresh one,
+// so the Server's stored CSR (from run one) matches what run two would have
+// sent.
+func TestReRunUsesTheNamedKey(t *testing.T) {
 	api := &fakeAPI{work: work("app.example.test")}
 	h := newHandler(t, api)
 
 	if err := h(context.Background(), command()); err != nil {
 		t.Fatal(err)
 	}
+	api.work.KeyFingerprint = keyOf(t, api.submitted[0])
 	api.submitErr = &serverapi.APIError{Status: 409, Code: wire.CodeCSRAlreadySubmitted}
 	if err := h(context.Background(), command()); err != nil {
 		t.Fatalf("re-run = %v, want nil (already submitted is success)", err)
@@ -127,20 +160,39 @@ func TestReRunUsesTheSameKey(t *testing.T) {
 	if len(api.submitted) != 2 {
 		t.Fatalf("submitted %d CSRs, want 2", len(api.submitted))
 	}
-	key := func(p string) any {
-		block, _ := pem.Decode([]byte(p))
-		req, err := x509.ParseCertificateRequest(block.Bytes)
-		if err != nil {
-			t.Fatal(err)
-		}
-		der, err := x509.MarshalPKIXPublicKey(req.PublicKey)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return string(der)
-	}
-	if key(api.submitted[0]) != key(api.submitted[1]) {
+	if keyOf(t, api.submitted[0]) != keyOf(t, api.submitted[1]) {
 		t.Fatal("re-run built a CSR from a different key")
+	}
+}
+
+// Work naming no key gets a fresh one each run: the keystore knows no
+// certificate, so two runs of the same command are two keys. Nothing is
+// signed with the first, so it is an orphan the inventory lists, not a bug.
+func TestUnnamedKeyIsFreshEachRun(t *testing.T) {
+	api := &fakeAPI{work: work("app.example.test")}
+	h := newHandler(t, api)
+	for range 2 {
+		if err := h(context.Background(), command()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if keyOf(t, api.submitted[0]) == keyOf(t, api.submitted[1]) {
+		t.Fatal("two runs with no key named reused one key")
+	}
+}
+
+// A named key this host does not hold is never replaced: no CSR is built, and
+// the command stays pending so its expiry fails the certificate naming this
+// Agent rather than the Server receiving a CSR from a key it did not ask for.
+func TestNamedKeyAbsentBuildsNothing(t *testing.T) {
+	api := &fakeAPI{work: work("app.example.test")}
+	api.work.KeyFingerprint = strings.Repeat("0", 64)
+	h := newHandler(t, api)
+	if err := h(context.Background(), command()); !errors.Is(err, keystore.ErrNoKey) {
+		t.Fatalf("handler = %v, want ErrNoKey (left pending)", err)
+	}
+	if len(api.submitted) != 0 {
+		t.Fatal("a CSR was submitted from a key the Server did not name")
 	}
 }
 
@@ -196,9 +248,9 @@ func TestUnperformableWorkIsAckedWithoutSubmitting(t *testing.T) {
 
 func TestKeystoreTroubleLeavesTheCommandPending(t *testing.T) {
 	api := &fakeAPI{work: work("app.example.test")}
-	orig := ensureKey
-	ensureKey = func(string) (*ecdsa.PrivateKey, error) { return nil, errors.New("disk full") }
-	t.Cleanup(func() { ensureKey = orig })
+	orig := generateKey
+	generateKey = func() (string, *ecdsa.PrivateKey, error) { return "", nil, errors.New("disk full") }
+	t.Cleanup(func() { generateKey = orig })
 	h := New(api, "esat_test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := h(context.Background(), command()); err == nil {
 		t.Fatal("keystore failure: handler = nil, want error (retry until the command expires)")

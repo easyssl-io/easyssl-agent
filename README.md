@@ -184,13 +184,15 @@ key to store and none to lose.
 
 ```text
 /etc/easyssl/keys/<fingerprint>.key    the key, PKCS#8 PEM, ECDSA P-256
-/etc/easyssl/certs/<certificate>.json  names the key that certificate uses
 ```
 
 A key is named by the SHA-256 of its own public key, so the directory can be
 checked against itself and one key can serve several certificates without the
-secret being copied. Both directories are `0700`, the files are `0600`, and
-everything is owned by root. Nothing about the format is specific to easySSL:
+secret being copied. Which certificate uses which key is the Server's record,
+taken from the public key of each signing request it accepts, and every
+request or deployment names the key it is about; the host keeps no copy of that
+link. The directory is `0700`, the files are `0600`, and everything is owned by
+root. Nothing about the format is specific to easySSL:
 
 ```bash
 sudo openssl pkey -in /etc/easyssl/keys/<fingerprint>.key -noout -text
@@ -222,8 +224,8 @@ web console.
 
 **Private keys are not deleted, and uninstall says so.** They are the only copy
 on this host, and an uninstall is too ordinary a command to destroy something
-unrecoverable, so `/etc/easyssl/keys/` and `/etc/easyssl/certs/` survive it and
-the command reports how many keys remain. If the machine is being
+unrecoverable, so `/etc/easyssl/keys/` survives it and the command reports how
+many keys remain. If the machine is being
 decommissioned, delete that directory by hand; if certificates using those keys
 are still in service, keep a copy first.
 
