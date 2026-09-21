@@ -1,12 +1,11 @@
-// Package pluginmgr installs Plugins on this host and tells the Server what is
-// installed. Nothing is bundled into the Agent binary: a Plugin is fetched
-// from the Server's Marketplace on demand, placed under InstallDir, asked to
-// describe itself, and reported.
-//
-// The report is what makes a Plugin configurable from the web console without
-// anything ever querying this host: the Server keeps the declaration and
-// resolves every value from it, so a Plugin nobody published is as configurable
-// as one that was.
+// Package pluginmgr installs Plugins on this host and asks each what it is and
+// what it sees. Nothing is bundled into the Agent binary: a Plugin is fetched
+// from the Server's Marketplace on demand and placed under InstallDir, and
+// that directory is the whole record of what is installed. Everything else
+// about a Plugin, its version, its declarations and the installation points it
+// found, is what the executable answers to discover, asked afresh on every
+// check-in and carried to the Server in the host inventory; the Agent keeps
+// no copy, because a copy is what goes stale and is then reported as fact.
 package pluginmgr
 
 import (
@@ -31,50 +30,37 @@ import (
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-// InstallDir is where Plugin executables live on the host, and RecordPath is
-// the Agent's own record of what it put there. Both are root-owned: a Plugin
-// is executed by the Agent, which runs as root, so anything that could write
-// here could run code as root.
-const (
-	InstallDir = "/var/lib/easyssl/plugins"
-	RecordPath = "/etc/easyssl/plugins.json"
-)
+// InstallDir is where Plugin executables live on the host. Root-owned: a
+// Plugin is executed by the Agent, which runs as root, so anything that could
+// write here could run code as root.
+const InstallDir = "/var/lib/easyssl/plugins"
 
 // maxArtifact bounds a download. A plugin is a static Go binary of a few
 // megabytes; this is generous while refusing to write an unbounded stream to
 // the host's disk.
 const maxArtifact = 128 << 20
 
-// describeTimeout bounds the one call made at install time. `describe` reads
-// nothing and computes nothing, so a Plugin that has not answered in this long
-// is not going to.
-const describeTimeout = 30 * time.Second
+// discoverTimeout bounds one discover execution. It runs on every check-in and
+// must be shorter than the check-in interval, or a hung Plugin (an `nginx -t`
+// stuck on a broken host) would delay the check-in it rides on and the Agent
+// would go Offline for a reason nothing names. A Plugin that exceeds it is
+// reported as present but unobserved this run.
+const discoverTimeout = 10 * time.Second
 
 // validPluginID is the Plugin naming rule, matching what the Server accepts on
 // the report route. It is checked before the name reaches a file path, so a
 // catalog entry cannot name a file outside InstallDir.
 var validPluginID = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$`)
 
-// Installed is one Plugin this host has, as recorded by the Agent.
+// Installed is one Plugin executable on this host, as it is now.
 type Installed struct {
-	ID      string `json:"id"`
-	Version string `json:"version"`
-	// Digest is the SHA-256 of the artifact as downloaded, recorded from the
-	// catalog entry it came from and verified against the bytes received.
-	Digest      string    `json:"digest"`
-	InstalledAt time.Time `json:"installedAt"`
-	Path        string    `json:"path"`
-}
-
-// Record is the Agent's list of installed Plugins.
-type Record struct {
-	Plugins []Installed `json:"plugins"`
-}
-
-// Reporter is the Server call this package makes: what was installed, with the
-// declaration the Plugin gave for itself.
-type Reporter interface {
-	ReportPlugin(ctx context.Context, token, pluginID string, rep wire.PluginReport) error
+	ID string `json:"id"`
+	// Version is what the executable answered to discover, empty when it did
+	// not answer.
+	Version string `json:"version,omitempty"`
+	// Digest is the SHA-256 of the executable as it is on disk now.
+	Digest string `json:"digest"`
+	Path   string `json:"path"`
 }
 
 // Catalog is the Marketplace read. Separate from Reporter because the catalog
@@ -84,33 +70,33 @@ type Catalog interface {
 	Download(ctx context.Context, url string) (io.ReadCloser, error)
 }
 
-// Manager installs and lists Plugins.
+// Manager installs, lists and discovers Plugins.
 type Manager struct {
-	catalog  Catalog
-	reporter Reporter
-	// installDir and recordPath are fields rather than the constants directly
-	// so a test can work somewhere it may write.
+	catalog Catalog
+	// installDir is a field rather than the constant so a test can work
+	// somewhere it may write.
 	installDir string
-	recordPath string
-	// runDescribe executes a Plugin's describe operation. A field so a test can
-	// exercise the flow without a real binary; production runs the executable.
-	runDescribe func(ctx context.Context, path string) (plugincontract.DescribeResponse, error)
+	logger     *slog.Logger
+	// runDiscover executes a Plugin's discover operation. A field so a test
+	// can exercise the flow without a real binary; production runs the
+	// executable.
+	runDiscover func(ctx context.Context, path string) (plugincontract.DiscoverResponse, error)
 }
 
-// New builds a Manager writing to the host's real locations. logger may be nil,
-// and is for a caller that only lists what is installed: describing a Plugin
-// runs one, and that exchange is the thing worth being able to see.
-func New(catalog Catalog, reporter Reporter, logger *slog.Logger) *Manager {
+// New builds a Manager over the host's real Plugin directory. catalog may be
+// nil for a caller that only lists or discovers; logger may be nil.
+func New(catalog Catalog, logger *slog.Logger) *Manager {
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	return &Manager{
-		catalog: catalog, reporter: reporter,
-		installDir: InstallDir, recordPath: RecordPath,
-		runDescribe: func(ctx context.Context, path string) (plugincontract.DescribeResponse, error) {
-			return describeByExec(ctx, path, logger)
+		catalog: catalog, installDir: InstallDir, logger: logger,
+		runDiscover: func(ctx context.Context, path string) (plugincontract.DiscoverResponse, error) {
+			return discoverByExec(ctx, path, logger)
 		},
 	}
 }
 
-// ErrNotInCatalog: the Server's Marketplace does not offer this Plugin.
 var ErrNotInCatalog = errors.New("pluginmgr: the Server's Marketplace does not offer this plugin")
 
 // ErrNoArtifact: the Plugin is offered but not for this host's platform.
@@ -128,14 +114,14 @@ func (e DigestMismatchError) Error() string {
 	return fmt.Sprintf("pluginmgr: %s downloaded as %s but the catalog published %s", e.PluginID, e.Got, e.Want)
 }
 
-// Install fetches a Plugin, places it, asks it to describe itself, records what
-// went in, and reports it to the Server.
+// Install fetches a Plugin, verifies it against the catalog, places it, and
+// asks it to discover once so an artifact that cannot answer as the Plugin it
+// was fetched as is refused now rather than reported unobserved later.
 //
-// The order matters. `describe` runs against the file that was actually
-// installed rather than against the catalog, so the version reported is the one
-// the host will run; and the report is last, so the Server never learns of a
-// Plugin that failed to land.
-func (m *Manager) Install(ctx context.Context, token, pluginID, goos, goarch string) (Installed, error) {
+// Nothing is recorded and nothing is reported from here: the executable on
+// disk is the record, and the host inventory the caller sends next is the
+// report, which asks every Plugin, this one included.
+func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (Installed, error) {
 	if !validPluginID.MatchString(pluginID) {
 		return Installed{}, fmt.Errorf("pluginmgr: %q is not a valid plugin name", pluginID)
 	}
@@ -167,65 +153,93 @@ func (m *Manager) Install(ctx context.Context, token, pluginID, goos, goarch str
 		return Installed{}, DigestMismatchError{PluginID: pluginID, Want: artifact.Digest, Got: digest}
 	}
 
-	dctx, cancel := context.WithTimeout(ctx, describeTimeout)
+	dctx, cancel := context.WithTimeout(ctx, discoverTimeout)
 	defer cancel()
-	desc, err := m.runDescribe(dctx, path)
+	desc, err := m.runDiscover(dctx, path)
 	if err != nil {
 		_ = os.Remove(path)
-		return Installed{}, fmt.Errorf("the plugin did not describe itself, so it was not installed: %w", err)
+		return Installed{}, fmt.Errorf("the plugin did not answer discover, so it was not installed: %w", err)
 	}
 	if desc.Name != "" && desc.Name != pluginID {
 		_ = os.Remove(path)
 		return Installed{}, fmt.Errorf("pluginmgr: the artifact for %q calls itself %q", pluginID, desc.Name)
 	}
-	// Refused here as well as by the Server, and here first, because this is
-	// where a Plugin's author finds out. A declaration set the Server rejects
-	// after the artifact is already on the host leaves a Plugin installed and
-	// unreported, which is worse than not installing it.
-	if err := plugincontract.ValidateSettings(desc.Settings); err != nil {
+	if err := plugincontract.ValidateDiscover(desc); err != nil {
 		_ = os.Remove(path)
-		return Installed{}, fmt.Errorf("the plugin's settings are not usable, so it was not installed: %w", err)
+		return Installed{}, fmt.Errorf("the plugin's answer is not usable, so it was not installed: %w", err)
 	}
-
-	inst := Installed{
-		ID: pluginID, Version: desc.Version, Digest: digest,
-		InstalledAt: time.Now().UTC(), Path: path,
-	}
-	if err := m.record(inst); err != nil {
-		return Installed{}, fmt.Errorf("recording the installation: %w", err)
-	}
-	if err := m.reporter.ReportPlugin(ctx, token, pluginID, wire.PluginReport{
-		Version:      desc.Version,
-		Digest:       digest,
-		Description:  desc.Description,
-		Declarations: desc.Settings,
-	}); err != nil {
-		// Installed but unreported: the host has the Plugin and the Server does
-		// not know, which the next install or check-in can correct. Say so
-		// rather than implying nothing happened.
-		return inst, fmt.Errorf("installed, but reporting it to the Server failed: %w", err)
-	}
-	return inst, nil
+	return Installed{ID: pluginID, Version: desc.Version, Digest: digest, Path: path}, nil
 }
 
-// List reads what this host recorded as installed. It reports what the Agent
-// put there, not what is on disk: a file someone dropped into the install
-// directory by hand was never installed by anything and is not a Plugin this
-// Agent will run.
+// List is the installed set: every executable in the Plugin directory, with
+// the digest of its bytes now. Versions are not filled here, since that means
+// running each Plugin; Discover does that.
 func (m *Manager) List() ([]Installed, error) {
-	rec, err := m.load()
+	entries, err := os.ReadDir(m.installDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return []Installed{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("pluginmgr: listing %s: %w", m.installDir, err)
+	}
+	out := make([]Installed, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !validPluginID.MatchString(e.Name()) {
+			continue
+		}
+		path := filepath.Join(m.installDir, e.Name())
+		digest, err := fileDigest(path)
+		if err != nil {
+			return nil, fmt.Errorf("pluginmgr: %s: %w", path, err)
+		}
+		out = append(out, Installed{ID: e.Name(), Digest: digest, Path: path})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// Discover runs every installed Plugin's discover under the timeout and
+// returns what the host inventory carries for each (S2 FR-026): the digest of
+// the bytes on disk and the answer, or, when a Plugin exits non-zero, times
+// out or answers something unusable, the Plugin as present but unobserved
+// with a warning naming the failure. A Plugin's failure to answer is not this
+// method's failure: the inventory must still say the Plugin is there, or it
+// would look uninstalled. Only the directory being unreadable is an error,
+// since then nothing can be said about any Plugin and a report must not claim
+// the host has none.
+func (m *Manager) Discover(ctx context.Context) ([]wire.PluginInventory, error) {
+	installed, err := m.List()
 	if err != nil {
 		return nil, err
 	}
-	sort.Slice(rec.Plugins, func(i, j int) bool { return rec.Plugins[i].ID < rec.Plugins[j].ID })
-	return rec.Plugins, nil
+	out := make([]wire.PluginInventory, 0, len(installed))
+	for _, p := range installed {
+		entry := wire.PluginInventory{ID: p.ID, Digest: p.Digest}
+		dctx, cancel := context.WithTimeout(ctx, discoverTimeout)
+		desc, err := m.runDiscover(dctx, p.Path)
+		cancel()
+		if err == nil && desc.Name != "" && desc.Name != p.ID {
+			err = fmt.Errorf("the executable calls itself %q", desc.Name)
+		}
+		if err == nil {
+			err = plugincontract.ValidateDiscover(desc)
+		}
+		if err != nil {
+			entry.Unobserved = true
+			entry.Warnings = []string{fmt.Sprintf("`discover` produced nothing this run: %v", err)}
+			m.logger.Warn("plugin unobserved", "plugin", p.ID, "err", err)
+		} else {
+			entry.Version, entry.Description = desc.Version, desc.Description
+			entry.Declarations, entry.SuggestedTargets, entry.Warnings = desc.Settings, desc.SuggestedTargets, desc.Warnings
+			if entry.Declarations == nil {
+				entry.Declarations = []plugincontract.SettingDeclaration{}
+			}
+		}
+		out = append(out, entry)
+	}
+	return out, nil
 }
 
-// fetchTo downloads url to path (0755, root-owned by virtue of the Agent
-// running as root) and returns the SHA-256 of what was written. It writes to a
-// temporary file in the same directory and renames, so a failed download never
-// half-replaces a working Plugin and an upgrade of a Plugin currently running
-// cannot hit ETXTBSY.
 func (m *Manager) fetchTo(ctx context.Context, url, path string) (string, error) {
 	if err := os.MkdirAll(m.installDir, 0o755); err != nil {
 		return "", err
@@ -262,65 +276,19 @@ func (m *Manager) fetchTo(ctx context.Context, url, path string) (string, error)
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// record adds or replaces this Plugin's entry. One entry per Plugin: a new
-// version replaces the row rather than adding a second, matching what the
-// Server stores.
-func (m *Manager) record(inst Installed) error {
-	rec, err := m.load()
-	if err != nil {
-		return err
-	}
-	replaced := false
-	for i := range rec.Plugins {
-		if rec.Plugins[i].ID == inst.ID {
-			rec.Plugins[i] = inst
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		rec.Plugins = append(rec.Plugins, inst)
-	}
-	if err := os.MkdirAll(filepath.Dir(m.recordPath), 0o700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(rec, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(m.recordPath, append(data, '\n'), 0o600)
-}
-
-// load reads the record, treating an absent file as an empty one: a host that
-// has installed nothing is not an error.
-func (m *Manager) load() (Record, error) {
-	var rec Record
-	data, err := os.ReadFile(m.recordPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return rec, nil
-	}
-	if err != nil {
-		return rec, err
-	}
-	if err := json.Unmarshal(data, &rec); err != nil {
-		return rec, fmt.Errorf("%s is not readable as a plugin record: %w", m.recordPath, err)
-	}
-	return rec, nil
-}
-
-// describeByExec runs the Plugin's describe operation the way every operation
+// discoverByExec runs the Plugin's discover operation the way every operation
 // runs: the name on argv, JSON on stdout. Nothing is written to its stdin,
-// describe taking no request.
+// discover taking no request.
 //
 // Recorded through plugintrace like an install, and worth it for the same
 // reason: what a build declares about itself is where a Plugin under
 // development most often disagrees with what it meant to declare, and nothing
 // else on the host shows the answer it actually gave.
-func describeByExec(ctx context.Context, path string, logger *slog.Logger) (plugincontract.DescribeResponse, error) {
-	var out plugincontract.DescribeResponse
+func discoverByExec(ctx context.Context, path string, logger *slog.Logger) (plugincontract.DiscoverResponse, error) {
+	var out plugincontract.DiscoverResponse
 	// #nosec G204 -- path is InstallDir joined with a name matched against
 	// validPluginID, so it names a file this Agent just wrote.
-	cmd := exec.CommandContext(ctx, path, plugincontract.OpDescribe)
+	cmd := exec.CommandContext(ctx, path, plugincontract.OpDiscover)
 	// Bounded like the install path's. A Plugin describing itself is the same
 	// arbitrary code, and an unbounded buffer here meant one that flooded
 	// stderr was limited by nothing but this Agent's memory.
@@ -335,7 +303,7 @@ func describeByExec(ctx context.Context, path string, logger *slog.Logger) (plug
 		code = cmd.ProcessState.ExitCode()
 	}
 	plugintrace.Record(logger, plugintrace.Exchange{
-		Op: plugincontract.OpDescribe, Path: path, Args: []string{plugincontract.OpDescribe},
+		Op: plugincontract.OpDiscover, Path: path, Args: []string{plugincontract.OpDiscover},
 		Stdout: stdout, Stderr: []byte(cap.Text(plugintrace.StreamStderr)), ExitCode: code,
 		Duration: time.Since(started), Err: err,
 	})
@@ -346,7 +314,7 @@ func describeByExec(ctx context.Context, path string, logger *slog.Logger) (plug
 		return out, err
 	}
 	if err := json.Unmarshal(stdout, &out); err != nil {
-		return out, fmt.Errorf("the plugin's describe output is not JSON: %w", err)
+		return out, fmt.Errorf("the plugin's discover output is not JSON: %w", err)
 	}
 	return out, nil
 }
@@ -444,20 +412,42 @@ func (c HTTPCatalog) Download(ctx context.Context, url string) (io.ReadCloser, e
 	return res.Body, nil
 }
 
-// Find returns the installed Plugin with this id, or false. It reads the
-// Agent's own record rather than the directory: a file someone dropped into
-// the install directory by hand was never installed by anything, and running it
-// because the name matched is how a host ends up executing something nobody
-// fetched.
+// Find reports whether a Plugin executable is on this host, with the digest
+// of its bytes and the version it answers now, which a Deployment records.
 func (m *Manager) Find(id string) (Installed, bool, error) {
-	rec, err := m.load()
+	if !validPluginID.MatchString(id) {
+		return Installed{}, false, nil
+	}
+	path := filepath.Join(m.installDir, id)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return Installed{}, false, nil
+	} else if err != nil {
+		return Installed{}, false, err
+	}
+	digest, err := fileDigest(path)
 	if err != nil {
 		return Installed{}, false, err
 	}
-	for _, p := range rec.Plugins {
-		if p.ID == id {
-			return p, true, nil
-		}
+	inst := Installed{ID: id, Digest: digest, Path: path}
+	ctx, cancel := context.WithTimeout(context.Background(), discoverTimeout)
+	defer cancel()
+	if desc, err := m.runDiscover(ctx, path); err == nil {
+		inst.Version = desc.Version
 	}
-	return Installed{}, false, nil
+	return inst, true, nil
+}
+
+// fileDigest is the SHA-256 of a file, lowercase hex, the same form the
+// catalog publishes and the Server compares against.
+func fileDigest(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

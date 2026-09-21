@@ -8,9 +8,8 @@
 // a Plugin artifact, issued from three call sites. Both of its construction
 // sites in cmd/easyssl-agent leave the HTTP field unset, so those requests run
 // on the process-wide http.DefaultClient and carry no timeout, and they would
-// go unrecorded. The rest of pluginmgr does come through here; it reports an
-// installed Plugin with ReportPlugin. The wrapper cannot be described as
-// complete until those three call sites move here. Standard library only, so
+// go unrecorded. The wrapper cannot be described as complete until those three
+// call sites move here. Standard library only, so
 // the Agent stays small and auditable.
 //
 // Those three call sites now miss something else as well: the transport policy
@@ -268,14 +267,6 @@ func (c *Client) CSRWork(ctx context.Context, token, certificateID string) (wire
 func (c *Client) SubmitCSR(ctx context.Context, token, certificateID, csrPEM string) error {
 	path := "/api/v1/agent/certificates/" + url.PathEscape(certificateID) + "/csr"
 	return c.do(ctx, http.MethodPost, path, token, wire.CSRSubmission{CSR: csrPEM}, nil)
-}
-
-// ReportPlugin tells the Server what this Agent installed: the version, the
-// artifact digest, and the settings the Plugin declares for itself. The Server
-// answers every later question from this record, so nothing ever queries the
-// host.
-func (c *Client) ReportPlugin(ctx context.Context, token, pluginID string, rep wire.PluginReport) error {
-	return c.do(ctx, http.MethodPut, "/api/v1/agent/plugins/"+pluginID, token, rep, nil)
 }
 
 // DeploymentWork reads what a deploy command refers to: the certificate, the

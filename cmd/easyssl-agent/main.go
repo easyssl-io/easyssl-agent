@@ -173,9 +173,10 @@ func cmdRun(ctx context.Context, args []string) error {
 	keystore.SetLogger(logger)
 	// A command type with no handler here is reported unsupported, which is
 	// also what an Agent older than its Server does.
+	plugins := pluginmgr.New(nil, logger)
 	runner := commands.NewRunner(api, token, logger, map[string]commands.Handler{
 		wire.CommandRequestCSR: csr.New(api, token, logger),
-		wire.CommandDeploy:     deploy.New(api, pluginmgr.New(nil, nil, logger), token, logger),
+		wire.CommandDeploy:     deploy.New(api, plugins, token, logger),
 	})
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -200,7 +201,7 @@ func cmdRun(ctx context.Context, args []string) error {
 		// the Server says it lacks it. A contributor that could not be read
 		// leaves the fingerprint empty, so the Server keeps its last document
 		// rather than receiving one with a hole where the failure was.
-		inv, invErr := inventory.Collect()
+		inv, invErr := inventory.Collect(ctx, plugins)
 		fingerprint := ""
 		if invErr != nil {
 			logger.Warn("host inventory not computed this check-in", "err", invErr)
@@ -240,7 +241,7 @@ func cmdRun(ctx context.Context, args []string) error {
 					// Server's, so it asks again; nothing to retry here.
 					logger.Warn("host inventory not accepted", "err", err)
 				} else {
-					logger.Info("host inventory reported", "keys", len(inv.Keys))
+					logger.Info("host inventory reported", "plugins", len(inv.Plugins), "keys", len(inv.Keys))
 				}
 			}
 			if resp.Status == wire.StatusActive {
@@ -575,40 +576,53 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	mgr := pluginmgr.New(
-		pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL},
-		api,
-		agentLogger(),
-	)
+	mgr := pluginmgr.New(pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL}, agentLogger())
 	// The host's own platform: an Agent installs for the machine it runs on,
 	// never for another, so there is no flag to get this wrong.
 	out := make([]pluginmgr.Installed, 0, len(names))
+	var installErr error
 	for _, name := range names {
-		inst, ierr := mgr.Install(ctx, token, name, runtime.GOOS, runtime.GOARCH)
+		inst, ierr := mgr.Install(ctx, name, runtime.GOOS, runtime.GOARCH)
 		if ierr != nil {
 			// Whatever was installed before this one stays installed and is
 			// reported, so a partial run says what it did rather than only
 			// what it could not do.
-			if !*asJSON {
-				printInstalled(out, cfg.ServerURL)
-			}
-			return ierr
+			installErr = ierr
+			break
 		}
 		out = append(out, inst)
 	}
-	if *asJSON {
-		return json.NewEncoder(os.Stdout).Encode(out)
+	// The Server learns of the install from the host inventory, and the
+	// service would send it on its next check-in; sending it from here makes
+	// the web console current within one round trip of the command rather than
+	// one cadence. Best-effort: a failure leaves the service's next check-in
+	// disagreeing with the Server, which then asks for the document.
+	reported := ""
+	if len(out) > 0 {
+		if inv, err := inventory.Collect(ctx, mgr); err != nil {
+			reported = fmt.Sprintf("not yet (%v); the service reports on its next check-in", err)
+		} else if err := api.ReportInventory(ctx, token, inv); err != nil {
+			reported = fmt.Sprintf("not yet (%v); the service reports on its next check-in", err)
+		} else {
+			reported = "to " + cfg.ServerURL
+		}
 	}
-	printInstalled(out, cfg.ServerURL)
-	return nil
+	if *asJSON {
+		if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
+			return err
+		}
+		return installErr
+	}
+	printInstalled(out, reported)
+	return installErr
 }
 
-func printInstalled(out []pluginmgr.Installed, serverURL string) {
+func printInstalled(out []pluginmgr.Installed, reported string) {
 	for _, inst := range out {
 		fmt.Printf("installed  %s v%s\n", inst.ID, inst.Version)
 		fmt.Printf("path       %s\n", inst.Path)
 		fmt.Printf("digest     sha256:%s\n", inst.Digest)
-		fmt.Printf("reported   to %s\n", serverURL)
+		fmt.Printf("reported   %s\n", reported)
 	}
 }
 
@@ -672,8 +686,9 @@ func cmdPluginList(args []string) error {
 	asJSON := fs.Bool("json", false, "print JSON")
 	_ = fs.Parse(args)
 
-	mgr := pluginmgr.New(nil, nil, nil)
-	installed, err := mgr.List()
+	// What the host inventory would carry now: the executables on disk and
+	// what each answers, since that is the only record there is.
+	installed, err := pluginmgr.New(nil, nil).Discover(context.Background())
 	if err != nil {
 		return err
 	}
@@ -690,6 +705,9 @@ func cmdPluginList(args []string) error {
 	return nil
 }
 
-func pluginListLine(p pluginmgr.Installed) string {
+func pluginListLine(p wire.PluginInventory) string {
+	if p.Unobserved {
+		return fmt.Sprintf("%-16s %-11s sha256:%s  (did not answer discover)", p.ID, "?", p.Digest)
+	}
 	return fmt.Sprintf("%-16s v%-10s sha256:%s", p.ID, p.Version, p.Digest)
 }

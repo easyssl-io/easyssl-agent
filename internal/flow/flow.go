@@ -426,7 +426,7 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 // nothing is left to invoke it, but it is still there and someone
 // decommissioning the machine should know rather than discover it.
 func reportPluginsLeftBehind() {
-	installed, err := pluginmgr.New(nil, nil, nil).List()
+	installed, err := pluginmgr.New(nil, nil).List()
 	switch {
 	case err != nil:
 		fmt.Printf("\n! Plugins may remain in %s and were NOT deleted (listing them failed: %v).\n",
@@ -437,7 +437,7 @@ func reportPluginsLeftBehind() {
 		fmt.Printf("\n! %d Plugin executable(s) remain in %s and were NOT deleted:\n",
 			len(installed), pluginmgr.InstallDir)
 		for _, p := range installed {
-			fmt.Printf("    %s v%s\n", p.ID, p.Version)
+			fmt.Printf("    %s\n", p.Path)
 		}
 		fmt.Println("  Delete that directory by hand if this host is being decommissioned.")
 	}

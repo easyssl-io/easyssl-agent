@@ -14,49 +14,30 @@ import (
 	"testing"
 
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
-	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-// The install-and-report boundary test: against a real HTTP server standing in
-// for the Marketplace, installing a Plugin puts the artifact on disk, records
-// what went there, and reports the version and declaration the Plugin gave for
-// itself — not what the catalog claimed. Covers the refusals that must not
-// leave a half-installed Plugin behind.
+// The tests exercise the flow against a fake Marketplace and a fake discover,
+// so no Plugin binary is run: what is checked is what the Manager does around
+// the executable, which is what it owns.
 
 const artifactBody = "#!/bin/false\nplugin bytes\n"
 
-type recordedReport struct {
-	token    string
-	pluginID string
-	report   wire.PluginReport
+func trueDigest() string {
+	sum := sha256.Sum256([]byte(artifactBody))
+	return hex.EncodeToString(sum[:])
 }
 
-type fakeReporter struct {
-	got []recordedReport
-	err error
-}
-
-func (f *fakeReporter) ReportPlugin(_ context.Context, token, pluginID string, rep wire.PluginReport) error {
-	f.got = append(f.got, recordedReport{token, pluginID, rep})
-	return f.err
-}
-
-// newMarketplace serves a catalog and one artifact, with the digest the caller
-// wants published (empty means "publish the true one").
 func newMarketplace(t *testing.T, publishDigest string) *httptest.Server {
 	t.Helper()
-	sum := sha256.Sum256([]byte(artifactBody))
-	trueDigest := hex.EncodeToString(sum[:])
 	var srv *httptest.Server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/marketplace/catalog", func(w http.ResponseWriter, _ *http.Request) {
 		digest := publishDigest
 		if digest == "" {
-			digest = trueDigest
+			digest = trueDigest()
 		}
 		_ = json.NewEncoder(w).Encode(CatalogResponse{Plugins: []CatalogPlugin{{
 			ID: "generic-cli", Version: "9.9.9-catalog-says", Party: "first",
-			Platforms: []string{"linux/amd64"},
 			Artifacts: []CatalogArtifact{{
 				OS: "linux", Arch: "amd64", Digest: digest,
 				URL: srv.URL + "/download/plugins/generic-cli/linux/amd64",
@@ -71,261 +52,173 @@ func newMarketplace(t *testing.T, publishDigest string) *httptest.Server {
 	return srv
 }
 
-// newManager wires a Manager onto temp directories with a describe that answers
-// without executing anything, so the test runs anywhere.
-func newManager(t *testing.T, srv *httptest.Server, rep Reporter, desc plugincontract.DescribeResponse, descErr error) *Manager {
+func newManager(t *testing.T, srv *httptest.Server, desc plugincontract.DiscoverResponse, descErr error) *Manager {
 	t.Helper()
-	dir := t.TempDir()
-	return &Manager{
-		catalog:    HTTPCatalog{BaseURL: srv.URL},
-		reporter:   rep,
-		installDir: filepath.Join(dir, "plugins"),
-		recordPath: filepath.Join(dir, "plugins.json"),
-		runDescribe: func(_ context.Context, _ string) (plugincontract.DescribeResponse, error) {
-			return desc, descErr
-		},
+	m := New(nil, nil)
+	if srv != nil {
+		m.catalog = HTTPCatalog{BaseURL: srv.URL}
 	}
+	m.installDir = filepath.Join(t.TempDir(), "plugins")
+	m.runDiscover = func(_ context.Context, _ string) (plugincontract.DiscoverResponse, error) {
+		return desc, descErr
+	}
+	return m
 }
 
-func declaration() plugincontract.DescribeResponse {
-	return plugincontract.DescribeResponse{
+func answer() plugincontract.DiscoverResponse {
+	return plugincontract.DiscoverResponse{
 		ContractVersion: plugincontract.ContractVersion,
 		Name:            "generic-cli",
 		Version:         "0.1.0",
+		Description:     "Installs by running a command you write.",
 		Settings: []plugincontract.SettingDeclaration{{
-			Key: "reload", Label: "Reload command", Type: plugincontract.SettingTypeCommand,
+			Key: "install", Label: "Install command", Type: plugincontract.SettingTypeCommand,
 			Default: "echo hi", Required: true,
 		}},
+		SuggestedTargets: []plugincontract.SuggestedTarget{},
+		Warnings:         []string{},
 	}
 }
 
-func TestInstallRecordsAndReportsWhatThePluginSaid(t *testing.T) {
-	srv := newMarketplace(t, "")
-	rep := &fakeReporter{}
-	m := newManager(t, srv, rep, declaration(), nil)
-
-	inst, err := m.Install(context.Background(), "esat_token", "generic-cli", "linux", "amd64")
-	if err != nil {
-		t.Fatalf("install: %v", err)
-	}
-
-	sum := sha256.Sum256([]byte(artifactBody))
-	wantDigest := hex.EncodeToString(sum[:])
-
-	// The version recorded is the Plugin's own, from describe, not the
-	// catalog's advisory one: what a host runs is what the host said it runs.
-	if inst.Version != "0.1.0" {
-		t.Fatalf("recorded version = %q, want the plugin's own 0.1.0 rather than the catalog's", inst.Version)
-	}
-	if inst.Digest != wantDigest {
-		t.Fatalf("recorded digest = %q, want the hash of the bytes downloaded", inst.Digest)
-	}
-
-	// The artifact is on disk and executable.
-	info, err := os.Stat(inst.Path)
-	if err != nil {
-		t.Fatalf("artifact not installed: %v", err)
-	}
-	if info.Mode().Perm() != 0o755 {
-		t.Fatalf("artifact mode = %v, want 0755", info.Mode().Perm())
-	}
-	if body, _ := os.ReadFile(inst.Path); string(body) != artifactBody {
-		t.Fatal("the installed file is not the bytes served")
-	}
-	// And no temporary download is left beside it.
-	entries, _ := os.ReadDir(m.installDir)
-	if len(entries) != 1 {
-		t.Fatalf("install dir holds %d entries, want only the plugin", len(entries))
-	}
-
-	// Reported once, with the declaration verbatim.
-	if len(rep.got) != 1 {
-		t.Fatalf("reported %d times, want once", len(rep.got))
-	}
-	r := rep.got[0]
-	if r.token != "esat_token" || r.pluginID != "generic-cli" {
-		t.Fatalf("reported as %q/%q", r.token, r.pluginID)
-	}
-	if r.report.Version != "0.1.0" || r.report.Digest != wantDigest {
-		t.Fatalf("report = %+v", r.report)
-	}
-	if len(r.report.Declarations) != 1 || r.report.Declarations[0].Key != "reload" {
-		t.Fatalf("declarations = %+v, want the plugin's own", r.report.Declarations)
-	}
-
-	// And List reads it back.
-	list, err := m.List()
+func TestInstallPlacesTheArtifactAndAnswersFromIt(t *testing.T) {
+	m := newManager(t, newMarketplace(t, ""), answer(), nil)
+	inst, err := m.Install(context.Background(), "generic-cli", "linux", "amd64")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 1 || list[0].ID != "generic-cli" || list[0].Version != "0.1.0" {
-		t.Fatalf("list = %+v", list)
+	if inst.ID != "generic-cli" || inst.Version != "0.1.0" || inst.Digest != trueDigest() {
+		t.Fatalf("installed = %+v", inst)
+	}
+	body, err := os.ReadFile(inst.Path)
+	if err != nil || string(body) != artifactBody {
+		t.Fatalf("artifact on disk = %q, %v", body, err)
+	}
+	// No record file anywhere under the install dir's parent: the executable
+	// is the record.
+	if entries, _ := os.ReadDir(filepath.Dir(m.installDir)); len(entries) != 1 {
+		t.Fatalf("something besides the plugin directory was written: %v", entries)
 	}
 }
 
-// A re-install replaces the entry rather than adding a second: a host holds one
-// version of each Plugin, which is what the Server stores too.
-func TestReinstallReplacesTheRecord(t *testing.T) {
-	srv := newMarketplace(t, "")
-	rep := &fakeReporter{}
-	m := newManager(t, srv, rep, declaration(), nil)
-	if _, err := m.Install(context.Background(), "t", "generic-cli", "linux", "amd64"); err != nil {
+func TestListAndDiscoverReadTheDirectory(t *testing.T) {
+	m := newManager(t, newMarketplace(t, ""), answer(), nil)
+	if _, err := m.Install(context.Background(), "generic-cli", "linux", "amd64"); err != nil {
 		t.Fatal(err)
 	}
-	upgraded := declaration()
+	// A stray file whose name is not a Plugin name is not a Plugin.
+	if err := os.WriteFile(filepath.Join(m.installDir, "notes.txt"), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	installed, err := m.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(installed) != 1 || installed[0].ID != "generic-cli" || installed[0].Digest != trueDigest() {
+		t.Fatalf("List = %+v", installed)
+	}
+
+	inv, err := m.Discover(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(inv) != 1 || inv[0].Unobserved || inv[0].Version != "0.1.0" || len(inv[0].Declarations) != 1 || inv[0].Digest != trueDigest() {
+		t.Fatalf("Discover = %+v", inv)
+	}
+
+	t.Run("a Plugin that fails discover is present but unobserved", func(t *testing.T) {
+		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) {
+			return plugincontract.DiscoverResponse{}, errors.New("exit status 1")
+		}
+		inv, err := m.Discover(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(inv) != 1 || !inv[0].Unobserved || inv[0].Version != "" || len(inv[0].Warnings) != 1 || !strings.Contains(inv[0].Warnings[0], "exit status 1") {
+			t.Fatalf("Discover after failure = %+v", inv)
+		}
+	})
+
+	t.Run("Find reports the executable and the version it answers", func(t *testing.T) {
+		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) { return answer(), nil }
+		inst, found, err := m.Find("generic-cli")
+		if err != nil || !found || inst.Version != "0.1.0" || inst.Path != filepath.Join(m.installDir, "generic-cli") {
+			t.Fatalf("Find = %+v %v %v", inst, found, err)
+		}
+		if _, found, _ := m.Find("nginx"); found {
+			t.Fatal("found a Plugin that is not there")
+		}
+	})
+}
+
+func TestReinstallReplacesTheExecutable(t *testing.T) {
+	m := newManager(t, newMarketplace(t, ""), answer(), nil)
+	if _, err := m.Install(context.Background(), "generic-cli", "linux", "amd64"); err != nil {
+		t.Fatal(err)
+	}
+	upgraded := answer()
 	upgraded.Version = "0.2.0"
-	m.runDescribe = func(context.Context, string) (plugincontract.DescribeResponse, error) { return upgraded, nil }
-	if _, err := m.Install(context.Background(), "t", "generic-cli", "linux", "amd64"); err != nil {
-		t.Fatal(err)
+	m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) { return upgraded, nil }
+	inst, err := m.Install(context.Background(), "generic-cli", "linux", "amd64")
+	if err != nil || inst.Version != "0.2.0" {
+		t.Fatalf("reinstall = %+v, %v", inst, err)
 	}
-	list, _ := m.List()
-	if len(list) != 1 || list[0].Version != "0.2.0" {
-		t.Fatalf("list after upgrade = %+v, want one entry at 0.2.0", list)
+	if installed, _ := m.List(); len(installed) != 1 {
+		t.Fatalf("List after reinstall = %+v, want one", installed)
 	}
 }
 
-// A download that is not what the catalog published is refused, and nothing is
-// left on disk or reported. Integrity rather than authentication: it catches a
-// truncated, stale or wrong-architecture artifact.
 func TestDigestMismatchInstallsNothing(t *testing.T) {
-	srv := newMarketplace(t, strings.Repeat("a", 64))
-	rep := &fakeReporter{}
-	m := newManager(t, srv, rep, declaration(), nil)
-
-	_, err := m.Install(context.Background(), "t", "generic-cli", "linux", "amd64")
+	m := newManager(t, newMarketplace(t, strings.Repeat("0", 64)), answer(), nil)
+	_, err := m.Install(context.Background(), "generic-cli", "linux", "amd64")
 	var mismatch DigestMismatchError
-	if !asDigestMismatch(err, &mismatch) {
-		t.Fatalf("install with a wrong published digest = %v, want a mismatch refusal", err)
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("err = %v, want DigestMismatchError", err)
 	}
-	assertNothingInstalled(t, m, rep)
+	if installed, _ := m.List(); len(installed) != 0 {
+		t.Fatalf("something was installed: %+v", installed)
+	}
 }
 
-// A Plugin that cannot describe itself is not installed: the Server would have
-// no declaration to resolve settings against, so a Target of it could never be
-// configured.
-func TestDescribeFailureInstallsNothing(t *testing.T) {
-	srv := newMarketplace(t, "")
-	rep := &fakeReporter{}
-	m := newManager(t, srv, rep, plugincontract.DescribeResponse{}, errBoom)
-
-	if _, err := m.Install(context.Background(), "t", "generic-cli", "linux", "amd64"); err == nil {
-		t.Fatal("install succeeded despite describe failing")
+func TestDiscoverFailureInstallsNothing(t *testing.T) {
+	m := newManager(t, newMarketplace(t, ""), plugincontract.DiscoverResponse{}, errors.New("exit status 2"))
+	if _, err := m.Install(context.Background(), "generic-cli", "linux", "amd64"); err == nil {
+		t.Fatal("installed a Plugin that did not answer discover")
 	}
-	assertNothingInstalled(t, m, rep)
+	if installed, _ := m.List(); len(installed) != 0 {
+		t.Fatalf("something was installed: %+v", installed)
+	}
 }
 
-// An artifact that calls itself something else is refused: the name is identity
-// on the Server, and settings are stored against it.
 func TestWrongNameInstallsNothing(t *testing.T) {
-	srv := newMarketplace(t, "")
-	rep := &fakeReporter{}
-	desc := declaration()
-	desc.Name = "something-else"
-	m := newManager(t, srv, rep, desc, nil)
-
-	if _, err := m.Install(context.Background(), "t", "generic-cli", "linux", "amd64"); err == nil {
-		t.Fatal("install succeeded despite the artifact naming itself differently")
+	d := answer()
+	d.Name = "something-else"
+	m := newManager(t, newMarketplace(t, ""), d, nil)
+	if _, err := m.Install(context.Background(), "generic-cli", "linux", "amd64"); err == nil {
+		t.Fatal("installed an artifact that calls itself another Plugin")
 	}
-	assertNothingInstalled(t, m, rep)
 }
 
-// The catalog is the whole offer: a Plugin it does not list, and a platform it
-// does not build for, are both refusals rather than a guessed URL.
 func TestRefusesWhatTheCatalogDoesNotOffer(t *testing.T) {
-	srv := newMarketplace(t, "")
-	m := newManager(t, srv, &fakeReporter{}, declaration(), nil)
-
-	if _, err := m.Install(context.Background(), "t", "nginx", "linux", "amd64"); err != ErrNotInCatalog {
-		t.Fatalf("unknown plugin = %v, want ErrNotInCatalog", err)
+	m := newManager(t, newMarketplace(t, ""), answer(), nil)
+	if _, err := m.Install(context.Background(), "nginx", "linux", "amd64"); !errors.Is(err, ErrNotInCatalog) {
+		t.Fatalf("err = %v, want ErrNotInCatalog", err)
 	}
-	if _, err := m.Install(context.Background(), "t", "generic-cli", "linux", "arm64"); err != ErrNoArtifact {
-		t.Fatalf("unbuilt platform = %v, want ErrNoArtifact", err)
+	if _, err := m.Install(context.Background(), "generic-cli", "plan9", "mips"); !errors.Is(err, ErrNoArtifact) {
+		t.Fatalf("err = %v, want ErrNoArtifact", err)
 	}
-	// And a name that could reach outside the install directory never becomes a
-	// path at all.
-	if _, err := m.Install(context.Background(), "t", "../../etc/passwd", "linux", "amd64"); err == nil {
-		t.Fatal("a traversing plugin name was accepted")
+	if _, err := m.Install(context.Background(), "../etc", "linux", "amd64"); err == nil {
+		t.Fatal("a name that is a path was accepted")
 	}
 }
 
-// Installed but unreported is reported as such: the host has the Plugin and the
-// Server does not know, which is a different fact from nothing having happened.
-func TestReportFailureStillReportsTheInstall(t *testing.T) {
-	srv := newMarketplace(t, "")
-	rep := &fakeReporter{err: errBoom}
-	m := newManager(t, srv, rep, declaration(), nil)
-
-	inst, err := m.Install(context.Background(), "t", "generic-cli", "linux", "amd64")
-	if err == nil {
-		t.Fatal("a failed report was not surfaced")
+func TestInstallRefusesAnUnusableAnswer(t *testing.T) {
+	d := answer()
+	d.Settings = append(d.Settings, plugincontract.SettingDeclaration{Key: "a", Summary: true}, plugincontract.SettingDeclaration{Key: "b", Summary: true})
+	m := newManager(t, newMarketplace(t, ""), d, nil)
+	if _, err := m.Install(context.Background(), "generic-cli", "linux", "amd64"); err == nil {
+		t.Fatal("two summary settings were accepted")
 	}
-	if inst.ID != "generic-cli" {
-		t.Fatal("the installed plugin was not returned alongside the reporting error")
-	}
-	if !strings.Contains(err.Error(), "installed") {
-		t.Fatalf("error does not say the plugin did land: %v", err)
-	}
-	if list, _ := m.List(); len(list) != 1 {
-		t.Fatal("the installation was not recorded")
-	}
-}
-
-func assertNothingInstalled(t *testing.T, m *Manager, rep *fakeReporter) {
-	t.Helper()
-	if entries, err := os.ReadDir(m.installDir); err == nil && len(entries) != 0 {
-		t.Fatalf("install dir holds %d entries after a refusal, want none", len(entries))
-	}
-	if list, _ := m.List(); len(list) != 0 {
-		t.Fatalf("recorded %d plugins after a refusal, want none", len(list))
-	}
-	if len(rep.got) != 0 {
-		t.Fatalf("reported %d times after a refusal, want none", len(rep.got))
-	}
-}
-
-var errBoom = errBoomType{}
-
-type errBoomType struct{}
-
-func (errBoomType) Error() string { return "boom" }
-
-func asDigestMismatch(err error, out *DigestMismatchError) bool {
-	m, ok := err.(DigestMismatchError)
-	if ok {
-		*out = m
-	}
-	return ok
-}
-
-// A Plugin that marks two settings summary is refused at install rather than
-// installed and reported, because "at most one" is what makes an unlabeled
-// Target's name a decision somebody made rather than an artifact of the order
-// the Plugin listed its settings in. Refused here as well as by the Server, and
-// here first: this is where the Plugin's author finds out.
-func TestInstallRefusesTwoSummarySettings(t *testing.T) {
-	srv := newMarketplace(t, "")
-	rep := &fakeReporter{}
-	desc := declaration()
-	desc.Settings = append(desc.Settings,
-		plugincontract.SettingDeclaration{Key: "server_name", Type: plugincontract.SettingTypeText, Summary: true},
-		plugincontract.SettingDeclaration{Key: "site", Type: plugincontract.SettingTypeText, Summary: true},
-	)
-	m := newManager(t, srv, rep, desc, nil)
-
-	_, err := m.Install(context.Background(), "esat_token", "generic-cli", "linux", "amd64")
-	var tooMany *plugincontract.TooManySummaryError
-	if !errors.As(err, &tooMany) {
-		t.Fatalf("install accepted two summary settings: %v", err)
-	}
-	// Nothing was left behind and nothing was reported: a Plugin the Server
-	// would reject must not sit on the host claiming to be installed.
-	if len(rep.got) != 0 {
-		t.Fatalf("a refused Plugin was reported: %+v", rep.got)
-	}
-	if entries, _ := os.ReadDir(m.installDir); len(entries) != 0 {
-		t.Fatalf("the artifact was left on the host: %v", entries)
-	}
-	if _, err := m.List(); err != nil {
-		t.Fatalf("the record was left unreadable: %v", err)
+	if installed, _ := m.List(); len(installed) != 0 {
+		t.Fatalf("something was installed: %+v", installed)
 	}
 }

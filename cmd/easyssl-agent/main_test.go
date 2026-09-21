@@ -4,19 +4,19 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
+	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
 func TestPluginListLineShowsFullSHA256(t *testing.T) {
 	digest := strings.Repeat("ab", 32)
-	got := pluginListLine(pluginmgr.Installed{
-		ID:      "generic-cli",
-		Version: "0.1.0",
-		Digest:  digest,
-	})
+	got := pluginListLine(wire.PluginInventory{ID: "generic-cli", Version: "0.1.0", Digest: digest})
 	want := "generic-cli      v0.1.0      sha256:" + digest
 	if got != want {
 		t.Fatalf("plugin list line = %q, want %q", got, want)
+	}
+	unobserved := pluginListLine(wire.PluginInventory{ID: "generic-cli", Digest: digest, Unobserved: true})
+	if !strings.Contains(unobserved, "did not answer discover") || !strings.Contains(unobserved, digest) {
+		t.Fatalf("unobserved line = %q", unobserved)
 	}
 }
 
