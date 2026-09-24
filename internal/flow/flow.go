@@ -447,8 +447,11 @@ func reportPluginsLeftBehind() {
 // private keys.
 //
 // It is printed rather than offered as a choice because the Agent never deletes
-// key material: each key is the only copy this host has, and an uninstall is too
-// ordinary a command to destroy something unrecoverable. The consequence is that
+// key material: the keystore is the Agent's only copy of each key, and an
+// uninstall is too ordinary a command to destroy something unrecoverable.
+// Whether the host holds another copy is not this Agent's to say: a Deployment
+// hands the key to a Plugin, which may have written it wherever the Target
+// says, and an operator may have copied it anywhere. The consequence is that
 // a machine someone believes they have decommissioned still holds every key it
 // generated, so that is said here rather than left to be discovered.
 // Only the number depends on the count succeeding. A keystore that cannot be
@@ -467,9 +470,9 @@ func reportKeysLeftBehind() {
 	default:
 		fmt.Printf("\n! %d private keys remain in %s and were NOT deleted.\n", n, keystore.Dir())
 	}
-	fmt.Println("  They are the only copy on this host. Delete that directory by hand if this")
-	fmt.Println("  machine is being decommissioned, and keep a copy first if the Certificates")
-	fmt.Println("  using them are still in service.")
+	fmt.Println("  Copies a Deployment installed elsewhere on this host are left in place too.")
+	fmt.Println("  Delete the directory by hand if this machine is being decommissioned, and")
+	fmt.Println("  keep a copy first if the Certificates using them are still in service.")
 }
 
 func exists(path string) bool {

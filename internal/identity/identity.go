@@ -96,7 +96,7 @@ func SaveToken(token string) error {
 // idempotent, so an already-absent file is not an error.
 //
 // It deliberately does not remove BaseDir itself, because the keystore lives
-// under it and holds the only copy of every private key this host generated.
+// under it and is the Agent's only copy of every private key it generated.
 // Uninstalling is too ordinary a command to destroy that, so the keys are left
 // behind and the caller says so. This function used to remove the whole
 // directory, which was correct only while nothing but the config and the token

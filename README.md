@@ -222,12 +222,13 @@ nothing or only remnants installed. If the Server cannot be reached the local
 removal still completes and you are told the Agent may still be listed in the
 web console.
 
-**Private keys are not deleted, and uninstall says so.** They are the only copy
-on this host, and an uninstall is too ordinary a command to destroy something
-unrecoverable, so `/etc/easyssl/keys/` survives it and the command reports how
-many keys remain. If the machine is being
-decommissioned, delete that directory by hand; if certificates using those keys
-are still in service, keep a copy first.
+**Private keys are not deleted, and uninstall says so.** The keystore is the
+Agent's only copy of them, and an uninstall is too ordinary a command to destroy
+something unrecoverable, so `/etc/easyssl/keys/` survives it and the command
+reports how many keys remain. Whether another copy exists on the host is not the
+Agent's to say: a deployment may have installed one wherever the target keeps
+its key. If the machine is being decommissioned, delete that directory by hand;
+if certificates using those keys are still in service, keep a copy first.
 
 Certificates and keys the Agent deployed elsewhere on the host are also left in
 place, since deleting them could take the host's own services down. Uninstall is
