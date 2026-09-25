@@ -255,23 +255,26 @@ func cmdRun(ctx context.Context, args []string) error {
 				}
 			}
 		} else if isUnknownToken(err) {
-			// Removed from the web console, or the token revoked. The service keeps
+			// Deactivated or removed in the web console. The service keeps
 			// running and stops doing work: this Agent belongs to the host, not
-			// to the Server, so a decision taken in
-			// the web console does not stop a unit here, remove a file, or leave a
-			// failed unit in `systemctl --failed` for a host that is behaving
-			// correctly. Uninstalling stays the operator's action, and the
-			// message names both ways out.
+			// to the Server, so a decision taken in the web console does not
+			// stop a unit here, remove a file, or leave a failed unit in
+			// `systemctl --failed` for a host that is behaving correctly.
+			// Uninstalling stays the operator's action, and the message names
+			// every way out: the reactivation command the Agent's page in the
+			// web console generates, which makes this host the same Agent
+			// again; the installer with the registration key, which makes it a
+			// new one; or uninstalling.
 			if removedSince.IsZero() {
 				removedSince = time.Now()
-				logger.Error("this host is no longer registered with the Server: its token was rejected or revoked",
+				logger.Error("this host is no longer registered with the Server: the Agent was deactivated or removed, so its token is refused",
 					"server", cfg.ServerURL,
-					"next", "register again by re-running the installer, or remove this Agent with `easyssl-agent uninstall`",
+					"next", "run the reactivation command from the Agent's page in the web console to resume this Agent, re-run the installer with the registration key to register a new one, or remove this Agent with `easyssl-agent uninstall`",
 					"note", "no work will be done until then; nothing under "+identity.BaseDir+" has been touched")
-				sdnotify.Status("Not registered: token rejected or revoked. Re-run the installer to register again, or `easyssl-agent uninstall` to remove this Agent.")
+				sdnotify.Status("Not registered: the Agent was deactivated or removed. Run the reactivation command from its page in the web console, re-run the installer to register anew, or `easyssl-agent uninstall`.")
 			} else if time.Since(removedSince) > 30*time.Minute {
 				removedSince = time.Now()
-				logger.Error("still not registered with the Server; re-run the installer or uninstall this Agent",
+				logger.Error("still not registered with the Server; reactivate this Agent from the web console, re-run the installer, or uninstall it",
 					"server", cfg.ServerURL)
 			}
 			// Fall through to the wait: the loop keeps the service alive and
