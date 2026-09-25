@@ -15,9 +15,10 @@ module; wire types are not duplicated here.
 
 ```
 easyssl-agent register --server <url> [--key <key>] [--name <name>]   register this host
+easyssl-agent register --server <url> --reactivation-token <token>    resume a deactivated Agent on this host
 easyssl-agent run                                                     the systemd service loop (periodic check-in)
 easyssl-agent status [--json]                                         print local state and what the Server says
-easyssl-agent uninstall [--yes]                                       unregister and remove the Agent
+easyssl-agent uninstall [--yes]                                       deactivate and remove the Agent
 ```
 
 Human-readable output goes to stdout (JSON with `--json`); errors go to stderr.
@@ -53,27 +54,37 @@ there is nothing to get wrong by copying a working command off a laptop.
 
 A host runs a single Agent. `register` runs an interactive line-based session:
 
-1. Resolves the Organization registration key from `--key` or the
-   `REGISTRATION_KEY` environment variable, prompting for it when neither is set.
-2. Resolves the Agent's name: `--name` or `AGENT_NAME` if given, otherwise the
-   host's hostname offered as an editable default at the prompt.
-3. Generates a stable 16-hex **instance ID** once and persists it, then captures
-   best-effort host diagnostics (machine ID, hostname, OS, host type). If the
-   Server reports the instance ID is already taken, the installer regenerates it
-   and retries.
-4. Checks in with the Server, which returns a one-time bearer token. The config
-   and token are stored root-only (`0600`) under `/etc/easyssl/`; the Server
-   keeps only the token's hash.
-5. Installs and starts the systemd unit `easyssl-agent.service`, which runs
+1. Resolves the credential: the Organization registration key from `--key` or
+   `REGISTRATION_KEY`, or a reactivation token from `--reactivation-token` or
+   `REACTIVATION_TOKEN`. When neither is set it prompts once, and either may
+   be pasted: a token starts with `esrt_`, a key with `esrk_`.
+2. With a registration key, resolves the Agent's name: `--name` or
+   `AGENT_NAME` if given, otherwise the host's hostname offered as an editable
+   default at the prompt. A reactivation token names an Agent that already has
+   a name, so nothing is asked.
+3. Captures best-effort host diagnostics (hostname, OS, host type) and submits
+   the registration. The Server names Agents: it mints the public id
+   (`agnt-…`) and returns it with a one-time bearer token. The host persists
+   the token and the Server URL, root-only (`0600`) under `/etc/easyssl/`, and
+   neither the id nor the name: both are the Server's to say, and any
+   authenticated call answers them. The Server keeps only the token's hash.
+4. Installs and starts the systemd unit `easyssl-agent.service`, which runs
    `run` to check in periodically.
-6. Prints the web console Plugin Marketplace URL, then waits for an operator to
-   authorize the Agent. The URL remains visible if the wait is interrupted;
-   the installed service keeps polling, so authorization can complete later.
+5. With a registration key, prints the web console Plugin Marketplace URL, then
+   waits for an operator to authorize the Agent. The URL remains visible if
+   the wait is interrupted; the installed service keeps polling, so
+   authorization can complete later. With a reactivation token the Agent is
+   active at once, minting the token having been the operator's review, and
+   the installer offers to install the Plugins its Targets are configured with
+   and this host lacks, so the first Deployment does not fail for want of one.
 
 Re-running the installer on an already-registered host is idempotent: it
 refreshes the binary, restarts the service, and reports the current state
-instead of registering a second Agent. If the Agent was removed from the
-web console, the reinstall re-registers it under the same instance ID.
+instead of registering a second Agent. If the Server no longer accepts the
+host's token, because the Agent was deactivated or removed in the web console,
+the installer registers the host again with whatever credential this run was
+given: a reactivation token resumes the same Agent, a registration key makes a
+new one.
 
 The installer is served by the Server, so the usual one-liner is:
 
@@ -88,6 +99,13 @@ never prompts:
 
 ```
 curl -sSL <server-url>/install | sudo REGISTRATION_KEY=<key> AGENT_NAME=web-01 bash
+```
+
+A deactivated Agent's page in the web console generates the reactivation form
+of the same command, with a single-use token that expires after a day:
+
+```
+curl -sSL <server-url>/install | sudo REACTIVATION_TOKEN=<token> bash
 ```
 
 ## Receiving work from the Server
@@ -110,11 +128,13 @@ restart, which is why running one twice has to be safe.
 
 ## Checking state
 
-`status` prints what the host knows (instance ID, name, Server URL, the systemd
+`status` prints what the host knows (Server URL, Organization, the systemd
 unit and whether it is running, whether a token is stored) and then asks the
-Server what this Agent actually is: `authorized`, `pending authorization`, or
-no longer registered because it was removed or revoked there. A stored token
-proves only that one was issued once, so registration is never inferred locally.
+Server what this Agent actually is: its id and name, and `authorized`,
+`pending authorization`, or no longer registered because it was deactivated or
+removed there. A stored token proves only that one was issued once, so
+registration is never inferred locally, and the id and name are printed only
+when the Server answered.
 
 Asking is a plain read (`GET` on the Agent's own registration), not a check-in,
 so running `status` never refreshes the Agent's last-seen and cannot make a
@@ -213,26 +233,40 @@ here with no recovery, which is why the Agent does not do it at all.
 
 ## Uninstalling
 
-`easyssl-agent uninstall` removes the Agent from the host: it unregisters
-itself from the Server first (so the host also disappears from the web console),
-then stops and removes the systemd unit, deletes the config and token from
-`/etc/easyssl/`, and deletes the binary. It asks for confirmation, refusing to
-run unattended unless `--yes` is passed, and is idempotent on a host with
-nothing or only remnants installed. If the Server cannot be reached the local
-removal still completes and you are told the Agent may still be listed in the
-web console.
+`easyssl-agent uninstall` takes the Agent off the host. It first tells the
+Server the token is done with, which **deactivates** the Agent rather than
+removing it: the token stops working, and the Agent's Targets, key records and
+history stay in the web console, where a reactivation command can bring the
+same Agent back on this host or another. Then, whether or not the Server could
+be reached, it stops and removes the systemd unit, deletes the config and token
+from `/etc/easyssl/`, and deletes the binary. It asks for confirmation,
+refusing to run unattended unless `--yes` is passed, and is idempotent on a
+host with nothing or only remnants installed.
 
-**Private keys are not deleted, and uninstall says so.** The keystore is the
-Agent's only copy of them, and an uninstall is too ordinary a command to destroy
-something unrecoverable, so `/etc/easyssl/keys/` survives it and the command
-reports how many keys remain. Whether another copy exists on the host is not the
-Agent's to say: a deployment may have installed one wherever the target keeps
-its key. If the machine is being decommissioned, delete that directory by hand;
-if certificates using those keys are still in service, keep a copy first.
+When the Server cannot be reached the local removal still completes and the
+output says, in as many words, that the Server still accepts the host's token
+and that the Agent has to be deactivated from the web console, naming the
+Server, the Organization and the host. Removing the Agent for good, which
+erases its Targets, is only ever done from the web console, and only on an
+Agent that is already deactivated: a host can never remove its own record.
 
-Certificates and keys the Agent deployed elsewhere on the host are also left in
-place, since deleting them could take the host's own services down. Uninstall is
-host-side only: the Server can never trigger it.
+Two more things are offered afterwards, each behind its own prompt and only
+when there is a terminal. `--yes` consents to uninstalling the Agent, not to
+everything it could take with it, so an unattended run leaves both in place and
+says where they are.
+
+- **Plugins.** The executables under `/var/lib/easyssl/plugins/` are listed and
+  the directory is deleted on a `y`.
+- **Private keys.** The keystore under `/etc/easyssl/keys/` is the Agent's only
+  copy of them, and nothing recovers a deleted key: a Certificate whose key is
+  gone cannot be deployed or renewed from the host again, and reactivating the
+  Agent on another host needs the files copied there first. So the prompt says
+  so, defaults to keeping them, and deletes only when `delete keys` is typed
+  out. Copies a Deployment installed elsewhere on the host are never touched.
+
+Certificates and keys the Agent deployed elsewhere on the host are always left
+in place, since deleting them could take the host's own services down.
+Uninstall is host-side only: the Server can never trigger it.
 
 This slice is Linux + systemd and root-only; the Agent stores no encryption key
 and sends none to the Server.

@@ -136,12 +136,13 @@ func cmdRegister(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("register", flag.ExitOnError)
 	server := fs.String("server", "", "easySSL Server base URL (required)")
 	key := fs.String("key", os.Getenv("REGISTRATION_KEY"), "Organization registration key (defaults to $REGISTRATION_KEY)")
-	name := fs.String("name", os.Getenv("AGENT_NAME"), "Agent name (defaults to $AGENT_NAME, else the hostname; prompted when interactive)")
+	reactivation := fs.String("reactivation-token", os.Getenv("REACTIVATION_TOKEN"), "reactivation token from a deactivated Agent's page, to resume that Agent (defaults to $REACTIVATION_TOKEN)")
+	name := fs.String("name", os.Getenv("AGENT_NAME"), "Agent name (defaults to $AGENT_NAME, else the hostname; prompted when interactive; ignored with a reactivation token)")
 	_ = fs.Parse(args)
 	if *server == "" {
 		return errors.New("register: --server is required")
 	}
-	return flow.Register(ctx, flow.Options{ServerURL: *server, RegistrationKey: *key, Name: *name})
+	return flow.Register(ctx, flow.Options{ServerURL: *server, RegistrationKey: *key, ReactivationToken: *reactivation, Name: *name})
 }
 
 func cmdUninstall(ctx context.Context, args []string) error {
@@ -423,12 +424,12 @@ func cmdStatus(args []string) error {
 	// proves only that one was issued once. Ask the Server. This is a read
 	// (GET), not a check-in, so running status never refreshes last-seen and
 	// therefore cannot make a stopped Agent look alive in the web console.
-	stateCode, stateDetail := serverState(cfg, token, tokenErr)
+	stateCode, stateDetail, reg := serverState(cfg, token, tokenErr)
 
 	if *asJSON {
 		out := map[string]any{
-			"agentId":        cfg.AgentID,
-			"displayName":    cfg.DisplayName,
+			"agentId":        reg.AgentID,
+			"displayName":    reg.DisplayName,
 			"serverUrl":      cfg.ServerURL,
 			"organization":   cfg.OrganizationName,
 			"organizationId": cfg.OrganizationID,
@@ -442,8 +443,14 @@ func cmdStatus(args []string) error {
 	}
 
 	line := func(label, value string) { fmt.Printf("%-12s %s\n", label, value) }
-	line("Agent", cfg.AgentID)
-	line("name", cfg.DisplayName)
+	// The id and name are the Server's to say, so they are printed only when
+	// it answered; a host holds neither.
+	if reg.AgentID != "" {
+		line("Agent", reg.AgentID)
+	}
+	if reg.DisplayName != "" {
+		line("name", reg.DisplayName)
+	}
 	line("Server", cfg.ServerURL)
 	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
 		line("Organization", cfg.Organization())
@@ -466,39 +473,34 @@ func cmdStatus(args []string) error {
 // wire calls an authorized Agent "active", which printed next to a stopped
 // systemd unit reads as if the Agent were running, when it only means the
 // operator admitted it; the web console says "Authorized" and so does this.
-func serverState(cfg identity.Config, token string, tokenErr error) (code, detail string) {
+// serverState asks the Server what it considers this host to be. The status
+// read carries the Agent's id and name too, which is the only place the host
+// learns them.
+func serverState(cfg identity.Config, token string, tokenErr error) (code, detail string, reg wire.RegistrationStatus) {
 	if tokenErr != nil {
-		return "not-registered", "not registered (no local token)"
+		return "not-registered", "not registered (no local token)", reg
 	}
-	// Short: status must stay snappy on a host that cannot reach the Server.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	api, err := serverapi.New(cfg.ServerURL)
 	if err != nil {
-		// The URL on disk is not one this Agent will talk to, so nothing was
-		// asked and the answer is genuinely unknown rather than "no": this host
-		// may well be registered and authorized. Saying so here is what keeps
-		// it from reading as an unreachable Server, which is what it would look
-		// like otherwise on a host that is perfectly well connected, and which
-		// resolves on its own where this never will.
-		return "unknown", fmt.Sprintf("unknown (%v)", err)
+		return "unknown", fmt.Sprintf("unknown (%v)", err), reg
 	}
 	resp, err := api.RegistrationStatus(ctx, token)
 	switch {
 	case err == nil && resp.Status == wire.StatusActive:
-		return "authorized", "authorized"
+		return "authorized", "authorized", resp
 	case err == nil && resp.Status == wire.StatusPending:
-		return "pending", "pending authorization"
+		return "pending", "pending authorization", resp
 	case err == nil:
-		return resp.Status, resp.Status
+		return resp.Status, resp.Status, resp
 	case isUnknownToken(err):
-		return "not-registered", "not registered (the Server rejected this token; it was removed or revoked there)"
+		return "not-registered", "not registered (the Server rejected this token; the Agent was deactivated or removed there)", reg
 	default:
-		return "unknown", fmt.Sprintf("unknown (could not reach %s: %v)", cfg.ServerURL, err)
+		return "unknown", fmt.Sprintf("unknown (could not reach %s: %v)", cfg.ServerURL, err), reg
 	}
 }
 
-// isUnknownToken reports whether err is the Server's unknown-token response.
 func isUnknownToken(err error) bool {
 	apiErr, ok := errors.AsType[*serverapi.APIError](err)
 	return ok && apiErr.Code == wire.CodeUnknownToken

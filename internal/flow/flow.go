@@ -1,10 +1,15 @@
 // Package flow drives the interactive line-based registration session.
-// A host runs one Agent: the first run generates and persists the
-// registers, stores the Server-minted Agent ID and token, installs the systemd unit, and waits
-// for the operator to authorize from the web console. A later run on an
-// already-registered host is idempotent: it refreshes the service onto the
-// updated binary and reports state instead of registering a second Agent. It is
-// plain stdin/stdout, no full-screen TUI shell in this slice.
+// A host runs one Agent. The first run registers, stores the Server's token,
+// installs the systemd unit, and waits for the operator to authorize from the
+// web console; a run presenting a reactivation token resumes an Agent the
+// web console deactivated, active at once. A later run on an already-registered
+// host is idempotent: it refreshes the service onto the updated binary and
+// reports state instead of registering a second Agent. It is plain
+// stdin/stdout, no full-screen TUI shell in this slice.
+//
+// The host keeps no Agent ID and no name: the Server is the only namer of
+// Agents, and what the host holds is its token, which is what proves it is
+// the Agent the web console shows. Both are reported by the Server on demand.
 package flow
 
 import (
@@ -14,11 +19,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/easyssl-io/easyssl-agent/internal/hostinfo"
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
+	"github.com/easyssl-io/easyssl-agent/internal/inventory"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
@@ -46,16 +53,21 @@ func CheckinBody(inventoryFingerprint string) wire.CheckinRequest {
 }
 
 // Options configures a registration session.
+// Options is what the register command resolved from its flags and
+// environment; anything empty is prompted for when there is a terminal.
 type Options struct {
-	ServerURL       string // required
-	RegistrationKey string // from --key or REGISTRATION_KEY; prompted if empty and interactive
-	Name            string // from --name or AGENT_NAME; else the hostname, editable at the prompt
+	ServerURL         string // required
+	RegistrationKey   string // from --key or REGISTRATION_KEY; prompted if empty and interactive
+	ReactivationToken string // from --reactivation-token or REACTIVATION_TOKEN; wins over the key
+	Name              string // from --name or AGENT_NAME; else the hostname, editable at the prompt
 }
 
-// Register runs the registration session. If this host already has an Agent
-// identity it takes the idempotent reinstall path; otherwise it registers a new
-// Agent. A context cancellation (Ctrl-C) during the wait is not an error: the
-// installed systemd service keeps polling, so authorization can complete later.
+// reactivationPrefix is how a reactivation token is told from a registration
+// key when either is pasted at the one prompt: the Server mints them `esrt_`
+// and keys `esrk_`.
+const reactivationPrefix = "esrt_"
+
+// Register is the entry point of the register command.
 func Register(ctx context.Context, opts Options) error {
 	// Check root before anything reaches the Server. Registering first and
 	// failing afterwards on the config write would leave a pending Agent on
@@ -82,44 +94,119 @@ func Register(ctx context.Context, opts Options) error {
 		defer t.close()
 	}
 
-	if cfg, err := identity.LoadConfig(); err == nil && cfg.AgentID != "" {
-		return reinstall(ctx, t, opts, cfg)
+	// Installed means a config and a token: uninstall deletes both, so one
+	// without the other is a remnant, and a remnant is registered over.
+	if cfg, err := identity.LoadConfig(); err == nil {
+		if _, terr := identity.LoadToken(); terr == nil {
+			return reinstall(ctx, t, opts, cfg)
+		}
 	}
 	return freshRegister(ctx, t, opts)
 }
 
-// freshRegister registers a host that has no Agent yet.
+// reinstall handles a host that already has a token: refresh the service onto
+// the new binary and report the current state. The unit is (re)installed before
+// the service is started, so an upgrade never races the old binary's clean
+// service exit (systemd does not auto-restart a clean exit).
+func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Config) error {
+	// An installer is downloaded from one Server and carries that Server's URL,
+	// so a mismatch means this host belongs to a different one. Continuing
+	// against the stored URL is the wrong answer twice over: the operator is
+	// watching the web console they installed from, where this host will never
+	// appear, and the credential they supplied belongs to that web console
+	// too. Moving the host is not done silently either, because it detaches
+	// this host from whatever the old Server still deploys to it.
+	if opts.ServerURL != "" && opts.ServerURL != cfg.ServerURL {
+		return fmt.Errorf("this host is registered to %s, but this installer came from %s.\n"+
+			"Nothing was changed. To move it, uninstall it from the old Server first:\n"+
+			"    sudo easyssl-agent uninstall\n"+
+			"then run this installer again", cfg.ServerURL, opts.ServerURL)
+	}
+
+	fmt.Printf("This host is already registered on %s in %s.\n", cfg.ServerURL, cfg.Organization())
+
+	api, err := serverapi.New(cfg.ServerURL)
+	if err != nil {
+		return err
+	}
+	token, err := identity.LoadToken()
+	if err != nil {
+		return err
+	}
+	resp, cerr := api.Checkin(ctx, token, CheckinBody(""))
+	switch {
+	case cerr == nil:
+	case isUnknownToken(cerr):
+		// Deactivated or removed in the web console. Either way the token is
+		// dead and this host is registered again under whatever credential
+		// the operator gave this run: a reactivation token to be the same
+		// Agent, a registration key to be a new one.
+		fmt.Println("The Server no longer accepts this host's token: the Agent was deactivated or removed from the web console.")
+		fmt.Println("Registering this host again.")
+		fmt.Println()
+		return freshRegister(ctx, t, opts)
+	default:
+		// Keep the token and let the service retry: the Server may simply be
+		// down. Name it and say why, because a Server that is briefly down and
+		// one that no longer exists are indistinguishable to the operator
+		// otherwise, and only the first resolves on its own.
+		fmt.Printf("\nCould not reach %s: %v\n", cfg.ServerURL, cerr)
+		if err := sysd.Install(); err != nil {
+			return fmt.Errorf("updating systemd unit: %w", err)
+		}
+		fmt.Printf("✓ %s updated\n", identity.ServiceName())
+		defer startServiceOnExit()
+		fmt.Println("The service will keep polling it, so registration completes once it is back.")
+		return nil
+	}
+
+	if err := sysd.Install(); err != nil {
+		return fmt.Errorf("updating systemd unit: %w", err)
+	}
+	fmt.Printf("✓ %s updated\n", identity.ServiceName())
+	defer startServiceOnExit()
+
+	if resp.Status == wire.StatusActive {
+		fmt.Printf("\n✓ %s is authorized and ACTIVE.\n", resp.DisplayName)
+		return nil
+	}
+	return awaitAuthorization(ctx, api, resp.DisplayName, token, resp.NextPollSeconds,
+		marketplaceURL(cfg.ServerURL, ""))
+}
+
+// freshRegister registers a host that has no live Agent. With a registration
+// key it becomes a new pending Agent; with a reactivation token it becomes the
+// deactivated Agent the token was minted for, active at once and under that
+// Agent's name, so no name is asked for.
 func freshRegister(ctx context.Context, t *terminal, opts Options) error {
-	key, err := resolveKey(t, opts.RegistrationKey)
+	key, reactivation, err := resolveCredential(t, opts)
 	if err != nil {
 		return err
 	}
-	host, _ := os.Hostname()
-	name, err := confirmName(t, opts.Name, proposedName(host), host)
-	if err != nil {
-		return err
-	}
-	// The whole hostname beside the name, because the case for trimming it is
-	// that nothing is lost by doing so. Omitted when there is nothing
-	// to add: a single-label hostname is already the name.
-	if host != "" && host != name {
-		fmt.Printf("✓ Agent name  %s  (host %s)\n", name, host)
-	} else {
-		fmt.Printf("✓ Agent name  %s\n", name)
+	name := ""
+	if reactivation == "" {
+		host, _ := os.Hostname()
+		name, err = confirmName(t, opts.Name, proposedName(host), host)
+		if err != nil {
+			return err
+		}
+		if host != "" && host != name {
+			fmt.Printf("✓ Agent name  %s  (host %s)\n", name, host)
+		} else {
+			fmt.Printf("✓ Agent name  %s\n", name)
+		}
 	}
 
 	api, err := serverapi.New(opts.ServerURL)
 	if err != nil {
 		return err
 	}
-	resp, agentID, err := register(ctx, api, key, name, opts.ServerURL)
+	resp, err := register(ctx, api, key, reactivation, name, opts.ServerURL)
 	if err != nil {
 		return err
 	}
 
 	cfg := identity.Config{
-		AgentID:          agentID,
-		DisplayName:      name,
 		ServerURL:        opts.ServerURL,
 		OrganizationName: resp.OrganizationName,
 		OrganizationID:   resp.OrganizationID,
@@ -138,140 +225,72 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	fmt.Printf("✓ systemd service installed: %s\n", identity.ServiceName())
 	defer startServiceOnExit()
 
+	if resp.Status == wire.StatusActive {
+		fmt.Printf("\n✓ Reactivated as %s (%s), ACTIVE in %s.\n", resp.DisplayName, resp.AgentID, cfg.Organization())
+		fmt.Printf("  manage:  systemctl status %s\n", identity.ServiceName())
+		offerRequiredPlugins(ctx, t, api, resp.AgentToken, opts.ServerURL, resp.RequiredPlugins)
+		return nil
+	}
 	return awaitAuthorization(ctx, api, name, resp.AgentToken, resp.NextPollSeconds,
 		marketplaceURL(opts.ServerURL, resp.MarketplaceURL))
 }
 
-// reinstall handles a host that is already registered. It reconciles the token
-// (re-registering under the same Agent ID if it was removed from the web console),
-// then refreshes and restarts the service onto the freshly installed binary, and
-// reports state. Reconciling the token BEFORE the restart is essential: restarting
-// first would run the service with the stale token, and a revoked token makes the
-// service exit (systemd does not auto-restart a clean exit) before the new token
-// is written, leaving nothing running even after the operator authorizes.
-func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Config) error {
-	// An installer is downloaded from one Server and carries that Server's URL,
-	// so a mismatch means this host belongs to a different one. Continuing
-	// against the stored URL is the wrong answer twice over: the operator is
-	// watching the web console they installed from, where this host will never
-	// appear, and the registration key they supplied belongs to that web console
-	// too. Moving the host is not done silently either, because it detaches
-	// this host from whatever the old Server still deploys to it.
-	if opts.ServerURL != "" && opts.ServerURL != cfg.ServerURL {
-		return fmt.Errorf("this host is registered to %s, but this installer came from %s.\n"+
-			"Nothing was changed. To move it, remove it from the old Server first:\n"+
-			"    sudo easyssl-agent uninstall --yes\n"+
-			"then run this installer again", cfg.ServerURL, opts.ServerURL)
+// offerRequiredPlugins installs, after confirmation, the Plugins the resumed
+// Agent's Targets are configured with and this host lacks. A reactivated host
+// is often a rebuilt one, and a Deployment pushed to it before the Plugin is
+// back fails on the host for want of an executable; asking here is what puts
+// that step before the first push rather than after it. Non-interactive runs
+// are told what to install and left to it: a Plugin runs as root, and that
+// consent is not inferred from an environment variable.
+func offerRequiredPlugins(ctx context.Context, t *terminal, api *serverapi.Client, token, serverURL string, required []string) {
+	if len(required) == 0 {
+		return
 	}
-
-	fmt.Printf("This host is already registered as %q (instance %s) on %s.\n",
-		cfg.DisplayName, cfg.AgentID, cfg.ServerURL)
-
-	api, err := serverapi.New(cfg.ServerURL)
-	if err != nil {
-		return err
+	mgr := pluginmgr.New(pluginmgr.HTTPCatalog{BaseURL: serverURL}, nil)
+	missing := make([]string, 0, len(required))
+	for _, id := range required {
+		if _, ok, err := mgr.Find(id); err == nil && ok {
+			continue
+		}
+		missing = append(missing, id)
 	}
-	token, status, poll, err := reconcileToken(ctx, t, api, opts, cfg)
-	if err != nil {
-		return err
+	if len(missing) == 0 {
+		return
 	}
-
-	// Refresh the unit now that a valid token is on disk. Starting it is
-	// deferred to the end of this function, so it runs the freshly installed
-	// binary whichever branch below returns, and without polling alongside the
-	// wait in the pending one.
-	if err := sysd.Install(); err != nil {
-		return fmt.Errorf("updating systemd unit: %w", err)
+	fmt.Printf("\nIts Targets use %d Plugin(s) this host does not have: %s\n", len(missing), strings.Join(missing, ", "))
+	fmt.Println("A Deployment to those Targets fails until each is installed. A Plugin runs with")
+	fmt.Println("this Agent's privileges, which is root: installing authorizes code execution at")
+	fmt.Println("that level on this host.")
+	if t == nil {
+		fmt.Printf("Install them later with:  sudo easyssl-agent plugin install %s\n", strings.Join(missing, " "))
+		return
 	}
-	fmt.Printf("✓ %s updated\n", identity.ServiceName())
-	defer startServiceOnExit()
-
-	switch status {
-	case wire.StatusActive:
-		fmt.Printf("\n✓ %s is authorized and ACTIVE.\n", cfg.DisplayName)
-		return nil
-	case "":
-		// The URL was checked against the installer's above, so this really is
-		// the Server the operator is watching; it just could not be reached.
-		fmt.Println("The service will keep polling it, so authorization completes once it is back.")
-		return nil
-	default: // pending
-		return awaitAuthorization(ctx, api, cfg.DisplayName, token, poll,
-			marketplaceURL(cfg.ServerURL, ""))
+	if !strings.EqualFold(t.prompt("Install them now? [y/N]: "), "y") {
+		fmt.Printf("Not installed. Later:  sudo easyssl-agent plugin install %s\n", strings.Join(missing, " "))
+		return
 	}
-}
-
-// reconcileToken returns a token the service can run with, plus the Agent's
-// current status and poll cadence. It checks in with the stored token; if that
-// token is missing or was removed from the web console it re-registers under the same
-// Agent ID. status is "" (poll unused) when the Server could not be reached.
-func reconcileToken(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (token, status string, poll int, err error) {
-	if token, err = identity.LoadToken(); err == nil {
-		resp, cerr := api.Checkin(ctx, token, CheckinBody(""))
-		switch {
-		case cerr == nil:
-			return token, resp.Status, resp.NextPollSeconds, nil
-		case isUnknownToken(cerr):
-			fmt.Println("The previous registration was removed from the web console; re-registering this host.")
-			// fall through to re-register
-		default:
-			// Keep the token and let the service retry: the Server may simply
-			// be down. Name it and say why, because a Server that is briefly
-			// down and one that no longer exists are indistinguishable to the
-			// operator otherwise, and only the first resolves on its own.
-			fmt.Printf("\nCould not reach %s: %v\n", cfg.ServerURL, cerr)
-			return token, "", 0, nil
+	installed := 0
+	for _, id := range missing {
+		inst, err := mgr.Install(ctx, id, runtime.GOOS, runtime.GOARCH)
+		if err != nil {
+			fmt.Printf("! %s: %v\n", id, err)
+			continue
+		}
+		fmt.Printf("✓ installed %s v%s at %s\n", inst.ID, inst.Version, inst.Path)
+		installed++
+	}
+	if installed == 0 {
+		return
+	}
+	// Report at once, so the web console lists the Plugins before the service's
+	// first check-in; if that fails the service reports on its own.
+	if inv, err := inventory.Collect(ctx, mgr); err == nil {
+		if err := api.ReportInventory(ctx, token, inv); err == nil {
+			fmt.Println("✓ reported to the Server")
 		}
 	}
-	return reregister(ctx, t, api, opts, cfg)
 }
 
-// reregister re-registers keeping the host's persisted Agent ID and name, and
-// returns the new token with a pending status.
-func reregister(ctx context.Context, t *terminal, api *serverapi.Client, opts Options, cfg identity.Config) (string, string, int, error) {
-	key, err := resolveKey(t, opts.RegistrationKey)
-	if err != nil {
-		return "", "", 0, err
-	}
-	resp, err := api.Register(ctx, wire.RegistrationRequest{
-		RegistrationKey: key,
-		AgentID:         cfg.AgentID,
-		ProposedName:    cfg.DisplayName,
-		AgentVersion:    Version,
-		ProtocolVersion: wire.ProtocolVersion,
-		Diagnostics:     hostinfo.Collect(),
-	})
-	if err != nil {
-		if apiErr, ok := errors.AsType[*serverapi.APIError](err); ok {
-			switch apiErr.Code {
-			case wire.CodeAgentIDTaken:
-				return "", "", 0, errors.New("registration failed: this host is already registered; remove it from the web console, then reinstall")
-			case wire.CodeUnknownAgentID:
-				return "", "", 0, fmt.Errorf("registration failed: the Server does not know this Agent (%s). If the Server was reset, remove %s and register fresh", cfg.AgentID, identity.ConfigPath())
-			case wire.CodeInvalidRegistrationKey:
-				return "", "", 0, errors.New("registration failed: the registration key was not accepted")
-			}
-		}
-		return "", "", 0, fmt.Errorf("registration failed: %w", err)
-	}
-	if err := identity.SaveToken(resp.AgentToken); err != nil {
-		return "", "", 0, fmt.Errorf("save token: %w", err)
-	}
-	fmt.Printf("✓ re-registered, new Agent token stored in %s\n", identity.TokenPath())
-	return resp.AgentToken, wire.StatusPending, resp.NextPollSeconds, nil
-}
-
-// startServiceOnExit hands the polling over to the systemd service once this
-// installer is finished with it, however that happens: authorized, failed, or
-// interrupted with Ctrl-C. It is deferred rather than run at install time
-// because the installer watches the Server itself while it waits, and a service
-// started before that wait polls the same Server with the same token at the
-// same cadence, which is the Server being asked twice as often as it said.
-//
-// A failure here is reported rather than returned: the registration itself
-// succeeded, the unit is written and enabled, and the operator needs to know
-// the one thing that did not happen rather than to see the whole install
-// reported as failed.
 func startServiceOnExit() {
 	if err := sysd.Start(); err != nil {
 		fmt.Fprintf(os.Stderr,
@@ -334,57 +353,47 @@ func authorizationInstructions(marketplaceURL string) string {
 	return fmt.Sprintf("Visit the Plugin marketplace: %s\n\nWaiting for authorization from the web console (approve it at your web console › Agents)...", marketplaceURL)
 }
 
-// Uninstall removes the Agent from this host: it unregisters from the Server
-// (best-effort), stops and removes the systemd unit, and deletes the config,
-// token, and binary. Deliberately host-side only: the Server can never trigger
-// it, so a compromised Server or account cannot wipe an Agent off a machine it
-// does not own. Certificates and keys this Agent deployed are left alone,
-// since removing them could take the host's services down.
+// Uninstall takes the Agent off this host. It deactivates the Agent on the
+// Server (best effort: an unreachable Server must not stop an operator
+// cleaning up a host), deletes the config and token either way, stops and
+// removes the systemd unit and deletes the binary, then offers, each behind
+// its own confirmation, to delete the installed Plugins and the private keys.
+// Deliberately host-side only: the Server can never trigger it, so a
+// compromised Server or account cannot wipe an Agent off a machine it does
+// not own. Certificates the Agent deployed elsewhere on the host are never
+// touched, since removing them could take the host's services down.
+//
+// Deactivating rather than removing is what keeps the Agent's Targets: the
+// web console can hand out a reactivation command that brings the same Agent
+// back, on this host after a reinstall or on another one.
 func Uninstall(ctx context.Context, assumeYes bool) error {
 	if os.Geteuid() != 0 {
 		return errors.New("uninstall must run as root (use sudo)")
 	}
 
 	cfg, cfgErr := identity.LoadConfig()
-	installed := cfgErr == nil && cfg.AgentID != ""
+	token, tokenErr := identity.LoadToken()
+	installed := cfgErr == nil && tokenErr == nil
 	if !installed {
 		fmt.Println("No easySSL Agent registration found on this host; removing any leftover files.")
 	} else {
-		fmt.Printf("easySSL Agent %q (%s) is registered with %s in %s.\n", cfg.DisplayName, cfg.AgentID, cfg.ServerURL, cfg.Organization())
+		fmt.Printf("The easySSL Agent on this host is registered with %s in %s.\n", cfg.ServerURL, cfg.Organization())
 	}
 
-	if !assumeYes && !confirmUninstall(installed, cfg.Organization()) {
+	t := openTerminal()
+	if t != nil {
+		defer t.close()
+	}
+	if !assumeYes && !confirmUninstall(t, installed, cfg.Organization()) {
 		fmt.Println("Aborted; nothing was changed.")
 		return nil
 	}
 
-	// Unregister first, while the token still exists on disk. Best-effort: an
-	// unreachable Server must not block an operator from cleaning up a host,
-	// so failure only leaves a row to remove from the web console.
+	// Deactivate first, while the token still exists on disk.
 	if installed {
-		switch token, err := identity.LoadToken(); {
-		case err != nil:
-			fmt.Println("! no local token, so this host may still appear in the web console; remove it there")
-		default:
-			api, aerr := serverapi.New(cfg.ServerURL)
-			switch {
-			case aerr != nil:
-				// Uninstalling is never blocked by this: the point of the run
-				// is to remove the Agent from this host, and it does that
-				// whether or not the Server can be told.
-				fmt.Printf("! %v; remove this Agent from the web console\n", aerr)
-			default:
-				if err := api.Unregister(ctx, token); err == nil || isUnknownToken(err) {
-					fmt.Printf("✓ unregistered from %s\n", cfg.Organization())
-				} else {
-					fmt.Printf("! could not reach the Server (%v); remove this Agent from the web console\n", err)
-				}
-			}
-		}
+		deactivateOnServer(ctx, cfg, token)
 	}
 
-	// Note what is actually present first, so the summary claims only what this
-	// run really removed rather than reporting deletions of absent files.
 	hadUnit, hadState, hadBinary := exists(sysd.UnitPath()), exists(identity.BaseDir), exists(sysd.BinaryPath())
 
 	if err := sysd.Uninstall(); err != nil {
@@ -401,8 +410,6 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 		fmt.Printf("✓ config and token deleted from %s\n", identity.BaseDir)
 	}
 
-	// Last, because it deletes the running program. Unlinking a running binary
-	// is fine on Linux: the inode survives until this process exits.
 	if err := os.Remove(sysd.BinaryPath()); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing %s: %w", sysd.BinaryPath(), err)
 	}
@@ -415,64 +422,105 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 		return nil
 	}
 	fmt.Println("\neasySSL Agent uninstalled. Certificates it deployed were left in place.")
-	reportKeysLeftBehind()
-	reportPluginsLeftBehind()
+	offerPluginRemoval(t)
+	offerKeyRemoval(t)
 	return nil
 }
 
-// reportPluginsLeftBehind names the Plugins still on the host, for the same
-// reason the keys are named: uninstalling removes the Agent, not what it put
-// on the machine. A Plugin is an executable this host will no longer run, since
-// nothing is left to invoke it, but it is still there and someone
-// decommissioning the machine should know rather than discover it.
-func reportPluginsLeftBehind() {
+// deactivateOnServer tells the Server this token is done with. Every outcome
+// is reported in words, because what the operator does next depends on it:
+// a deactivated Agent needs nothing, and an Agent the Server still accepts
+// has to be deactivated from the web console by hand.
+func deactivateOnServer(ctx context.Context, cfg identity.Config, token string) {
+	api, err := serverapi.New(cfg.ServerURL)
+	if err != nil {
+		fmt.Printf("! %v\n", err)
+		fmt.Printf("  The Server still accepts this host's token: deactivate this Agent from the web console at %s\n", cfg.ServerURL)
+		return
+	}
+	host, _ := os.Hostname()
+	switch err := api.Unregister(ctx, token); {
+	case err == nil:
+		fmt.Printf("✓ deactivated in %s; its Targets are kept, and the web console can reactivate it on this or another host\n", cfg.Organization())
+	case isUnknownToken(err):
+		fmt.Println("✓ the Server no longer accepts this token (the Agent was already deactivated or removed)")
+	default:
+		fmt.Printf("! could not reach %s: %v\n", cfg.ServerURL, err)
+		fmt.Printf("  The Server still accepts this host's token: deactivate this Agent from the web console at %s\n", cfg.ServerURL)
+		fmt.Printf("  (Organization %s, host %s), which is where the Agents are listed.\n", cfg.Organization(), host)
+	}
+}
+
+// offerPluginRemoval deletes the installed Plugin executables after a
+// confirmation. Only with a terminal: --yes consents to uninstalling the
+// Agent, not to everything it could take with it, so an unattended run
+// leaves the Plugins and says where they are.
+func offerPluginRemoval(t *terminal) {
 	installed, err := pluginmgr.New(nil, nil).List()
 	switch {
 	case err != nil:
 		fmt.Printf("\n! Plugins may remain in %s and were NOT deleted (listing them failed: %v).\n",
 			pluginmgr.InstallDir, err)
+		return
 	case len(installed) == 0:
 		return
-	default:
-		fmt.Printf("\n! %d Plugin executable(s) remain in %s and were NOT deleted:\n",
-			len(installed), pluginmgr.InstallDir)
-		for _, p := range installed {
-			fmt.Printf("    %s\n", p.Path)
-		}
-		fmt.Println("  Delete that directory by hand if this host is being decommissioned.")
 	}
+	fmt.Printf("\n%d Plugin executable(s) remain in %s:\n", len(installed), pluginmgr.InstallDir)
+	for _, p := range installed {
+		fmt.Printf("    %s\n", p.Path)
+	}
+	if t == nil {
+		fmt.Println("  They were NOT deleted; delete that directory by hand if this host is being decommissioned.")
+		return
+	}
+	if !strings.EqualFold(t.prompt(fmt.Sprintf("Delete %s? [y/N]: ", pluginmgr.InstallDir)), "y") {
+		fmt.Println("  Kept.")
+		return
+	}
+	if err := os.RemoveAll(pluginmgr.InstallDir); err != nil {
+		fmt.Printf("! could not delete %s: %v\n", pluginmgr.InstallDir, err)
+		return
+	}
+	fmt.Printf("✓ %s deleted\n", pluginmgr.InstallDir)
 }
 
-// reportKeysLeftBehind tells the operator that uninstalling did not remove the
-// private keys.
-//
-// It is printed rather than offered as a choice because the Agent never deletes
-// key material: the keystore is the Agent's only copy of each key, and an
-// uninstall is too ordinary a command to destroy something unrecoverable.
-// Whether the host holds another copy is not this Agent's to say: a Deployment
-// hands the key to a Plugin, which may have written it wherever the Target
-// says, and an operator may have copied it anywhere. The consequence is that
-// a machine someone believes they have decommissioned still holds every key it
-// generated, so that is said here rather than left to be discovered.
-// Only the number depends on the count succeeding. A keystore that cannot be
-// counted is still a keystore left on the host, and it is also the case where
-// something is already wrong, so a failure to count is the worst moment to say
-// nothing.
-func reportKeysLeftBehind() {
+// offerKeyRemoval deletes the keystore after a confirmation that cannot be
+// given by accident: the keys are the Agent's only copy of what every
+// Certificate issued to this host is signed with, and nothing recovers them.
+// Never through --yes, never by an empty answer, and never without a
+// terminal: an uninstall is too ordinary a command to destroy something
+// unrecoverable on a default.
+func offerKeyRemoval(t *terminal) {
 	n, err := keystore.Count()
 	switch {
 	case err != nil:
 		fmt.Printf("\n! private keys may remain in %s and were NOT deleted (counting them failed: %v).\n", keystore.Dir(), err)
+		return
 	case n == 0:
 		return
 	case n == 1:
-		fmt.Printf("\n! 1 private key remains in %s and was NOT deleted.\n", keystore.Dir())
+		fmt.Printf("\n1 private key remains in %s.\n", keystore.Dir())
 	default:
-		fmt.Printf("\n! %d private keys remain in %s and were NOT deleted.\n", n, keystore.Dir())
+		fmt.Printf("\n%d private keys remain in %s.\n", n, keystore.Dir())
 	}
-	fmt.Println("  Copies a Deployment installed elsewhere on this host are left in place too.")
-	fmt.Println("  Delete the directory by hand if this machine is being decommissioned, and")
-	fmt.Println("  keep a copy first if the Certificates using them are still in service.")
+	fmt.Println("  This is the only copy easySSL has of them: a Certificate whose key is gone cannot be")
+	fmt.Println("  deployed or renewed from this host again, and reactivating this Agent elsewhere needs")
+	fmt.Println("  these files copied there first. Copies a Deployment installed elsewhere on this host")
+	fmt.Println("  are left in place either way.")
+	if t == nil {
+		fmt.Println("  They were NOT deleted; delete the directory by hand if this machine is being decommissioned.")
+		return
+	}
+	answer := t.prompt(fmt.Sprintf("Type 'delete keys' to delete %s, anything else keeps it: ", keystore.Dir()))
+	if answer != "delete keys" {
+		fmt.Println("  Kept.")
+		return
+	}
+	if err := os.RemoveAll(keystore.Dir()); err != nil {
+		fmt.Printf("! could not delete %s: %v\n", keystore.Dir(), err)
+		return
+	}
+	fmt.Printf("✓ %s deleted\n", keystore.Dir())
 }
 
 func exists(path string) bool {
@@ -483,48 +531,45 @@ func exists(path string) bool {
 // confirmUninstall asks before destroying local state. With no terminal (an
 // automated run) it declines rather than assuming consent; --yes is the
 // explicit way to say yes without one.
-func confirmUninstall(registered bool, organization string) bool {
-	t := openTerminal()
+func confirmUninstall(t *terminal, registered bool, organization string) bool {
 	if t == nil {
 		fmt.Println("Refusing to uninstall without confirmation: re-run with --yes.")
 		return false
 	}
-	defer t.close()
 	what := "the Agent and its files"
 	if registered {
-		// Named, because an operator who administers several Organizations
-		// cannot tell from "the Organization" which one they are removing this
-		// host from.
-		what = "this Agent from " + organization + ", and its files"
+		what = "the Agent from this host, deactivating it in " + organization
 	}
 	return strings.EqualFold(t.prompt(fmt.Sprintf("Remove %s? [y/N]: ", what)), "y")
 }
 
-func resolveKey(t *terminal, fromFlag string) (string, error) {
-	if fromFlag != "" {
-		return fromFlag, nil
+// resolveCredential returns the registration key or the reactivation token
+// this run registers with, exactly one of them. A token given on the command
+// line or in the environment wins, because it names one Agent where a key
+// names none. At the prompt either may be pasted, and the prefix says which.
+func resolveCredential(t *terminal, opts Options) (key, reactivation string, err error) {
+	if opts.ReactivationToken != "" {
+		return "", opts.ReactivationToken, nil
+	}
+	if opts.RegistrationKey != "" {
+		if strings.HasPrefix(opts.RegistrationKey, reactivationPrefix) {
+			return "", opts.RegistrationKey, nil
+		}
+		return opts.RegistrationKey, "", nil
 	}
 	if t == nil {
-		return "", errors.New("no registration key: set the REGISTRATION_KEY environment variable or pass --key")
+		return "", "", errors.New("no registration key: set the REGISTRATION_KEY environment variable or pass --key (or REACTIVATION_TOKEN / --reactivation-token to resume a deactivated Agent)")
 	}
-	key := t.prompt("Paste your registration key: ")
-	if key == "" {
-		return "", errors.New("a registration key is required")
+	v := t.prompt("Paste your registration key (or a reactivation token): ")
+	switch {
+	case v == "":
+		return "", "", errors.New("a registration key is required")
+	case strings.HasPrefix(v, reactivationPrefix):
+		return "", v, nil
 	}
-	return key, nil
+	return v, "", nil
 }
 
-// confirmName resolves the Agent's name: an explicit --name
-// wins, otherwise the operator edits the hostname-derived default at the
-// prompt, and a non-interactive install keeps the default.
-// proposedName trims a hostname to its first label, which is what the installer
-// offers as the Agent name: `web-01` from `web-01.nw.internal`. A name
-// shaped like a domain invites being read as an address, which an Agent name is
-// not — it identifies nothing, the Server's own identifier does that, and it is
-// edited freely. Nothing is lost by trimming: the whole hostname goes to the
-// Server as a host diagnostic and is printed beside the name.
-//
-// Empty when the host reports no name, which is the caller's signal to ask.
 func proposedName(hostname string) string {
 	label, _, _ := strings.Cut(hostname, ".")
 	return label
@@ -566,50 +611,43 @@ func confirmName(t *terminal, fromFlag, proposed, hostname string) (string, erro
 	return v, nil
 }
 
-// register submits a fresh registration. No identifier goes with it: the
-// Server mints one and returns it, and persisting that answer is what makes the
-// next run of the installer a reinstall of this Agent rather than a second
-// registration.
-func register(ctx context.Context, api *serverapi.Client, key, name, serverURL string) (wire.RegistrationResponse, string, error) {
+// register submits the registration. No identifier goes with it: the Server
+// names Agents, and the answer carries the id and the name the web console
+// shows, which is all the host ever learns of either.
+func register(ctx context.Context, api *serverapi.Client, key, reactivation, name, serverURL string) (wire.RegistrationResponse, error) {
 	diag := hostinfo.Collect()
 	fmt.Printf("✓ host  %s · %s\n", diag.OS, diag.HostType)
-	fmt.Printf("→ submitting registration to %s\n", serverURL)
+	if reactivation != "" {
+		fmt.Printf("→ submitting reactivation to %s\n", serverURL)
+	} else {
+		fmt.Printf("→ submitting registration to %s\n", serverURL)
+	}
 
 	resp, err := api.Register(ctx, wire.RegistrationRequest{
-		RegistrationKey: key,
-		ProposedName:    name,
-		AgentVersion:    Version,
-		ProtocolVersion: wire.ProtocolVersion,
-		Diagnostics:     diag,
+		RegistrationKey:   key,
+		ReactivationToken: reactivation,
+		ProposedName:      name,
+		AgentVersion:      Version,
+		ProtocolVersion:   wire.ProtocolVersion,
+		Diagnostics:       diag,
 	})
 	if err != nil {
 		if apiErr, ok := errors.AsType[*serverapi.APIError](err); ok {
-			if apiErr.Code == wire.CodeInvalidRegistrationKey {
-				return wire.RegistrationResponse{}, "", errors.New("registration failed: the registration key was not accepted")
+			switch apiErr.Code {
+			case wire.CodeInvalidRegistrationKey:
+				return wire.RegistrationResponse{}, errors.New("registration failed: the registration key was not accepted")
+			case wire.CodeInvalidReactivationToken:
+				return wire.RegistrationResponse{}, errors.New("reactivation failed: the token was not accepted (unknown, expired, or already used). Generate another from the Agent's page in the web console")
 			}
 		}
-		return wire.RegistrationResponse{}, "", fmt.Errorf("registration failed: %w", err)
+		return wire.RegistrationResponse{}, fmt.Errorf("registration failed: %w", err)
 	}
 	if resp.AgentID == "" {
-		return wire.RegistrationResponse{}, "", errors.New("registration failed: did not receive an Agent ID from the Server (is it older than this Agent?)")
+		return wire.RegistrationResponse{}, errors.New("registration failed: did not receive an Agent ID from the Server (is it older than this Agent?)")
 	}
-	return resp, resp.AgentID, nil
+	return resp, nil
 }
 
-// waitForAuthorization polls until the Agent is active, the token is rejected,
-// or the context is canceled. Transient network errors are retried.
-// Returns the Organization's name, which the Server's answer carries and which
-// is therefore known only once it replies.
-//
-// It reads the registration rather than checking in. Both answer the question,
-// but a check-in also refreshes the Agent's last-seen, and this installer is
-// not the process whose liveness that records: the service is. The read is
-// documented as free of side effects for exactly this reason, so whoever else
-// is watching, one process decides whether the host looks Online.
-//
-// The cadence therefore stays as registration set it. The read carries no
-// NextPollSeconds of its own, and it does not need one: this wait lasts as long
-// as an operator takes to click Authorize.
 func waitForAuthorization(ctx context.Context, api *serverapi.Client, token string, pollSeconds int) (name, id string, err error) {
 	if pollSeconds <= 0 {
 		pollSeconds = 3
