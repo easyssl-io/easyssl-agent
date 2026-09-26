@@ -18,9 +18,6 @@ import (
 // BaseDir holds the single Agent's config and token on this host.
 const BaseDir = "/etc/easyssl"
 
-// serviceName is the host's single systemd unit (not templated: one per host).
-const serviceName = "easyssl-agent.service"
-
 // Config is the Agent's persisted registration state.
 // Config is what the host keeps of its registration, beside the token: which
 // Server to talk to, and which Organization it joined, the latter only so an
@@ -55,9 +52,6 @@ func (c Config) Organization() string {
 // ConfigPath and TokenPath locate the two state files.
 func ConfigPath() string { return filepath.Join(BaseDir, "config.json") }
 func TokenPath() string  { return filepath.Join(BaseDir, "agent.token") }
-
-// ServiceName is the host's systemd unit name.
-func ServiceName() string { return serviceName }
 
 // SaveConfig writes the config (0600) under a 0700 BaseDir.
 func SaveConfig(cfg Config) error {

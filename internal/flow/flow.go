@@ -29,7 +29,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
-	"github.com/easyssl-io/easyssl-agent/internal/sysd"
+	"github.com/easyssl-io/easyssl-agent/internal/service"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -82,6 +82,11 @@ func Register(ctx context.Context, opts Options) error {
 	// nothing written to disk. Options.ServerURL is required, and the register
 	// command refuses an empty one, so this always has something to check.
 	if err := serverapi.CheckBaseURL(opts.ServerURL); err != nil {
+		return err
+	}
+	// Likewise an init system the service cannot be installed under: found
+	// after registering, it would leave an Agent on the Server that never runs.
+	if _, err := service.Detect(); err != nil {
 		return err
 	}
 
@@ -151,19 +156,19 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 		// one that no longer exists are indistinguishable to the operator
 		// otherwise, and only the first resolves on its own.
 		fmt.Printf("\nCould not reach %s: %v\n", cfg.ServerURL, cerr)
-		if err := sysd.Install(); err != nil {
-			return fmt.Errorf("updating systemd unit: %w", err)
+		if err := service.Install(); err != nil {
+			return fmt.Errorf("updating the service: %w", err)
 		}
-		fmt.Printf("✓ %s updated\n", identity.ServiceName())
+		fmt.Printf("✓ %s updated\n", serviceName())
 		defer startServiceOnExit()
 		fmt.Println("The service will keep polling it, so registration completes once it is back.")
 		return nil
 	}
 
-	if err := sysd.Install(); err != nil {
-		return fmt.Errorf("updating systemd unit: %w", err)
+	if err := service.Install(); err != nil {
+		return fmt.Errorf("updating the service: %w", err)
 	}
-	fmt.Printf("✓ %s updated\n", identity.ServiceName())
+	fmt.Printf("✓ %s updated\n", serviceName())
 	defer startServiceOnExit()
 
 	if resp.Status == wire.StatusActive {
@@ -219,15 +224,15 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	}
 	fmt.Printf("✓ Agent token stored in %s\n", identity.TokenPath())
 
-	if err := sysd.Install(); err != nil {
-		return fmt.Errorf("installing systemd unit: %w", err)
+	if err := service.Install(); err != nil {
+		return fmt.Errorf("installing the service: %w", err)
 	}
-	fmt.Printf("✓ systemd service installed: %s\n", identity.ServiceName())
+	fmt.Printf("✓ service installed: %s\n", serviceName())
 	defer startServiceOnExit()
 
 	if resp.Status == wire.StatusActive {
 		fmt.Printf("\n✓ Reactivated as %s (%s), ACTIVE in %s.\n", resp.DisplayName, resp.AgentID, cfg.Organization())
-		fmt.Printf("  manage:  systemctl status %s\n", identity.ServiceName())
+		fmt.Printf("  manage:  %s\n", statusHint())
 		offerRequiredPlugins(ctx, t, api, resp.AgentToken, opts.ServerURL, resp.RequiredPlugins)
 		return nil
 	}
@@ -292,12 +297,22 @@ func offerRequiredPlugins(ctx context.Context, t *terminal, api *serverapi.Clien
 }
 
 func startServiceOnExit() {
-	if err := sysd.Start(); err != nil {
+	if err := service.Start(); err != nil {
 		fmt.Fprintf(os.Stderr,
 			"! could not start %s: %v\n"+
-				"  The unit is installed and enabled, so `systemctl start %s`, or a reboot, starts it.\n",
-			identity.ServiceName(), err, identity.ServiceName())
+				"  It is installed and enabled, so a reboot starts it; `%s` shows its state.\n",
+			serviceName(), err, statusHint())
 	}
+}
+
+func serviceName() string {
+	n, _, _ := service.Describe()
+	return n
+}
+
+func statusHint() string {
+	_, h, _ := service.Describe()
+	return h
 }
 
 // awaitAuthorization waits for the operator to authorize, printing the outcome.
@@ -323,7 +338,7 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 	} else {
 		fmt.Printf("\n✓ %s was authorized and is now ACTIVE.\n", name)
 	}
-	fmt.Printf("  manage:  systemctl status %s\n", identity.ServiceName())
+	fmt.Printf("  manage:  %s\n", statusHint())
 	return nil
 }
 
@@ -394,13 +409,13 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 		deactivateOnServer(ctx, cfg, token)
 	}
 
-	hadUnit, hadState, hadBinary := exists(sysd.UnitPath()), exists(identity.BaseDir), exists(sysd.BinaryPath())
+	hadUnit, hadState, hadBinary := service.Installed(), exists(identity.BaseDir), exists(service.BinaryPath)
 
-	if err := sysd.Uninstall(); err != nil {
-		return fmt.Errorf("removing the systemd service: %w", err)
+	if err := service.Uninstall(); err != nil && !errors.Is(err, service.ErrUnsupportedInit) {
+		return fmt.Errorf("removing the service: %w", err)
 	}
 	if hadUnit {
-		fmt.Printf("✓ %s stopped and removed\n", identity.ServiceName())
+		fmt.Printf("✓ %s stopped and removed\n", serviceName())
 	}
 
 	if err := identity.RemoveAll(); err != nil {
@@ -410,11 +425,11 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 		fmt.Printf("✓ config and token deleted from %s\n", identity.BaseDir)
 	}
 
-	if err := os.Remove(sysd.BinaryPath()); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing %s: %w", sysd.BinaryPath(), err)
+	if err := os.Remove(service.BinaryPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing %s: %w", service.BinaryPath, err)
 	}
 	if hadBinary {
-		fmt.Printf("✓ %s deleted\n", sysd.BinaryPath())
+		fmt.Printf("✓ %s deleted\n", service.BinaryPath)
 	}
 
 	if !hadUnit && !hadState && !hadBinary {

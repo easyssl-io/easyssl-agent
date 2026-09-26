@@ -16,7 +16,7 @@ module; wire types are not duplicated here.
 ```
 easyssl-agent register --server <url> [--key <key>] [--name <name>]   register this host
 easyssl-agent register --server <url> --reactivation-token <token>    resume a deactivated Agent on this host
-easyssl-agent run                                                     the systemd service loop (periodic check-in)
+easyssl-agent run                                                     the service loop (periodic check-in)
 easyssl-agent status [--json]                                         print local state and what the Server says
 easyssl-agent uninstall [--yes]                                       deactivate and remove the Agent
 ```
@@ -68,8 +68,20 @@ A host runs a single Agent. `register` runs an interactive line-based session:
    the token and the Server URL, root-only (`0600`) under `/etc/easyssl/`, and
    neither the id nor the name: both are the Server's to say, and any
    authenticated call answers them. The Server keeps only the token's hash.
-4. Installs and starts the systemd unit `easyssl-agent.service`, which runs
-   `run` to check in periodically.
+4. Installs and starts the service, which runs `run` to check in
+   periodically, under whichever init system the host runs:
+
+   | Init system | Service | Restarts on exit | Output |
+   |---|---|---|---|
+   | systemd | `easyssl-agent.service` | yes | journal |
+   | OpenRC | `/etc/init.d/easyssl-agent` under `supervise-daemon` | yes | `/var/log/easyssl-agent.log` |
+   | runit | `/etc/sv/easyssl-agent`, linked into the watched service directory | yes | `/var/log/easyssl-agent/current` (svlogd) |
+   | sysvinit | `/etc/init.d/easyssl-agent` via `start-stop-daemon`, enabled with `update-rc.d`, `chkconfig` or `insserv` | no | `/var/log/easyssl-agent.log` |
+   | BusyBox init | a `respawn` line in `/etc/inittab` | yes | `/var/log/easyssl-agent.log` |
+
+   The init system is the one running as PID 1. On any other, `register`
+   refuses before contacting the Server; run `easyssl-agent run` under the
+   host's own supervisor instead.
 5. With a registration key, prints the web console Plugin Marketplace URL, then
    waits for an operator to authorize the Agent. The URL remains visible if
    the wait is interrupted; the installed service keeps polling, so
@@ -128,8 +140,8 @@ restart, which is why running one twice has to be safe.
 
 ## Checking state
 
-`status` prints what the host knows (Server URL, Organization, the systemd
-unit and whether it is running, whether a token is stored) and then asks the
+`status` prints what the host knows (Server URL, Organization, the service
+and whether it is running, whether a token is stored) and then asks the
 Server what this Agent actually is: its id and name, and `authorized`,
 `pending authorization`, or no longer registered because it was deactivated or
 removed there. A stored token proves only that one was issued once, so
@@ -238,7 +250,7 @@ Server the token is done with, which **deactivates** the Agent rather than
 removing it: the token stops working, and the Agent's Targets, key records and
 history stay in the web console, where a reactivation command can bring the
 same Agent back on this host or another. Then, whether or not the Server could
-be reached, it stops and removes the systemd unit, deletes the config and token
+be reached, it stops and removes the service, deletes the config and token
 from `/etc/easyssl/`, and deletes the binary. It asks for confirmation,
 refusing to run unattended unless `--yes` is passed, and is idempotent on a
 host with nothing or only remnants installed.
@@ -268,5 +280,5 @@ Certificates and keys the Agent deployed elsewhere on the host are always left
 in place, since deleting them could take the host's own services down.
 Uninstall is host-side only: the Server can never trigger it.
 
-This slice is Linux + systemd and root-only; the Agent stores no encryption key
+This slice is Linux-only and root-only; the Agent stores no encryption key
 and sends none to the Server.

@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
+	"github.com/easyssl-io/easyssl-agent/internal/service"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -23,7 +24,7 @@ func Collect() wire.Diagnostics {
 		HostType:    hostType(),
 		BinaryPath:  bin,
 		ConfigPath:  identity.BaseDir,
-		ServiceName: identity.ServiceName(),
+		ServiceName: serviceName(),
 	}
 }
 
@@ -103,4 +104,10 @@ func detectVirt() (string, bool) {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
+}
+
+// serviceName is the service's name under this host's init system.
+func serviceName() string {
+	n, _, _ := service.Describe()
+	return n
 }

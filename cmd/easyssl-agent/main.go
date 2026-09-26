@@ -41,7 +41,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
 	"github.com/easyssl-io/easyssl-agent/internal/sdnotify"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
-	"github.com/easyssl-io/easyssl-agent/internal/sysd"
+	"github.com/easyssl-io/easyssl-agent/internal/service"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -428,6 +428,7 @@ func cmdStatus(args []string) error {
 	// (GET), not a check-in, so running status never refreshes last-seen and
 	// therefore cannot make a stopped Agent look alive in the web console.
 	stateCode, stateDetail, reg := serverState(cfg, token, tokenErr)
+	serviceName, _, _ := service.Describe()
 
 	if *asJSON {
 		out := map[string]any{
@@ -436,8 +437,8 @@ func cmdStatus(args []string) error {
 			"serverUrl":      cfg.ServerURL,
 			"organization":   cfg.OrganizationName,
 			"organizationId": cfg.OrganizationID,
-			"serviceName":    identity.ServiceName(),
-			"serviceState":   sysd.State(),
+			"serviceName":    serviceName,
+			"serviceState":   service.State(),
 			"tokenPresent":   tokenErr == nil,
 			// Short code for machines; the printed line spells it out.
 			"serverState": stateCode,
@@ -458,7 +459,7 @@ func cmdStatus(args []string) error {
 	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
 		line("Organization", cfg.Organization())
 	}
-	line("service", fmt.Sprintf("%s (%s)", identity.ServiceName(), sysd.State()))
+	line("service", fmt.Sprintf("%s (%s)", serviceName, service.State()))
 	if tokenErr == nil {
 		line("token", "stored in "+identity.TokenPath())
 	} else {
