@@ -16,7 +16,7 @@
 // A key is named by its own public-key fingerprint, and that is the whole of
 // what the keystore holds:
 //
-//	<base>/keys/<fingerprint>.key    PKCS#8 PEM, ECDSA P-256
+//	<base>/keys/<fingerprint>.key    PKCS#8 PEM, any wire.KeyTypes type
 //
 // Which certificate uses which key is the Server's record, taken from the
 // public key of each CSR it accepts, and every command that touches a key
@@ -32,6 +32,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -107,11 +108,11 @@ func requireRoot() error {
 // file on a host that keeps every key anyway, and the host inventory lists it
 // as a key no certificate names. Once a CSR is stored the Server names its key
 // on every re-run, so a key that was used is never generated past.
-func Generate() (string, *ecdsa.PrivateKey, error) {
+func Generate(keyType string) (string, crypto.Signer, error) {
 	if err := requireRoot(); err != nil {
 		return "", nil, err
 	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := newKey(keyType)
 	if err != nil {
 		return "", nil, fmt.Errorf("keystore: generating key: %w", err)
 	}
@@ -133,6 +134,35 @@ func Generate() (string, *ecdsa.PrivateKey, error) {
 	return fp, key, nil
 }
 
+// newKey generates a key of one of wire.KeyTypes.
+func newKey(keyType string) (crypto.Signer, error) {
+	switch keyType {
+	case wire.KeyTypeECP256:
+		return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	case wire.KeyTypeECP384:
+		return ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	case wire.KeyTypeRSA2048:
+		return rsa.GenerateKey(rand.Reader, 2048)
+	case wire.KeyTypeRSA3072:
+		return rsa.GenerateKey(rand.Reader, 3072)
+	case wire.KeyTypeRSA4096:
+		return rsa.GenerateKey(rand.Reader, 4096)
+	}
+	return nil, fmt.Errorf("keystore: key type %q is not one this Agent generates", keyType)
+}
+
+// signatureAlgorithm is what a CSR from key is signed with: SHA-384 for P-384,
+// whose strength SHA-256 would undercut, and SHA-256 otherwise.
+func signatureAlgorithm(key crypto.Signer) x509.SignatureAlgorithm {
+	switch wire.KeyTypeOf(key.Public()) {
+	case wire.KeyTypeECP256:
+		return x509.ECDSAWithSHA256
+	case wire.KeyTypeECP384:
+		return x509.ECDSAWithSHA384
+	}
+	return x509.SHA256WithRSA
+}
+
 // CSR builds a certificate signing request from key, for the domains it is
 // given. It never chooses them: the caller is told what to sign.
 //
@@ -143,10 +173,10 @@ func Generate() (string, *ecdsa.PrivateKey, error) {
 // order from the CSR, taking the Common Name first and then every SAN, so a
 // Common Name is either a duplicate of a SAN or a name nobody asked for, and the
 // second of those would put an unrequested name on the certificate.
-func CSR(key *ecdsa.PrivateKey, domains []string) ([]byte, error) {
+func CSR(key crypto.Signer, domains []string) ([]byte, error) {
 	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
 		DNSNames:           domains,
-		SignatureAlgorithm: x509.ECDSAWithSHA256,
+		SignatureAlgorithm: signatureAlgorithm(key),
 	}, key)
 	if err != nil {
 		return nil, fmt.Errorf("keystore: building CSR: %w", err)
@@ -200,7 +230,8 @@ func List() ([]wire.KeyInfo, error) {
 			continue
 		}
 		fp := strings.TrimSuffix(e.Name(), ".key")
-		if _, err := loadKey(fp); err != nil {
+		key, err := loadKey(fp)
+		if err != nil {
 			logger().Warn("key left out of the inventory", "file", e.Name(), "err", err)
 			continue
 		}
@@ -210,7 +241,7 @@ func List() ([]wire.KeyInfo, error) {
 		}
 		// Never modified after creation (a key is written once), so the
 		// modification time is the creation time on every filesystem.
-		keys = append(keys, wire.KeyInfo{Fingerprint: fp, Algorithm: "ec_p256", CreatedAt: info.ModTime().UTC()})
+		keys = append(keys, wire.KeyInfo{Fingerprint: fp, Algorithm: wire.KeyTypeOf(key.Public()), CreatedAt: info.ModTime().UTC()})
 	}
 	return keys, nil
 }
@@ -223,7 +254,7 @@ func List() ([]wire.KeyInfo, error) {
 // something outside it did, or because this host never held it, and either is
 // a fact to report: a key generated in its place would not match whatever the
 // Server named it for.
-func loadKey(fp string) (*ecdsa.PrivateKey, error) {
+func loadKey(fp string) (crypto.Signer, error) {
 	if err := validateKeyID(fp); err != nil {
 		return nil, err
 	}
@@ -243,9 +274,9 @@ func loadKey(fp string) (*ecdsa.PrivateKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("keystore: %s cannot be parsed: %w", path, err)
 	}
-	key, ok := parsed.(*ecdsa.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("keystore: %s holds a %T, not an ECDSA key", path, parsed)
+	key, ok := parsed.(crypto.Signer)
+	if !ok || wire.KeyTypeOf(key.Public()) == "" {
+		return nil, fmt.Errorf("keystore: %s holds a %T, not a key of any type a Certificate uses", path, parsed)
 	}
 	got, err := fingerprint(key.Public())
 	if err != nil {
@@ -392,7 +423,7 @@ var ErrNoKey = errors.New("keystore: this host holds no key under that fingerpri
 
 // Load returns the key the Server named, or ErrNoKey when this host has none
 // under that fingerprint. It never generates.
-func Load(fingerprint string) (*ecdsa.PrivateKey, error) {
+func Load(fingerprint string) (crypto.Signer, error) {
 	if err := validateKeyID(fingerprint); err != nil {
 		return nil, err
 	}
@@ -405,7 +436,7 @@ func Load(fingerprint string) (*ecdsa.PrivateKey, error) {
 // EncodePrivateKeyPEM renders a key as PKCS#8 PEM, the form a Plugin receives
 // it in. It never touches disk: the material goes over a pipe to the Plugin,
 // which writes it where it needs to and removes it.
-func EncodePrivateKeyPEM(key *ecdsa.PrivateKey) (string, error) {
+func EncodePrivateKeyPEM(key crypto.Signer) (string, error) {
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return "", fmt.Errorf("keystore: encoding key: %w", err)

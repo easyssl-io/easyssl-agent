@@ -2,9 +2,11 @@ package csr
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -48,10 +50,16 @@ func (f *fakeAPI) SubmitCSR(_ context.Context, _, _, csrPEM string) error {
 // under its fingerprint, Load returns what is filed there or ErrNoKey.
 func memoryKeystore(t *testing.T) {
 	t.Helper()
-	keys := map[string]*ecdsa.PrivateKey{}
+	keys := map[string]crypto.Signer{}
 	origGenerate, origLoad := generateKey, loadKey
-	generateKey = func() (string, *ecdsa.PrivateKey, error) {
-		k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	generateKey = func(keyType string) (string, crypto.Signer, error) {
+		var k crypto.Signer
+		var err error
+		if keyType == wire.KeyTypeRSA2048 {
+			k, err = rsa.GenerateKey(rand.Reader, 2048)
+		} else {
+			k, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -64,7 +72,7 @@ func memoryKeystore(t *testing.T) {
 		keys[fp] = k
 		return fp, k, nil
 	}
-	loadKey = func(fp string) (*ecdsa.PrivateKey, error) {
+	loadKey = func(fp string) (crypto.Signer, error) {
 		if k, ok := keys[fp]; ok {
 			return k, nil
 		}
@@ -249,10 +257,31 @@ func TestUnperformableWorkIsAckedWithoutSubmitting(t *testing.T) {
 func TestKeystoreTroubleLeavesTheCommandPending(t *testing.T) {
 	api := &fakeAPI{work: work("app.example.test")}
 	orig := generateKey
-	generateKey = func() (string, *ecdsa.PrivateKey, error) { return "", nil, errors.New("disk full") }
+	generateKey = func(string) (string, crypto.Signer, error) { return "", nil, errors.New("disk full") }
 	t.Cleanup(func() { generateKey = orig })
 	h := New(api, "esat_test", slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := h(context.Background(), command()); err == nil {
 		t.Fatal("keystore failure: handler = nil, want error (retry until the command expires)")
+	}
+}
+
+// TestRSAWorkBuildsAnRSACSR: the key type the work names is the one generated.
+func TestRSAWorkBuildsAnRSACSR(t *testing.T) {
+	w := work("app.example.test")
+	w.KeyType = wire.KeyTypeRSA2048
+	api := &fakeAPI{work: w}
+	if err := newHandler(t, api)(context.Background(), command()); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.submitted) != 1 {
+		t.Fatalf("submitted %d CSRs, want 1", len(api.submitted))
+	}
+	block, _ := pem.Decode([]byte(api.submitted[0]))
+	req, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := wire.KeyTypeOf(req.PublicKey); got != wire.KeyTypeRSA2048 {
+		t.Fatalf("CSR key is %s, want rsa_2048", got)
 	}
 }

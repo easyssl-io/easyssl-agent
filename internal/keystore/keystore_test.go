@@ -16,16 +16,19 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
 // generate is Generate with the fingerprint checked against the key, so a
 // test reads one return value and knows the other agrees with it.
 func generate(t *testing.T) (string, *ecdsa.PrivateKey) {
 	t.Helper()
-	fp, key, err := Generate()
+	fp, signer, err := Generate(wire.KeyTypeECP256)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
+	key := signer.(*ecdsa.PrivateKey)
 	if want, _ := fingerprint(key.Public()); fp != want {
 		t.Fatalf("Generate returned fingerprint %s for a key hashing to %s", fp, want)
 	}
@@ -52,7 +55,7 @@ func TestNonRootIsRefused(t *testing.T) {
 	base := withTempBase(t)
 	euid = func() int { return 1000 }
 
-	if _, _, err := Generate(); err == nil {
+	if _, _, err := Generate(wire.KeyTypeECP256); err == nil {
 		t.Fatal("a non-root caller was allowed to write a private key")
 	}
 	if n := countFiles(t, filepath.Join(base, "keys")); n != 0 {
@@ -265,7 +268,7 @@ func TestCreatesMissingDirectories(t *testing.T) {
 	baseDir, euid = filepath.Join(root, "deep", "etc", "easyssl"), func() int { return 0 }
 	t.Cleanup(func() { baseDir, euid = oldBase, oldEuid })
 
-	if _, _, err := Generate(); err != nil {
+	if _, _, err := Generate(wire.KeyTypeECP256); err != nil {
 		t.Fatalf("Generate into a tree that does not exist yet: %v", err)
 	}
 	for _, dir := range []string{
@@ -355,7 +358,7 @@ func TestLoadReturnsTheNamedKeyAndRefusesWhenThereIsNone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load after Generate: %v", err)
 	}
-	if !loaded.Equal(stored) {
+	if !loaded.(*ecdsa.PrivateKey).Equal(stored) {
 		t.Error("Load returned a different key from the one Generate stored")
 	}
 
@@ -429,5 +432,57 @@ func TestListReportsUsableKeysOnly(t *testing.T) {
 	}
 	if len(keys) != 1 || keys[0].Fingerprint != fp || keys[0].Algorithm != "ec_p256" || keys[0].CreatedAt.IsZero() {
 		t.Fatalf("List() = %+v, want the one usable key %s", keys, fp)
+	}
+}
+
+// TestEveryKeyTypeRoundTrips generates one key of each type, and checks that
+// the CSR carries a key of that type signed with the matching algorithm, that
+// Load reads it back as the same key, and that the inventory names its type.
+func TestEveryKeyTypeRoundTrips(t *testing.T) {
+	withTempBase(t)
+	want := map[string]x509.SignatureAlgorithm{
+		wire.KeyTypeECP256:  x509.ECDSAWithSHA256,
+		wire.KeyTypeECP384:  x509.ECDSAWithSHA384,
+		wire.KeyTypeRSA2048: x509.SHA256WithRSA,
+		wire.KeyTypeRSA3072: x509.SHA256WithRSA,
+		wire.KeyTypeRSA4096: x509.SHA256WithRSA,
+	}
+	fps := map[string]string{}
+	for _, kt := range wire.KeyTypes {
+		fp, key, err := Generate(kt)
+		if err != nil {
+			t.Fatalf("Generate(%s): %v", kt, err)
+		}
+		fps[fp] = kt
+		der, err := CSR(key, []string{"a.example.test"})
+		if err != nil {
+			t.Fatalf("CSR(%s): %v", kt, err)
+		}
+		req, err := x509.ParseCertificateRequest(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := wire.KeyTypeOf(req.PublicKey); got != kt || req.SignatureAlgorithm != want[kt] {
+			t.Fatalf("%s: CSR key %s signed %s, want %s", kt, got, req.SignatureAlgorithm, want[kt])
+		}
+		loaded, err := Load(fp)
+		if err != nil || wire.KeyTypeOf(loaded.Public()) != kt {
+			t.Fatalf("Load(%s) = %v, %v", kt, loaded, err)
+		}
+	}
+	if _, _, err := Generate("ec_p521"); err == nil {
+		t.Fatal("Generate accepted a type outside wire.KeyTypes")
+	}
+	keys, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range keys {
+		if k.Algorithm != fps[k.Fingerprint] {
+			t.Fatalf("inventory names %s as %s, want %s", k.Fingerprint, k.Algorithm, fps[k.Fingerprint])
+		}
+	}
+	if len(keys) != len(wire.KeyTypes) {
+		t.Fatalf("inventory lists %d keys, want %d", len(keys), len(wire.KeyTypes))
 	}
 }

@@ -14,7 +14,7 @@ package csr
 
 import (
 	"context"
-	"crypto/ecdsa"
+	"crypto"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -60,10 +60,10 @@ func New(api API, token string, logger *slog.Logger) commands.Handler {
 			}
 			return err // transport or Server trouble: leave pending, retry later
 		}
-		if work.KeyType != wire.KeyTypeECP256 {
-			// A key type this Agent cannot generate: it is older than its
-			// Server. Acked as handled; the certificate keeps waiting and the
-			// command's expiry reports the failure naming this Agent.
+		if !wire.ValidKeyType(work.KeyType) {
+			// A key type this Agent cannot generate. Acked as handled; the
+			// certificate keeps waiting and the command's expiry reports the
+			// failure naming this Agent.
 			logger.Error("csr work asks for a key type this Agent cannot generate",
 				"certificate", cmd.RefID, "keyType", work.KeyType)
 			return nil
@@ -119,17 +119,17 @@ func New(api API, token string, logger *slog.Logger) commands.Handler {
 }
 
 // keyFor returns the key the work names, or a fresh one when it names none.
-func keyFor(work wire.CSRWork) (*ecdsa.PrivateKey, error) {
+func keyFor(work wire.CSRWork) (crypto.Signer, error) {
 	if work.KeyFingerprint != "" {
 		return loadKey(work.KeyFingerprint)
 	}
-	_, key, err := generateKey()
+	_, key, err := generateKey(work.KeyType)
 	return key, err
 }
 
 // buildPEM builds the CSR (keystore.CSR: SANs only, no Common Name) and
 // PEM-encodes it for the wire.
-func buildPEM(key *ecdsa.PrivateKey, domains []string) (string, error) {
+func buildPEM(key crypto.Signer, domains []string) (string, error) {
 	der, err := keystore.CSR(key, domains)
 	if err != nil {
 		return "", err
