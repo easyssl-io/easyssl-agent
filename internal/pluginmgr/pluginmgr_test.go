@@ -69,7 +69,7 @@ func answer() plugincontract.DiscoverResponse {
 	return plugincontract.DiscoverResponse{
 		ContractVersion: plugincontract.ContractVersion,
 		Name:            "generic-cli",
-		Version:         "0.1.0",
+		Version:         "0.0.1",
 		Description:     "Installs by running a command you write.",
 		Settings: []plugincontract.SettingDeclaration{{
 			Key: "install", Label: "Install command", Type: plugincontract.SettingTypeCommand,
@@ -86,7 +86,7 @@ func TestInstallPlacesTheArtifactAndAnswersFromIt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if inst.ID != "generic-cli" || inst.Version != "0.1.0" || inst.Digest != trueDigest() {
+	if inst.ID != "generic-cli" || inst.Version != "0.0.1" || inst.Digest != trueDigest() {
 		t.Fatalf("installed = %+v", inst)
 	}
 	body, err := os.ReadFile(inst.Path)
@@ -121,7 +121,7 @@ func TestListAndDiscoverReadTheDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inv) != 1 || inv[0].Unobserved || inv[0].Version != "0.1.0" || len(inv[0].Declarations) != 1 || inv[0].Digest != trueDigest() {
+	if len(inv) != 1 || inv[0].Unobserved || inv[0].Version != "0.0.1" || len(inv[0].Declarations) != 1 || inv[0].Digest != trueDigest() {
 		t.Fatalf("Discover = %+v", inv)
 	}
 
@@ -141,7 +141,7 @@ func TestListAndDiscoverReadTheDirectory(t *testing.T) {
 	t.Run("Find reports the executable and the version it answers", func(t *testing.T) {
 		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) { return answer(), nil }
 		inst, found, err := m.Find("generic-cli")
-		if err != nil || !found || inst.Version != "0.1.0" || inst.Path != filepath.Join(m.installDir, "generic-cli") {
+		if err != nil || !found || inst.Version != "0.0.1" || inst.Path != filepath.Join(m.installDir, "generic-cli") {
 			t.Fatalf("Find = %+v %v %v", inst, found, err)
 		}
 		if _, found, _ := m.Find("nginx"); found {
@@ -156,10 +156,10 @@ func TestReinstallReplacesTheExecutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	upgraded := answer()
-	upgraded.Version = "0.2.0"
+	upgraded.Version = "0.0.2"
 	m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) { return upgraded, nil }
 	inst, err := m.Install(context.Background(), "generic-cli", "linux", "amd64")
-	if err != nil || inst.Version != "0.2.0" {
+	if err != nil || inst.Version != "0.0.2" {
 		t.Fatalf("reinstall = %+v, %v", inst, err)
 	}
 	if installed, _ := m.List(); len(installed) != 1 {

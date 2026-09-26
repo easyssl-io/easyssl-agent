@@ -9,8 +9,8 @@ import (
 
 func TestPluginListLineShowsFullSHA256(t *testing.T) {
 	digest := strings.Repeat("ab", 32)
-	got := pluginListLine(wire.PluginInventory{ID: "generic-cli", Version: "0.1.0", Digest: digest})
-	want := "generic-cli      v0.1.0      sha256:" + digest
+	got := pluginListLine(wire.PluginInventory{ID: "generic-cli", Version: "0.0.1", Digest: digest})
+	want := "generic-cli      v0.0.1      sha256:" + digest
 	if got != want {
 		t.Fatalf("plugin list line = %q, want %q", got, want)
 	}
