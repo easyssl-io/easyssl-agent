@@ -179,6 +179,10 @@ func runit() (*backend, error) {
 			if err := os.Remove(path(link)); err != nil && !os.IsNotExist(err) {
 				return err
 			}
+			// runsvdir notices the removed link within five seconds and stops
+			// this service's runsv, which until then keeps writing supervise/
+			// into the directory; removing it earlier left it recreated.
+			waitGone("runsv", name, 10*time.Second)
 			// The whole directory: runsv adds supervise/ (and log/supervise/)
 			// beside the files Install wrote, and a directory left behind with
 			// only those in it reads as a service that is still installed.
@@ -376,7 +380,11 @@ func inittabEdit(inittab string, edit func([]string) []string) error {
 
 // runningAgents lists the pids of `easyssl-agent run` processes, never this
 // one: the installer is the same binary under another subcommand.
-func runningAgents() []int {
+func runningAgents() []int { return processes(name, "run") }
+
+// processes lists the pids, other than this one, whose command line is prog
+// (by base name) followed by arg.
+func processes(prog, arg string) []int {
 	entries, _ := os.ReadDir(path("/proc"))
 	var pids []int
 	for _, e := range entries {
@@ -389,11 +397,23 @@ func runningAgents() []int {
 			continue
 		}
 		args := bytes.Split(bytes.TrimRight(cmdline, "\x00"), []byte{0})
-		if len(args) >= 2 && filepath.Base(string(args[0])) == name && string(args[1]) == "run" {
+		if len(args) >= 2 && filepath.Base(string(args[0])) == prog && string(args[1]) == arg {
 			pids = append(pids, pid)
 		}
 	}
 	return pids
+}
+
+// waitGone waits up to limit for no process to run as `prog arg`.
+func waitGone(prog, arg string, limit time.Duration) {
+	if root != "/" {
+		return
+	}
+	for deadline := time.Now().Add(limit); time.Now().Before(deadline); time.Sleep(250 * time.Millisecond) {
+		if len(processes(prog, arg)) == 0 {
+			return
+		}
+	}
 }
 
 // stopRunning ends every running Agent; under BusyBox init the respawn line
