@@ -179,7 +179,10 @@ func runit() (*backend, error) {
 			if err := os.Remove(path(link)); err != nil && !os.IsNotExist(err) {
 				return err
 			}
-			return os.RemoveAll(path(svDir + "/log"))
+			// The whole directory: runsv adds supervise/ (and log/supervise/)
+			// beside the files Install wrote, and a directory left behind with
+			// only those in it reads as a service that is still installed.
+			return os.RemoveAll(path(svDir))
 		},
 		state: func(*backend) string {
 			// "run: easyssl-agent: (pid 12) 30s", "down: …", "fail: …".

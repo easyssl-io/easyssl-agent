@@ -173,8 +173,12 @@ func TestRunitLifecycle(t *testing.T) {
 	if State() != "active" {
 		t.Fatalf("State = %q", State())
 	}
+	// What runsv adds while the service runs.
+	if err := os.MkdirAll(path("/etc/sv/easyssl-agent/supervise"), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	_ = Uninstall()
-	if exists("/var/service/easyssl-agent") || exists("/etc/sv/easyssl-agent/run") {
+	if exists("/var/service/easyssl-agent") || exists("/etc/sv/easyssl-agent") {
 		t.Fatal("Uninstall left the service behind")
 	}
 	want := []string{"sv restart easyssl-agent", "sv down easyssl-agent"}
