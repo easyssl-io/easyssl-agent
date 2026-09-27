@@ -75,8 +75,8 @@ func answer() plugincontract.DiscoverResponse {
 			Key: "install", Label: "Install command", Type: plugincontract.SettingTypeCommand,
 			Default: "echo hi", Required: true,
 		}},
-		SuggestedTargets: []plugincontract.SuggestedTarget{},
-		Warnings:         []string{},
+		DiscoveredTargets: []plugincontract.DiscoveredTarget{},
+		Warnings:          []string{},
 	}
 }
 

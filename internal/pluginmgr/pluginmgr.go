@@ -230,7 +230,7 @@ func (m *Manager) Discover(ctx context.Context) ([]wire.PluginInventory, error) 
 			m.logger.Warn("plugin unobserved", "plugin", p.ID, "err", err)
 		} else {
 			entry.Version, entry.Description = desc.Version, desc.Description
-			entry.Declarations, entry.SuggestedTargets, entry.Warnings = desc.Settings, desc.SuggestedTargets, desc.Warnings
+			entry.Declarations, entry.DiscoveredTargets, entry.Warnings = desc.Settings, desc.DiscoveredTargets, desc.Warnings
 			if entry.Declarations == nil {
 				entry.Declarations = []plugincontract.SettingDeclaration{}
 			}
