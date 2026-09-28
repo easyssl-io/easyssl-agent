@@ -18,30 +18,24 @@ import (
 // BaseDir holds the single Agent's config and token on this host.
 const BaseDir = "/etc/easyssl"
 
-// serviceName is the host's single systemd unit (not templated: one per host).
-const serviceName = "easyssl-agent.service"
-
 // Config is the Agent's persisted registration state.
+// Config is what the host keeps of its registration, beside the token: which
+// Server to talk to, and which Organization it joined, the latter only so an
+// offline `status` or `uninstall` can say where this host belongs. No Agent
+// ID and no name: the Server is the only namer of Agents, both are answered
+// by any authenticated call, and a reactivation token carries the identity
+// a host resumes.
 type Config struct {
-	AgentID     string `json:"agentId"`
-	DisplayName string `json:"displayName"`
-	ServerURL   string `json:"serverUrl"`
-	// OrganizationName is what the web console calls the Organization this host is
-	// registered with, kept so a message on the host can name it rather than
-	// saying "the Organization" to somebody who administers several. The
-	// Server sends it on registration and on every check-in; absent on a host
-	// registered before the field existed, and every use falls back.
+	ServerURL string `json:"serverUrl"`
+	// OrganizationName and OrganizationID are the display name and public id
+	// of the Organization this host joined, learned at registration and
+	// refreshed on every check-in. Optional so an older config still loads.
 	OrganizationName string `json:"organizationName,omitempty"`
-	// OrganizationID is the web console's public id for it (`org-…`). Kept beside
-	// the name because the name is not unique: every account starts with one
-	// called "Default organization".
-	OrganizationID string `json:"organizationId,omitempty"`
+	OrganizationID   string `json:"organizationId,omitempty"`
 }
 
-// Organization is how to refer to this host's Organization in a message: the
-// name with its id, since the name alone does not identify one. Falls back
-// through what is known, to wording that names none, for a host registered
-// against a Server older than these fields.
+// Organization names the Organization for a message, in whatever detail the
+// config holds.
 func (c Config) Organization() string {
 	switch {
 	case c.OrganizationName != "" && c.OrganizationID != "":
@@ -58,9 +52,6 @@ func (c Config) Organization() string {
 // ConfigPath and TokenPath locate the two state files.
 func ConfigPath() string { return filepath.Join(BaseDir, "config.json") }
 func TokenPath() string  { return filepath.Join(BaseDir, "agent.token") }
-
-// ServiceName is the host's systemd unit name.
-func ServiceName() string { return serviceName }
 
 // SaveConfig writes the config (0600) under a 0700 BaseDir.
 func SaveConfig(cfg Config) error {
@@ -96,7 +87,7 @@ func SaveToken(token string) error {
 // idempotent, so an already-absent file is not an error.
 //
 // It deliberately does not remove BaseDir itself, because the keystore lives
-// under it and holds the only copy of every private key this host generated.
+// under it and is the Agent's only copy of every private key it generated.
 // Uninstalling is too ordinary a command to destroy that, so the keys are left
 // behind and the caller says so. This function used to remove the whole
 // directory, which was correct only while nothing but the config and the token

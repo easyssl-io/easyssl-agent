@@ -18,7 +18,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"regexp"
 	"sync"
 	"syscall"
 	"time"
@@ -26,6 +25,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/commands"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
+	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
 	"github.com/easyssl-io/easyssl-contract/wire"
@@ -41,7 +41,10 @@ const runTimeout = 10 * time.Minute
 // limit and the Server stores this text, so it is truncated here rather than
 // there: head and tail are what a reader needs, and the marker says what was
 // dropped instead of leaving a silently short transcript.
-const maxOutput = 256 << 10
+//
+// The same bound the Agent collects a Plugin's output at, deliberately:
+// collecting more than the Server would keep buys nothing.
+const maxOutput = plugintrace.MaxPluginOutput
 
 // hostLock serializes Plugin execution across this process. Two
 // Deployments landing together would otherwise write and reload the same
@@ -67,7 +70,7 @@ var _ Plugins = (*pluginmgr.Manager)(nil)
 
 // loadKey is keystore.Load, indirected only so tests need no root and no real
 // keystore. Load never generates: a certificate whose key this host does not
-// hold cannot be installed here.
+// hold under the name the Server gave cannot be installed here.
 var loadKey = keystore.Load
 
 // New returns the handler for wire.CommandDeploy.
@@ -141,13 +144,21 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 			work.PluginID, err, work.PluginID))
 	}
 
-	key, err := loadKey(work.CertificateID)
+	// The key is the one the Server named, never one this host picks: the
+	// link between a certificate and its key is the Server's record, and a
+	// host holds only keys named by their own fingerprint.
+	if work.KeyFingerprint == "" {
+		return failed(installed.Version, fmt.Sprintf(
+			"the Server named no private key for %s, so nothing could install it. "+
+				"The Server is older than this Agent.", work.CertificateID))
+	}
+	key, err := loadKey(work.KeyFingerprint)
 	if err != nil {
 		if errors.Is(err, keystore.ErrNoKey) {
 			return failed(installed.Version, fmt.Sprintf(
-				"this host holds no private key for %s, so it cannot install it. "+
-					"A certificate is installable only by the Agent that generated its key.",
-				work.CertificateID))
+				"this host holds no private key %s for %s, so it cannot install it. "+
+					"A certificate is installable only by an Agent holding its key.",
+				work.KeyFingerprint, work.CertificateID))
 		}
 		return failed(installed.Version, fmt.Sprintf("reading the private key: %v", err))
 	}
@@ -170,7 +181,7 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 		}
 	}()
 
-	req := plugincontract.InstallRequest{
+	req := plugincontract.DeployRequest{
 		ContractVersion: plugincontract.ContractVersion,
 		CertificatePem:  work.CertificatePem,
 		ChainPem:        work.ChainPem,
@@ -183,24 +194,52 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	hostLock.Lock()
 	defer hostLock.Unlock()
 
-	out, err := runPlugin(ctx, installed.Path, req)
-	if err != nil {
-		return failed(installed.Version, err.Error())
-	}
-	return wire.DeploymentResult{
-		OK:            out.OK,
+	run, err := runPlugin(ctx, installed.Path, req, logger,
+		"deployment", work.ID, "certificate", work.CertificateID,
+		"plugin", installed.ID, "plugin_version", installed.Version)
+	result := wire.DeploymentResult{
+		OK:            succeeded(err, run),
 		PluginVersion: installed.Version,
-		Output:        report(out.Output),
+		PluginRun:     run,
 	}
+	if err != nil {
+		// The Agent's sentence and the process's facts, side by side and never
+		// merged: what the Plugin printed is on `run`, so this says only what
+		// the Agent concluded.
+		result.AgentMessage = err.Error()
+	}
+	return result
 }
 
-// runPlugin executes the Plugin's install operation: the operation name on
+// succeeded is the whole of how this Agent decides a Deployment worked: the
+// Plugin's process ended, and it ended with status 0.
+//
+// One function because it used to be two struct literals, one computing the
+// field and one omitting it and taking Go's zero. Those agreed only because
+// `cmd.Wait` errors exactly when the status is non-zero; a later path that
+// failed with a zero status — a check after the run, a decode — would have
+// parted them without a compile error, a vet warning or a failing test, which
+// is what a field left out of a struct literal costs.
+//
+// The error is checked as well as the status because a run that never started
+// has no status of the Plugin's own, and the -1 standing in for one must not be
+// read as though the Plugin chose it.
+func succeeded(err error, run *wire.PluginRun) bool {
+	return err == nil && run != nil && run.ExitStatus == 0
+}
+
+// runPlugin executes the Plugin's deploy operation: the operation name on
 // argv, the request on stdin, the response on stdout.
-func runPlugin(ctx context.Context, path string, req plugincontract.InstallRequest) (plugincontract.InstallResponse, error) {
-	var out plugincontract.InstallResponse
+//
+// The whole exchange goes to plugintrace, which does nothing unless the
+// operator turned it on. That is the only place this conversation is visible:
+// what comes back to the Server is the Plugin's own account of itself, so an
+// argument the Agent got wrong, or a Plugin failing before it printed anything,
+// leaves no evidence anywhere else.
+func runPlugin(ctx context.Context, path string, req plugincontract.DeployRequest, logger *slog.Logger, attrs ...any) (*wire.PluginRun, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return out, fmt.Errorf("encoding the install request: %w", err)
+		return nil, fmt.Errorf("encoding the deploy request: %w", err)
 	}
 
 	rctx, cancel := context.WithTimeout(ctx, runTimeout)
@@ -208,36 +247,79 @@ func runPlugin(ctx context.Context, path string, req plugincontract.InstallReque
 
 	// #nosec G204 -- path comes from this Agent's own record of what it
 	// installed, not from the Server or the request.
-	cmd := exec.Command(path, plugincontract.OpInstall)
+	cmd := exec.Command(path, plugincontract.OpDeploy)
 	cmd.Stdin = bytesReader(body)
 	// Its own process group, so the kill below reaches whatever the reload
 	// command started. A script that backgrounds a process would otherwise
 	// outlive the timeout and hold nothing accountable.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	stdout, runErr := runBounded(rctx, cmd)
-	if runErr != nil {
-		return out, runErr
+	started := time.Now()
+	captured, code, runErr := runBounded(rctx, cmd)
+	elapsed := time.Since(started)
+	plugintrace.Record(logger, plugintrace.Exchange{
+		Op: plugincontract.OpDeploy, Path: path, Args: []string{plugincontract.OpDeploy},
+		Stdin:    body,
+		Stdout:   []byte(captured.Text(plugintrace.StreamStdout)),
+		Stderr:   []byte(captured.Text(plugintrace.StreamStderr)),
+		ExitCode: code, Duration: elapsed, Err: runErr, Attrs: attrs,
+	})
+
+	// Reported whatever happened, including a run that was killed. Nothing here
+	// interprets what the Plugin wrote: there is no answer document to parse
+	// any more, the exit status is the answer, and the two streams are what it
+	// said while arriving at it.
+	run := &wire.PluginRun{
+		ExitStatus: code, DurationMs: elapsed.Milliseconds(),
+		Output:      chunks(captured),
+		StdoutBytes: captured.Produced(plugintrace.StreamStdout),
+		StderrBytes: captured.Produced(plugintrace.StreamStderr),
 	}
-	if err := json.Unmarshal(stdout, &out); err != nil {
-		// A Plugin that answered with something unparseable failed, and what it
-		// did say is the only evidence of why.
-		return out, fmt.Errorf("the plugin's install output is not JSON: %w\noutput:\n%s", err, report(string(stdout)))
-	}
-	return out, nil
+	return run, runErr
 }
 
-// runBounded runs cmd, killing its whole process group if the context expires,
-// and returns stdout. Stderr is the Plugin's own diagnostics, kept only to
-// explain a failure.
-func runBounded(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
-	var stdout, stderr limitedBuffer
-	stdout.max, stderr.max = maxOutput, maxOutput
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+// chunks converts the capture to the wire's shape, redacting as it goes. A
+// Plugin that echoes its request or dumps its environment on failure is how a
+// private key reaches its own output, and this is the last point before that
+// output leaves the host.
+func chunks(c *plugintrace.Capture) []wire.OutputChunk {
+	recorded := c.Chunks()
+	if len(recorded) == 0 {
+		return nil
+	}
+	out := make([]wire.OutputChunk, 0, len(recorded))
+	// One redactor per stream, carried across that stream's chunks: a key the
+	// Plugin prints on stdout is split into several chunks whenever a stderr
+	// line lands in the middle of it, and the continuation has no begin marker.
+	redactors := map[string]*plugintrace.KeyRedactor{}
+	for _, ch := range recorded {
+		r := redactors[ch.Stream]
+		if r == nil {
+			r = &plugintrace.KeyRedactor{}
+			redactors[ch.Stream] = r
+		}
+		out = append(out, wire.OutputChunk{Stream: ch.Stream, Text: truncate(r.Redact(ch.Text))})
+	}
+	return out
+}
 
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("could not start the plugin: %w", err)
+// runBounded runs cmd, killing its whole process group if the context expires.
+// It returns everything the run produced — stdout, stderr and the exit code —
+// whether or not it succeeded, because the caller records the exchange either
+// way and a failed run is the one worth reading. Stderr is the Plugin's own
+// diagnostics and never goes to the Server; it explains a failure here.
+func runBounded(ctx context.Context, cmd *exec.Cmd) (captured *plugintrace.Capture, exitCode int, err error) {
+	captured = &plugintrace.Capture{Max: maxOutput}
+	stdout, stderr := captured.Writer(plugintrace.StreamStdout), captured.Writer(plugintrace.StreamStderr)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	defer func() {
+		// A command killed mid-line still wrote something worth reading.
+		stdout.Flush()
+		stderr.Flush()
+	}()
+
+	if startErr := cmd.Start(); startErr != nil {
+		return captured, -1, fmt.Errorf("could not start the plugin: %w", startErr)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -250,13 +332,13 @@ func runBounded(ctx context.Context, cmd *exec.Cmd) ([]byte, error) {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 		<-done
-		return nil, fmt.Errorf("the plugin did not finish within %s and was killed.\noutput so far:\n%s",
-			runTimeout, report(stdout.String()+stderr.String()))
-	case err := <-done:
-		if err != nil {
-			return nil, fmt.Errorf("the plugin exited with an error: %w\n%s", err, report(stderr.String()))
+		return captured, -1, fmt.Errorf("the plugin did not finish within %s and was killed", runTimeout)
+	case waitErr := <-done:
+		code := cmd.ProcessState.ExitCode()
+		if waitErr != nil {
+			return captured, code, fmt.Errorf("the plugin exited with an error: %w", waitErr)
 		}
-		return stdout.Bytes(), nil
+		return captured, code, nil
 	}
 }
 
@@ -278,66 +360,20 @@ func runnable(path string) error {
 	return nil
 }
 
-// failed builds a result for an attempt whose explanation is the Agent's, not
-// a Plugin's: either no Plugin ran, or the one that did could not answer. The
-// text goes to Message, leaving Output for what a Plugin actually printed, and
-// still through the same funnel, because a killed run's error may quote it.
-func failed(pluginVersion, message string) wire.DeploymentResult {
-	return wire.DeploymentResult{OK: false, PluginVersion: pluginVersion, Message: report(message)}
-}
-
-// privateKeyBlock matches a PEM private key however it is framed. The body is
-// `[\s\S]` rather than `.` so it spans real newlines, and the same match
-// covers a key echoed inside JSON, where the newlines are two-character `\n`
-// escapes and the whole block is one line.
-var privateKeyBlock = regexp.MustCompile(
-	`(-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----)([\s\S]*?)(-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----)`)
-
-// keyBegin and keyEnd locate the markers on their own, for the case below where
-// a key has no end marker left.
-var (
-	keyBegin = regexp.MustCompile(`-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----`)
-	keyEnd   = regexp.MustCompile(`-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----`)
-)
-
-// redactPrivateKeys masks the body of any PEM private key in text a Plugin
-// produced.
+// failed builds a result for an attempt no Plugin ran at all: it was not
+// installed, its artifact could not be executed, this host holds no key. There
+// is no PluginRun on these, and its absence is the fact that nothing ran.
 //
-// A Plugin is arbitrary code and receives the key on its stdin, so one that
-// echoes its request — or simply prints the file it was handed — puts the key
-// in its output. Reporting that verbatim would store a usable private key in
-// the Server's database and show it in the web console, which is a worse
-// exposure than the one the whole design avoids by never sending a key over the
-// wire. The markers are kept so the redaction is visible rather than looking
-// like a Plugin that said nothing.
-func redactPrivateKeys(s string) string {
-	s = privateKeyBlock.ReplaceAllString(s, "${1}"+keyPlaceholder+"${3}")
-	// Whatever survives the pass above is a key with no end marker, which is
-	// what a bounded or interrupted echo leaves. Only the last begin marker can
-	// be unclosed — every earlier one was closed, or it would have swallowed
-	// the rest — so the tail from it is dropped. Done by index rather than by a
-	// second pattern: a pattern anchored to the end would also match the begin
-	// marker the pass above deliberately kept, and take the whole output after
-	// a redacted key with it.
-	last := keyBegin.FindAllStringIndex(s, -1)
-	if len(last) == 0 {
-		return s
-	}
-	start := last[len(last)-1]
-	if keyEnd.FindStringIndex(s[start[1]:]) != nil {
-		return s // closed, and already redacted above
-	}
-	return s[:start[1]] + keyPlaceholder
+// Still through the same funnel, because one of these messages quotes a path
+// and a redaction that only applies to some of them is one somebody forgets.
+func failed(pluginVersion, message string) wire.DeploymentResult {
+	return wire.DeploymentResult{OK: false, PluginVersion: pluginVersion, AgentMessage: report(message)}
 }
-
-// keyPlaceholder stands in for what was removed, and says who removed it so a
-// reader does not go looking for a truncated file.
-const keyPlaceholder = "\n****** private key redacted by the easySSL Agent ******\n"
 
 // report prepares any text for the Server: the key is removed first and the
 // result bounded afterwards, in that order, because truncating first can cut a
 // key's end marker off and leave the head of one unredactable.
-func report(s string) string { return truncate(redactPrivateKeys(s)) }
+func report(s string) string { return truncate(plugintrace.RedactPrivateKeys(s)) }
 
 // truncate bounds reported text, keeping the head and the tail around a marker
 // naming what was dropped: the start says what the script set out to do and the
@@ -350,41 +386,6 @@ func truncate(s string) string {
 	head := maxOutput / 2
 	tail := maxOutput - head - len(marker) - 8
 	return s[:head] + fmt.Sprintf(marker, len(s)-head-tail) + s[len(s)-tail:]
-}
-
-// limitedBuffer collects output up to a bound, so a Plugin printing without
-// limit cannot exhaust this Agent's memory while the Server would only have
-// stored a truncated copy anyway.
-type limitedBuffer struct {
-	buf []byte
-	max int
-	// dropped counts what was discarded, so the truncation is reported rather
-	// than silent.
-	dropped int
-}
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	room := b.max - len(b.buf)
-	if room <= 0 {
-		b.dropped += len(p)
-		return len(p), nil
-	}
-	if len(p) > room {
-		b.buf = append(b.buf, p[:room]...)
-		b.dropped += len(p) - room
-		return len(p), nil
-	}
-	b.buf = append(b.buf, p...)
-	return len(p), nil
-}
-
-func (b *limitedBuffer) Bytes() []byte { return b.buf }
-
-func (b *limitedBuffer) String() string {
-	if b.dropped == 0 {
-		return string(b.buf)
-	}
-	return fmt.Sprintf("%s\n… %d further bytes discarded by the Agent …\n", b.buf, b.dropped)
 }
 
 // bytesReader avoids importing bytes for one call.

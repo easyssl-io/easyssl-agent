@@ -1,6 +1,7 @@
 // Package csr answers the Server's request_csr commands: read what to sign,
-// have the keystore produce or reuse the certificate's key, build the CSR, and
-// hand it back. The Agent is told what to sign and chooses nothing.
+// have the keystore produce a key or load the one the Server named, build the
+// CSR, and hand it back. The Agent is told what to sign, and with which key,
+// and chooses nothing.
 //
 // Every outcome here is deliberate about one distinction: an error return
 // leaves the command pending, so the Runner tries again later and, if the
@@ -13,7 +14,7 @@ package csr
 
 import (
 	"context"
-	"crypto/ecdsa"
+	"crypto"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -36,10 +37,14 @@ type API interface {
 
 var _ API = (*serverapi.Client)(nil)
 
-// ensureKey is keystore.Ensure, indirected only so tests can supply an
-// in-memory key: Ensure requires root and a real filesystem, which is its job,
-// not this handler's. CSR building stays the real keystore code either way.
-var ensureKey = keystore.Ensure
+// generateKey and loadKey are keystore.Generate and keystore.Load, indirected
+// only so tests can supply in-memory keys: both require root and a real
+// filesystem, which is their job, not this handler's. CSR building stays the
+// real keystore code either way.
+var (
+	generateKey = keystore.Generate
+	loadKey     = keystore.Load
+)
 
 // New returns the handler for wire.CommandRequestCSR.
 func New(api API, token string, logger *slog.Logger) commands.Handler {
@@ -55,10 +60,10 @@ func New(api API, token string, logger *slog.Logger) commands.Handler {
 			}
 			return err // transport or Server trouble: leave pending, retry later
 		}
-		if work.KeyType != wire.KeyTypeECP256 {
-			// A key type this Agent cannot generate: it is older than its
-			// Server. Acked as handled; the certificate keeps waiting and the
-			// command's expiry reports the failure naming this Agent.
+		if !wire.ValidKeyType(work.KeyType) {
+			// A key type this Agent cannot generate. Acked as handled; the
+			// certificate keeps waiting and the command's expiry reports the
+			// failure naming this Agent.
 			logger.Error("csr work asks for a key type this Agent cannot generate",
 				"certificate", cmd.RefID, "keyType", work.KeyType)
 			return nil
@@ -68,11 +73,16 @@ func New(api API, token string, logger *slog.Logger) commands.Handler {
 			return nil
 		}
 
-		key, err := ensureKey(work.CertificateID)
+		key, err := keyFor(work)
 		if err != nil {
 			// Keystore refusals are environmental (permissions, inconsistent
-			// state) and worth retrying only until the command expires; the
-			// expiry is the clock on this wait by design.
+			// state, a named key this host does not hold) and worth retrying
+			// only until the command expires; the expiry is the clock on this
+			// wait by design, and it fails the certificate naming this Agent.
+			// A key that is not here is never replaced by a fresh one: the
+			// Server named it because a certificate is to be issued from it,
+			// and a CSR from any other key would be rejected anyway.
+			logger.Error("csr work cannot be answered", "certificate", cmd.RefID, "err", err)
 			return fmt.Errorf("csr: %w", err)
 		}
 		csrPEM, err := buildPEM(key, work.Domains)
@@ -88,8 +98,8 @@ func New(api API, token string, logger *slog.Logger) commands.Handler {
 			return nil
 		case errors.As(err, &apiErr) && apiErr.Code == wire.CodeCSRAlreadySubmitted:
 			// Success from an earlier run this Agent cannot recognize
-			// byte-wise; the stored CSR is from the same key (idempotent
-			// generation), so there is nothing left to do.
+			// byte-wise; the work named the stored CSR's key, so this build
+			// was from the same key and there is nothing left to do.
 			logger.Info("csr already submitted", "certificate", work.CertificateID)
 			return nil
 		case errors.As(err, &apiErr) && apiErr.Code == wire.CodeNotAwaitingCSR:
@@ -108,9 +118,18 @@ func New(api API, token string, logger *slog.Logger) commands.Handler {
 	}
 }
 
+// keyFor returns the key the work names, or a fresh one when it names none.
+func keyFor(work wire.CSRWork) (crypto.Signer, error) {
+	if work.KeyFingerprint != "" {
+		return loadKey(work.KeyFingerprint)
+	}
+	_, key, err := generateKey(work.KeyType)
+	return key, err
+}
+
 // buildPEM builds the CSR (keystore.CSR: SANs only, no Common Name) and
 // PEM-encodes it for the wire.
-func buildPEM(key *ecdsa.PrivateKey, domains []string) (string, error) {
+func buildPEM(key crypto.Signer, domains []string) (string, error) {
 	der, err := keystore.CSR(key, domains)
 	if err != nil {
 		return "", err

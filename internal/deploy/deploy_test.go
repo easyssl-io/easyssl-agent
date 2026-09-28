@@ -1,83 +1,18 @@
 package deploy
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-// A Plugin is arbitrary code and is handed the private key on its stdin, so one
-// that echoes its request, prints the file it was given, or dumps its
-// environment on failure puts the key in its output. Reporting that verbatim
-// would store a usable key in the Server's database and show it in the web console.
-// These cover the shapes that output actually arrives in.
+// What redaction itself must do is covered in the package that owns it
+// (internal/plugintrace). What is covered here is deploy's own funnel: that it
+// redacts before bounding, since only this package knows about the bound.
 
 const secretBody = "MIIBSECRETKEYBYTESmustNeverBeReported"
-
-func TestRedactPrivateKeys(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-	}{{
-		name: "a PEM block with real newlines, as a plugin printing the key file produces",
-		in:   "wrote it\n-----BEGIN PRIVATE KEY-----\n" + secretBody + "\n-----END PRIVATE KEY-----\ndone\n",
-	}, {
-		// The case the finding names: the request echoed back, where the whole
-		// key is one line and its newlines are two-character escapes.
-		name: "a key echoed inside JSON, newlines escaped",
-		in:   `{"privateKeyPem":"-----BEGIN PRIVATE KEY-----\n` + secretBody + `\n-----END PRIVATE KEY-----\n"}`,
-	}, {
-		name: "the RSA/EC spelling of the markers",
-		in:   "-----BEGIN EC PRIVATE KEY-----\n" + secretBody + "\n-----END EC PRIVATE KEY-----",
-	}, {
-		// Output is bounded while it is collected, so a key at the very end can
-		// lose its closing marker. Half a key is still key material.
-		name: "a key whose end marker was cut off",
-		in:   "lots of output\n-----BEGIN PRIVATE KEY-----\n" + secretBody,
-	}, {
-		name: "more than one key in the same text",
-		in: "-----BEGIN PRIVATE KEY-----\n" + secretBody + "\n-----END PRIVATE KEY-----\n" +
-			"and again\n-----BEGIN PRIVATE KEY-----\n" + secretBody + "2\n-----END PRIVATE KEY-----\n",
-	}}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := redactPrivateKeys(c.in)
-			if strings.Contains(got, secretBody) {
-				t.Fatalf("the key survived redaction:\n%s", got)
-			}
-			if !strings.Contains(got, "redacted by the easySSL Agent") {
-				t.Fatalf("nothing says the text was redacted:\n%s", got)
-			}
-			// The markers stay, so a reader can see a key was there rather than
-			// mistaking the gap for a plugin that said nothing.
-			if !strings.Contains(got, "BEGIN") {
-				t.Fatalf("the redaction removed the marker too:\n%s", got)
-			}
-		})
-	}
-}
-
-// Everything around a key is kept: the output is the record of what happened,
-// and redaction must not cost the reader the rest of it.
-func TestRedactionKeepsSurroundingOutput(t *testing.T) {
-	in := "installing to /etc/nginx\n-----BEGIN PRIVATE KEY-----\n" + secretBody +
-		"\n-----END PRIVATE KEY-----\nreloaded nginx: ok\n"
-	got := redactPrivateKeys(in)
-	for _, want := range []string{"installing to /etc/nginx", "reloaded nginx: ok"} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("redaction dropped %q:\n%s", want, got)
-		}
-	}
-}
-
-// Certificates are public and must survive: redacting them would remove the
-// evidence that the right certificate was installed.
-func TestRedactionLeavesCertificatesAlone(t *testing.T) {
-	in := "-----BEGIN CERTIFICATE-----\nPUBLICCERTBYTES\n-----END CERTIFICATE-----\n"
-	if got := redactPrivateKeys(in); got != in {
-		t.Fatalf("a certificate was altered:\n%s", got)
-	}
-}
 
 // Redaction runs before the bound, not after: truncating first can cut a key's
 // end marker away and leave a head that the block pattern no longer matches.
@@ -91,5 +26,39 @@ func TestReportRedactsBeforeTruncating(t *testing.T) {
 	}
 	if len(got) > maxOutput {
 		t.Fatalf("report returned %d bytes, over the %d bound", len(got), maxOutput)
+	}
+}
+
+// What decides a Deployment worked. There is one rule and it is this one; the
+// field used to be set in two struct literals, one computing it and one leaving
+// it out, and the omitted one reported Go's `false` while looking deliberate.
+func TestSucceededIsTheExitStatusAndNothingElse(t *testing.T) {
+	clean := &wire.PluginRun{ExitStatus: 0}
+	for name, tc := range map[string]struct {
+		err  error
+		run  *wire.PluginRun
+		want bool
+	}{
+		"ran and exited 0": {nil, clean, true},
+		"ran and exited 1": {errors.New("exit status 1"), &wire.PluginRun{ExitStatus: 1}, false},
+		// The Agent's marker for a run it killed. Not a status the Plugin chose,
+		// and it must not be read as one.
+		"killed at the bound": {errors.New("did not finish"), &wire.PluginRun{ExitStatus: -1}, false},
+		// The case the two literals could have parted on: something concluded
+		// the attempt failed while the process itself ended cleanly.
+		"an error despite a 0 status": {errors.New("something else went wrong"), clean, false},
+		// No process at all: the Plugin was missing or unrunnable.
+		"no run": {errors.New("not installed"), nil, false},
+		// The other way the two literals could have parted, and the reason the
+		// status is checked rather than inferred from the error. It cannot
+		// arise today, `cmd.Wait` erroring exactly when the status is non-zero,
+		// which is what makes it worth pinning: a path that stopped returning
+		// an error for a failed run would otherwise report the Deployment as
+		// having worked.
+		"a non-zero status with no error": {nil, &wire.PluginRun{ExitStatus: 2}, false},
+	} {
+		if got := succeeded(tc.err, tc.run); got != tc.want {
+			t.Errorf("%s: succeeded = %v, want %v", name, got, tc.want)
+		}
 	}
 }

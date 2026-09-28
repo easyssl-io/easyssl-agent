@@ -10,19 +10,30 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-const (
-	certificateA = "crt-testkeystorea2"
-	certificateB = "crt-testkeystoreb2"
-)
+// generate is Generate with the fingerprint checked against the key, so a
+// test reads one return value and knows the other agrees with it.
+func generate(t *testing.T) (string, *ecdsa.PrivateKey) {
+	t.Helper()
+	fp, signer, err := Generate(wire.KeyTypeECP256)
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	key := signer.(*ecdsa.PrivateKey)
+	if want, _ := fingerprint(key.Public()); fp != want {
+		t.Fatalf("Generate returned fingerprint %s for a key hashing to %s", fp, want)
+	}
+	return fp, key
+}
 
 // withTempBase points the keystore at a directory this test owns, and reports
 // the process as root. These tests run unprivileged, so the check has to be
@@ -44,7 +55,7 @@ func TestNonRootIsRefused(t *testing.T) {
 	base := withTempBase(t)
 	euid = func() int { return 1000 }
 
-	if _, err := Ensure(certificateA); err == nil {
+	if _, _, err := Generate(wire.KeyTypeECP256); err == nil {
 		t.Fatal("a non-root caller was allowed to write a private key")
 	}
 	if n := countFiles(t, filepath.Join(base, "keys")); n != 0 {
@@ -59,27 +70,18 @@ func TestNonRootIsRefused(t *testing.T) {
 func TestLayoutAndPermissions(t *testing.T) {
 	base := withTempBase(t)
 
-	key, err := Ensure(certificateA)
+	want, _ := generate(t)
+
+	info, err := os.Stat(filepath.Join(base, "keys"))
 	if err != nil {
-		t.Fatalf("Ensure: %v", err)
+		t.Fatalf("stat keys: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Errorf("keys mode = %o, want 700", got)
 	}
 
-	for _, dir := range []string{filepath.Join(base, "keys"), filepath.Join(base, "certs")} {
-		info, err := os.Stat(dir)
-		if err != nil {
-			t.Fatalf("stat %s: %v", dir, err)
-		}
-		if got := info.Mode().Perm(); got != 0o700 {
-			t.Errorf("%s mode = %o, want 700", dir, got)
-		}
-	}
-
-	want, err := fingerprint(key.Public())
-	if err != nil {
-		t.Fatal(err)
-	}
 	keyPath := filepath.Join(base, "keys", want+".key")
-	info, err := os.Stat(keyPath)
+	info, err = os.Stat(keyPath)
 	if err != nil {
 		t.Fatalf("the key is not named after its own public key: %v", err)
 	}
@@ -96,63 +98,30 @@ func TestLayoutAndPermissions(t *testing.T) {
 	if got := fingerprintOfPEM(t, body); got != want {
 		t.Errorf("key file contents hash to %s but the file is named %s", got, want)
 	}
-
-	var rec record
-	readJSON(t, filepath.Join(base, "certs", certificateA+".json"), &rec)
-	if rec.CertificateID != certificateA {
-		t.Errorf("record certificateId = %q, want %q", rec.CertificateID, certificateA)
+	// Nothing beside the key: the link to a certificate is the Server's.
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if rec.KeyFingerprint != want {
-		t.Errorf("record keyFingerprint = %q, want %q", rec.KeyFingerprint, want)
-	}
-	if rec.CreatedAt.IsZero() {
-		t.Error("record createdAt is unset")
+	if len(entries) != 1 || entries[0].Name() != "keys" {
+		t.Errorf("keystore base holds %v, want only keys/", entries)
 	}
 }
 
-// TestEnsureIsIdempotentAndPerCertificate covers both halves of the identity
-// rule. Asking twice for one certificate must return one key, which is
-// what stops a re-delivered request from leaving a certificate matched to a key
-// the host no longer has. Asking for a different certificate must produce a
-// different key, and since a renewal is a new certificate record, this is the
-// only check that a renewal gets a fresh key.
-func TestEnsureIsIdempotentAndPerCertificate(t *testing.T) {
+// TestGenerateIsFreshEveryCall: the keystore knows nothing of certificates,
+// so it cannot return "the key for this one" and must not try. Two calls are
+// two keys, both kept, which is what makes a renewal's key fresh and an
+// interrupted request's first key an orphan rather than a silent reuse.
+func TestGenerateIsFreshEveryCall(t *testing.T) {
 	base := withTempBase(t)
 
-	first, err := Ensure(certificateA)
-	if err != nil {
-		t.Fatalf("Ensure: %v", err)
-	}
-	again, err := Ensure(certificateA)
-	if err != nil {
-		t.Fatalf("second Ensure: %v", err)
-	}
-	if !first.Equal(again) {
-		t.Error("asking twice for one certificate returned two different keys")
-	}
-	if n := countFiles(t, filepath.Join(base, "keys")); n != 1 {
-		t.Errorf("keys after two calls for one certificate = %d, want 1", n)
-	}
-	if n := countFiles(t, filepath.Join(base, "certs")); n != 1 {
-		t.Errorf("records after two calls for one certificate = %d, want 1", n)
-	}
-
-	other, err := Ensure(certificateB)
-	if err != nil {
-		t.Fatalf("Ensure other: %v", err)
-	}
-	if first.Equal(other) {
-		t.Error("a second certificate reused the first certificate's key")
+	firstFP, first := generate(t)
+	secondFP, second := generate(t)
+	if first.Equal(second) || firstFP == secondFP {
+		t.Error("two calls returned one key")
 	}
 	if n := countFiles(t, filepath.Join(base, "keys")); n != 2 {
-		t.Errorf("keys after a second certificate = %d, want 2", n)
-	}
-
-	// Case is not a second identity: the Server only ever mints lowercase, so
-	// an uppercase spelling is refused outright rather than normalized into a
-	// second record for the same certificate.
-	if _, err := Ensure(strings.ToUpper(certificateA)); err == nil {
-		t.Error("an uppercase certificate id was accepted; it must be refused")
+		t.Errorf("keys after two calls = %d, want 2", n)
 	}
 }
 
@@ -162,10 +131,7 @@ func TestEnsureIsIdempotentAndPerCertificate(t *testing.T) {
 func TestCSRMatchesStoredKey(t *testing.T) {
 	withTempBase(t)
 
-	key, err := Ensure(certificateA)
-	if err != nil {
-		t.Fatalf("Ensure: %v", err)
-	}
+	_, key := generate(t)
 	der, err := CSR(key, []string{"example.test", "www.example.test"})
 	if err != nil {
 		t.Fatalf("CSR: %v", err)
@@ -197,25 +163,27 @@ func TestCSRMatchesStoredKey(t *testing.T) {
 	}
 }
 
-// TestMalformedIdentifierIsRefused: the id arrives from the Server and
-// filepath.Join resolves ".." rather than refusing it, so without the check a
-// Server could choose where this root process writes key material.
+// TestMalformedIdentifierIsRefused: the fingerprint arrives from the Server
+// and filepath.Join resolves ".." rather than refusing it, so without the check
+// a Server could choose which file this root process reads as a private key.
 func TestMalformedIdentifierIsRefused(t *testing.T) {
 	base := withTempBase(t)
 
+	valid := strings.Repeat("ab", 32)
 	for _, id := range []string{
 		"../../etc/passwd",
-		"../" + certificateA,
-		certificateA + "/../../escape",
+		"../" + valid,
+		valid + "/../../escape",
 		"",
-		"not-a-certificate-id",
-		certificateA + "extra",             // too long
-		certificateA[:len(certificateA)-1], // too short
-		"cert-testkeystore2",               // wrong prefix
-		"crt-testkeystore19",               // '1' and '9' are outside base32's a-z2-7
+		"not-a-fingerprint",
+		valid + "ab",                     // too long
+		valid[:62],                       // too short
+		strings.ToUpper(valid),           // one spelling only
+		strings.Repeat("g", 64),          // not hex
+		strings.Repeat("a", 63) + "\x00", // not printable
 	} {
-		if _, err := Ensure(id); err == nil {
-			t.Errorf("Ensure(%q) was accepted; it must be refused", id)
+		if _, err := Load(id); err == nil || errors.Is(err, ErrNoKey) {
+			t.Errorf("Load(%q) = %v; it must be refused before the filesystem is touched", id, err)
 		}
 	}
 
@@ -233,24 +201,19 @@ func TestMalformedIdentifierIsRefused(t *testing.T) {
 	}
 }
 
-// TestInconsistentStateIsRefused covers the three ways the two records can
-// disagree. Each must be reported: every way of continuing would use
+// TestInconsistentStateIsRefused covers the ways a named key can fail to be
+// what its name says. Each must be reported: every way of continuing would use
 // or create key material on an assumption already known to be false, and the
 // failure would otherwise be silent.
 func TestInconsistentStateIsRefused(t *testing.T) {
-	t.Run("record naming an absent key", func(t *testing.T) {
+	t.Run("named key that is absent", func(t *testing.T) {
 		base := withTempBase(t)
-		key, err := Ensure(certificateA)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fp, _ := fingerprint(key.Public())
+		fp, _ := generate(t)
 		if err := os.Remove(filepath.Join(base, "keys", fp+".key")); err != nil {
 			t.Fatal(err)
 		}
-		_, err = Ensure(certificateA)
-		if err == nil {
-			t.Fatal("a record naming a missing key was accepted")
+		if _, err := Load(fp); !errors.Is(err, ErrNoKey) {
+			t.Fatalf("Load of a removed key = %v, want ErrNoKey", err)
 		}
 		if n := countFiles(t, filepath.Join(base, "keys")); n != 0 {
 			t.Error("a replacement key was generated; the absence must be reported instead")
@@ -259,17 +222,13 @@ func TestInconsistentStateIsRefused(t *testing.T) {
 
 	t.Run("key file that does not parse", func(t *testing.T) {
 		base := withTempBase(t)
-		key, err := Ensure(certificateA)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fp, _ := fingerprint(key.Public())
+		fp, _ := generate(t)
 		path := filepath.Join(base, "keys", fp+".key")
 		if err := os.WriteFile(path, []byte("not a key\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Ensure(certificateA); err == nil {
-			t.Fatal("an unparseable key file was accepted")
+		if _, err := Load(fp); err == nil || errors.Is(err, ErrNoKey) {
+			t.Fatalf("an unparseable key file: Load = %v, want an error that is not ErrNoKey", err)
 		}
 		body, err := os.ReadFile(path)
 		if err != nil {
@@ -282,18 +241,9 @@ func TestInconsistentStateIsRefused(t *testing.T) {
 
 	t.Run("key whose contents do not match its name", func(t *testing.T) {
 		base := withTempBase(t)
-		key, err := Ensure(certificateA)
-		if err != nil {
-			t.Fatal(err)
-		}
-		fp, _ := fingerprint(key.Public())
-
+		fp, _ := generate(t)
 		// Put a different, perfectly valid key under the first key's name.
-		other, err := Ensure(certificateB)
-		if err != nil {
-			t.Fatal(err)
-		}
-		otherFP, _ := fingerprint(other.Public())
+		otherFP, _ := generate(t)
 		body, err := os.ReadFile(filepath.Join(base, "keys", otherFP+".key"))
 		if err != nil {
 			t.Fatal(err)
@@ -301,29 +251,8 @@ func TestInconsistentStateIsRefused(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(base, "keys", fp+".key"), body, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := Ensure(certificateA); err == nil {
-			t.Fatal("a key filed under another key's name was accepted")
-		}
-	})
-
-	t.Run("record disagreeing with its own filename", func(t *testing.T) {
-		base := withTempBase(t)
-		if _, err := Ensure(certificateA); err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(base, "certs", certificateA+".json")
-		var rec record
-		readJSON(t, path, &rec)
-		rec.CertificateID = certificateB
-		body, err := json.Marshal(rec)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(path, body, 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := Ensure(certificateA); err == nil {
-			t.Fatal("a record disagreeing with its filename was accepted; neither value may be chosen")
+		if _, err := Load(fp); err == nil || errors.Is(err, ErrNoKey) {
+			t.Fatalf("a key filed under another key's name: Load = %v, want a mismatch error", err)
 		}
 	})
 }
@@ -339,15 +268,14 @@ func TestCreatesMissingDirectories(t *testing.T) {
 	baseDir, euid = filepath.Join(root, "deep", "etc", "easyssl"), func() int { return 0 }
 	t.Cleanup(func() { baseDir, euid = oldBase, oldEuid })
 
-	if _, err := Ensure(certificateA); err != nil {
-		t.Fatalf("Ensure into a tree that does not exist yet: %v", err)
+	if _, _, err := Generate(wire.KeyTypeECP256); err != nil {
+		t.Fatalf("Generate into a tree that does not exist yet: %v", err)
 	}
 	for _, dir := range []string{
 		filepath.Join(root, "deep"),
 		filepath.Join(root, "deep", "etc"),
 		baseDir,
 		filepath.Join(baseDir, "keys"),
-		filepath.Join(baseDir, "certs"),
 	} {
 		info, err := os.Stat(dir)
 		if err != nil {
@@ -365,12 +293,8 @@ func TestCountReportsKeys(t *testing.T) {
 	if n, err := Count(); err != nil || n != 0 {
 		t.Fatalf("Count on an empty host = %d, %v; want 0, nil", n, err)
 	}
-	if _, err := Ensure(certificateA); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Ensure(certificateB); err != nil {
-		t.Fatal(err)
-	}
+	generate(t)
+	generate(t)
 	if n, err := Count(); err != nil || n != 2 {
 		t.Fatalf("Count = %d, %v; want 2, nil", n, err)
 	}
@@ -394,17 +318,6 @@ func fingerprintOfPEM(t *testing.T, body []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func readJSON(t *testing.T, path string, into any) {
-	t.Helper()
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	if err := json.Unmarshal(body, into); err != nil {
-		t.Fatalf("parse %s: %v", path, err)
-	}
-}
-
 func countFiles(t *testing.T, dir string) int {
 	t.Helper()
 	entries, err := os.ReadDir(dir)
@@ -423,42 +336,40 @@ func countFiles(t *testing.T, dir string) int {
 	return n
 }
 
-// TestLoadReturnsTheStoredKeyAndRefusesWhenThereIsNone covers the read-out path
-// FR-001i's sibling: Load is how a key leaves this package for a Plugin, and it
-// is the one function here whose whole job is to hand private material to
-// another program. Three properties matter. It returns the same key Ensure
-// stored, so a Deployment installs the key the certificate was issued against.
-// It reports ErrNoKey rather than generating, because a host that never held
-// this key cannot be given one that matches an already-issued certificate. And
-// it refuses a non-root caller like every other entry point, since the file
-// permissions are the whole of the at-rest protection.
-func TestLoadReturnsTheStoredKeyAndRefusesWhenThereIsNone(t *testing.T) {
+// TestLoadReturnsTheNamedKeyAndRefusesWhenThereIsNone covers the read-out
+// path: Load is how a key leaves this package for a CSR or a Plugin, and it is
+// the one function here whose whole job is to hand private material to
+// another program. Three properties matter. It returns the key Generate stored
+// under that name, so a Deployment installs the key the certificate was issued
+// against. It reports ErrNoKey rather than generating, because a host that
+// never held the named key cannot be given one that matches an already-issued
+// certificate. And it refuses a non-root caller like every other entry point,
+// since the file permissions are the whole of the at-rest protection.
+func TestLoadReturnsTheNamedKeyAndRefusesWhenThereIsNone(t *testing.T) {
 	withTempBase(t)
 
-	if _, err := Load(certificateA); !errors.Is(err, ErrNoKey) {
+	absent := strings.Repeat("0", 64)
+	if _, err := Load(absent); !errors.Is(err, ErrNoKey) {
 		t.Fatalf("Load on a host holding no key: want ErrNoKey, got %v", err)
 	}
 
-	stored, err := Ensure(certificateA)
+	fp, stored := generate(t)
+	loaded, err := Load(fp)
 	if err != nil {
-		t.Fatalf("Ensure: %v", err)
+		t.Fatalf("Load after Generate: %v", err)
 	}
-	loaded, err := Load(certificateA)
-	if err != nil {
-		t.Fatalf("Load after Ensure: %v", err)
-	}
-	if !loaded.Equal(stored) {
-		t.Error("Load returned a different key from the one Ensure stored")
+	if !loaded.(*ecdsa.PrivateKey).Equal(stored) {
+		t.Error("Load returned a different key from the one Generate stored")
 	}
 
-	// A second certificate is a separate key, so Load must not fall back to
-	// whatever key happens to be on the host.
-	if _, err := Load(certificateB); !errors.Is(err, ErrNoKey) {
-		t.Errorf("Load for an unheld certificate: want ErrNoKey, got %v", err)
+	// Another name is another key, so Load must not fall back to whatever
+	// key happens to be on the host.
+	if _, err := Load(absent); !errors.Is(err, ErrNoKey) {
+		t.Errorf("Load for an unheld fingerprint: want ErrNoKey, got %v", err)
 	}
 
 	euid = func() int { return 1000 }
-	if _, err := Load(certificateA); err == nil {
+	if _, err := Load(fp); err == nil {
 		t.Error("a non-root caller was allowed to read a private key out")
 	}
 }
@@ -470,10 +381,7 @@ func TestLoadReturnsTheStoredKeyAndRefusesWhenThereIsNone(t *testing.T) {
 func TestEncodePrivateKeyPEMRoundTrips(t *testing.T) {
 	withTempBase(t)
 
-	key, err := Ensure(certificateA)
-	if err != nil {
-		t.Fatalf("Ensure: %v", err)
-	}
+	_, key := generate(t)
 	encoded, err := EncodePrivateKeyPEM(key)
 	if err != nil {
 		t.Fatalf("EncodePrivateKeyPEM: %v", err)
@@ -500,5 +408,81 @@ func TestEncodePrivateKeyPEMRoundTrips(t *testing.T) {
 	}
 	if !back.Equal(key) {
 		t.Error("the key did not survive the encode/decode round trip")
+	}
+}
+
+func TestListReportsUsableKeysOnly(t *testing.T) {
+	dir := t.TempDir()
+	oldBase, oldEuid := baseDir, euid
+	baseDir, euid = dir, func() int { return 0 }
+	t.Cleanup(func() { baseDir, euid = oldBase, oldEuid })
+
+	if keys, err := List(); err != nil || len(keys) != 0 {
+		t.Fatalf("empty keystore: %v, %v", keys, err)
+	}
+	fp, _ := generate(t)
+	// A misnamed key, which must be left out rather than reported as the key
+	// its name claims.
+	if err := os.WriteFile(filepath.Join(keysDir(), strings.Repeat("f", 64)+".key"), []byte("not a key"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keys, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 || keys[0].Fingerprint != fp || keys[0].Algorithm != "ec_p256" || keys[0].CreatedAt.IsZero() {
+		t.Fatalf("List() = %+v, want the one usable key %s", keys, fp)
+	}
+}
+
+// TestEveryKeyTypeRoundTrips generates one key of each type, and checks that
+// the CSR carries a key of that type signed with the matching algorithm, that
+// Load reads it back as the same key, and that the inventory names its type.
+func TestEveryKeyTypeRoundTrips(t *testing.T) {
+	withTempBase(t)
+	want := map[string]x509.SignatureAlgorithm{
+		wire.KeyTypeECP256:  x509.ECDSAWithSHA256,
+		wire.KeyTypeECP384:  x509.ECDSAWithSHA384,
+		wire.KeyTypeRSA2048: x509.SHA256WithRSA,
+		wire.KeyTypeRSA3072: x509.SHA256WithRSA,
+		wire.KeyTypeRSA4096: x509.SHA256WithRSA,
+	}
+	fps := map[string]string{}
+	for _, kt := range wire.KeyTypes {
+		fp, key, err := Generate(kt)
+		if err != nil {
+			t.Fatalf("Generate(%s): %v", kt, err)
+		}
+		fps[fp] = kt
+		der, err := CSR(key, []string{"a.example.test"})
+		if err != nil {
+			t.Fatalf("CSR(%s): %v", kt, err)
+		}
+		req, err := x509.ParseCertificateRequest(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := wire.KeyTypeOf(req.PublicKey); got != kt || req.SignatureAlgorithm != want[kt] {
+			t.Fatalf("%s: CSR key %s signed %s, want %s", kt, got, req.SignatureAlgorithm, want[kt])
+		}
+		loaded, err := Load(fp)
+		if err != nil || wire.KeyTypeOf(loaded.Public()) != kt {
+			t.Fatalf("Load(%s) = %v, %v", kt, loaded, err)
+		}
+	}
+	if _, _, err := Generate("ec_p521"); err == nil {
+		t.Fatal("Generate accepted a type outside wire.KeyTypes")
+	}
+	keys, err := List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range keys {
+		if k.Algorithm != fps[k.Fingerprint] {
+			t.Fatalf("inventory names %s as %s, want %s", k.Fingerprint, k.Algorithm, fps[k.Fingerprint])
+		}
+	}
+	if len(keys) != len(wire.KeyTypes) {
+		t.Fatalf("inventory lists %d keys, want %d", len(keys), len(wire.KeyTypes))
 	}
 }

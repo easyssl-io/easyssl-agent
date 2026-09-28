@@ -13,14 +13,16 @@
 // act. Deleting a key is the one operation with no recovery, which is why the
 // code to do it is absent rather than guarded by a flag.
 //
-// A key is named by its own public-key fingerprint and each certificate gets a
-// small record naming the key it uses:
+// A key is named by its own public-key fingerprint, and that is the whole of
+// what the keystore holds:
 //
-//	<base>/keys/<fingerprint>.key    PKCS#8 PEM, ECDSA P-256
-//	<base>/certs/<certificate>.json  names the key that certificate uses
+//	<base>/keys/<fingerprint>.key    PKCS#8 PEM, any wire.KeyTypes type
 //
-// Naming the key after itself rather than after a certificate is what lets one
-// key serve several certificates later without the secret being copied, and it
+// Which certificate uses which key is the Server's record, taken from the
+// public key of each CSR it accepts, and every command that touches a key
+// names it by fingerprint. A copy of that link on the host would be Server
+// state cached where it goes stale. Naming the key after itself is what lets
+// one key serve several certificates without the secret being copied, and it
 // makes the directory self-checking, since a key file's name is derivable from
 // its contents.
 package keystore
@@ -30,19 +32,20 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
-	"time"
+	"strings"
 
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
+	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
 // baseDir is where the keystore lives. A variable rather than a constant only so
@@ -58,8 +61,7 @@ const (
 	fileMode os.FileMode = 0o600
 )
 
-func keysDir() string  { return filepath.Join(baseDir, "keys") }
-func certsDir() string { return filepath.Join(baseDir, "certs") }
+func keysDir() string { return filepath.Join(baseDir, "keys") }
 
 // log is where this package writes. SetLogger points it at the Agent's own
 // handler so keystore lines match every other line the service emits; until
@@ -95,79 +97,70 @@ func requireRoot() error {
 	return nil
 }
 
-// record is what a certificate stores about the key it uses.
+// Generate creates a fresh key, stores it, and returns it with its fingerprint,
+// which is the name the Server will know it by.
 //
-// CertificateID repeats the filename deliberately. It costs one field and turns
-// a record that was moved, restored from the wrong backup, or crossed with
-// another certificate's, from a silent mix-up into a detectable one. The
-// filename is authoritative and a disagreement is refused rather than resolved.
-type record struct {
-	CertificateID  string    `json:"certificateId"`
-	KeyFingerprint string    `json:"keyFingerprint"`
-	CreatedAt      time.Time `json:"createdAt"`
-}
-
-// Ensure returns the key certificateID uses, generating and recording one if
-// this host has none for it yet.
-//
-// Calling it again for the same certificate returns the same key. That is the
-// requirement rather than an optimization: the Server delivers a command at
-// least once, so an Agent that built a CSR and died before acknowledging it will
-// be handed the same request again. Generating afresh on the second run would
-// leave the Server holding a CSR for a key that no longer exists, and the
-// certificate issued from it would be unusable by the host that asked for it.
-//
-// A fresh key per renewal falls out of the same design rather than from separate
-// code, because a renewal is a different certificate record and therefore an id
-// this host holds no key for.
-func Ensure(certificateID string) (*ecdsa.PrivateKey, error) {
-	id, err := canonicalCertificateID(certificateID)
-	if err != nil {
-		return nil, err
-	}
+// Nothing here is idempotent per certificate, and nothing here knows what a
+// certificate is: a request that names no key gets a new one on every run. An
+// Agent that generated a key, died before the CSR reached the Server, and is
+// handed the same request again therefore generates afresh, and the first key
+// is an orphan. That is accepted: nothing was signed with it, it costs one
+// file on a host that keeps every key anyway, and the host inventory lists it
+// as a key no certificate names. Once a CSR is stored the Server names its key
+// on every re-run, so a key that was used is never generated past.
+func Generate(keyType string) (string, crypto.Signer, error) {
 	if err := requireRoot(); err != nil {
-		return nil, err
+		return "", nil, err
 	}
-
-	rec, found, err := readRecord(id)
+	key, err := newKey(keyType)
 	if err != nil {
-		return nil, err
-	}
-	if found {
-		return loadKey(rec.KeyFingerprint)
-	}
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("keystore: generating key: %w", err)
+		return "", nil, fmt.Errorf("keystore: generating key: %w", err)
 	}
 	fp, err := fingerprint(key.Public())
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
-		return nil, fmt.Errorf("keystore: encoding key: %w", err)
+		return "", nil, fmt.Errorf("keystore: encoding key: %w", err)
 	}
-
-	// The key becomes durable before the record that names it. The failure
-	// between the two has to be the harmless one: a key nothing refers to costs
-	// a file on a host that keeps every key anyway, while a record naming a key
-	// that does not exist is a dangling reference this Agent cannot repair,
-	// because it cannot know whether the missing key was already used for a CSR.
+	// Durable before it is returned: the caller builds a CSR from it next,
+	// and a CSR the Server has for a key a power loss took is a certificate
+	// this host can never install.
 	if err := writeFile(keysDir(), fp+".key", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})); err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	body, err := json.MarshalIndent(record{CertificateID: id, KeyFingerprint: fp, CreatedAt: time.Now().UTC()}, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	if err := writeFile(certsDir(), id+".json", append(body, '\n')); err != nil {
-		return nil, err
-	}
+	logger().Info("private key generated", "key", fp)
+	return fp, key, nil
+}
 
-	logger().Info("private key generated", "certificate", id, "key", fp)
-	return key, nil
+// newKey generates a key of one of wire.KeyTypes.
+func newKey(keyType string) (crypto.Signer, error) {
+	switch keyType {
+	case wire.KeyTypeECP256:
+		return ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	case wire.KeyTypeECP384:
+		return ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	case wire.KeyTypeRSA2048:
+		return rsa.GenerateKey(rand.Reader, 2048)
+	case wire.KeyTypeRSA3072:
+		return rsa.GenerateKey(rand.Reader, 3072)
+	case wire.KeyTypeRSA4096:
+		return rsa.GenerateKey(rand.Reader, 4096)
+	}
+	return nil, fmt.Errorf("keystore: key type %q is not one this Agent generates", keyType)
+}
+
+// signatureAlgorithm is what a CSR from key is signed with: SHA-384 for P-384,
+// whose strength SHA-256 would undercut, and SHA-256 otherwise.
+func signatureAlgorithm(key crypto.Signer) x509.SignatureAlgorithm {
+	switch wire.KeyTypeOf(key.Public()) {
+	case wire.KeyTypeECP256:
+		return x509.ECDSAWithSHA256
+	case wire.KeyTypeECP384:
+		return x509.ECDSAWithSHA384
+	}
+	return x509.SHA256WithRSA
 }
 
 // CSR builds a certificate signing request from key, for the domains it is
@@ -180,10 +173,10 @@ func Ensure(certificateID string) (*ecdsa.PrivateKey, error) {
 // order from the CSR, taking the Common Name first and then every SAN, so a
 // Common Name is either a duplicate of a SAN or a name nobody asked for, and the
 // second of those would put an unrequested name on the certificate.
-func CSR(key *ecdsa.PrivateKey, domains []string) ([]byte, error) {
+func CSR(key crypto.Signer, domains []string) ([]byte, error) {
 	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
 		DNSNames:           domains,
-		SignatureAlgorithm: x509.ECDSAWithSHA256,
+		SignatureAlgorithm: signatureAlgorithm(key),
 	}, key)
 	if err != nil {
 		return nil, fmt.Errorf("keystore: building CSR: %w", err)
@@ -192,8 +185,7 @@ func CSR(key *ecdsa.PrivateKey, domains []string) ([]byte, error) {
 }
 
 // Dir names where key material lives, for messages that have to tell an operator
-// what is on their host. The keys are in it; the records naming them are beside
-// it, and both survive an uninstall.
+// what is on their host. It survives an uninstall.
 func Dir() string { return keysDir() }
 
 // Count reports how many keys this host holds, for the uninstall notice.
@@ -214,49 +206,62 @@ func Count() (int, error) {
 	return n, nil
 }
 
-// readRecord returns the record for a certificate, or found=false when this host
-// has none. A record that exists but disagrees with its own filename is an
-// error: the two values are equally plausible, and choosing either one would
-// return a key belonging to some other certificate.
-func readRecord(id string) (record, bool, error) {
-	path := filepath.Join(certsDir(), id+".json")
-	body, err := os.ReadFile(path)
+// List reports every key this host holds, by its public half, for the host
+// inventory: fingerprint, algorithm and when the file was created. Never the
+// key. A file that does not parse or whose content does not match its name is
+// logged and left out rather than listed as usable, since the inventory is
+// what the Server offers for reuse; a directory that cannot be read at all is
+// an error, so the caller sends no inventory rather than one saying the host
+// holds nothing.
+func List() ([]wire.KeyInfo, error) {
+	if err := requireRoot(); err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(keysDir())
 	if errors.Is(err, os.ErrNotExist) {
-		return record{}, false, nil
+		return []wire.KeyInfo{}, nil
 	}
 	if err != nil {
-		return record{}, false, err
+		return nil, fmt.Errorf("keystore: listing keys: %w", err)
 	}
-	var rec record
-	if err := json.Unmarshal(body, &rec); err != nil {
-		return record{}, false, fmt.Errorf("keystore: %s is not readable: %w", path, err)
+	keys := make([]wire.KeyInfo, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".key" {
+			continue
+		}
+		fp := strings.TrimSuffix(e.Name(), ".key")
+		key, err := loadKey(fp)
+		if err != nil {
+			logger().Warn("key left out of the inventory", "file", e.Name(), "err", err)
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			return nil, fmt.Errorf("keystore: %s: %w", e.Name(), err)
+		}
+		// Never modified after creation (a key is written once), so the
+		// modification time is the creation time on every filesystem.
+		keys = append(keys, wire.KeyInfo{Fingerprint: fp, Algorithm: wire.KeyTypeOf(key.Public()), CreatedAt: info.ModTime().UTC()})
 	}
-	if rec.CertificateID != id {
-		return record{}, false, fmt.Errorf(
-			"keystore: %s records certificate %q; the two disagree and neither can be assumed correct", path, rec.CertificateID)
-	}
-	if err := validateKeyID(rec.KeyFingerprint); err != nil {
-		return record{}, false, fmt.Errorf("keystore: %s: %w", path, err)
-	}
-	return rec, true, nil
+	return keys, nil
 }
 
 // loadKey reads the key with the given fingerprint and checks that it is in fact
 // that key.
 //
-// A missing file is an error and never a reason to generate a replacement.
-// Nothing in this package removes a key, so the file is absent because something
-// outside it did, which an operator needs to know; and if the missing key had
-// already been used for a CSR, generating another would leave the issued
-// certificate matching a key this host no longer has.
-func loadKey(fp string) (*ecdsa.PrivateKey, error) {
+// A missing file is ErrNoKey and never a reason to generate a replacement.
+// Nothing in this package removes a key, so the file is absent because
+// something outside it did, or because this host never held it, and either is
+// a fact to report: a key generated in its place would not match whatever the
+// Server named it for.
+func loadKey(fp string) (crypto.Signer, error) {
 	if err := validateKeyID(fp); err != nil {
 		return nil, err
 	}
 	path := filepath.Join(keysDir(), fp+".key")
 	body, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("keystore: %s is named by a certificate record but does not exist", path)
+		return nil, fmt.Errorf("keystore: %s: %w", path, ErrNoKey)
 	}
 	if err != nil {
 		return nil, err
@@ -269,9 +274,9 @@ func loadKey(fp string) (*ecdsa.PrivateKey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("keystore: %s cannot be parsed: %w", path, err)
 	}
-	key, ok := parsed.(*ecdsa.PrivateKey)
-	if !ok {
-		return nil, fmt.Errorf("keystore: %s holds a %T, not an ECDSA key", path, parsed)
+	key, ok := parsed.(crypto.Signer)
+	if !ok || wire.KeyTypeOf(key.Public()) == "" {
+		return nil, fmt.Errorf("keystore: %s holds a %T, not a key of any type a Certificate uses", path, parsed)
 	}
 	got, err := fingerprint(key.Public())
 	if err != nil {
@@ -377,35 +382,15 @@ func syncDir(dir string) error {
 	return d.Sync()
 }
 
-// canonicalCertificateID accepts a Server certificate id: "crt-" followed by
-// 14 characters of lowercase base32 (a-z, 2-7).
+// validateKeyID accepts a key fingerprint: 64 lowercase hex characters.
 //
 // This runs before the value reaches a path, and it is a security control
-// rather than input hygiene: the id arrives from the Server, filepath.Join
-// resolves ".." instead of refusing it, and this process runs as root, so an
-// unchecked value would let whoever sent it choose where a private key is
-// written. The exact shape is enforced, not merely "no path characters",
-// because a looser check invites two spellings of one id, and two spellings
-// would produce two records and two keys for a single certificate.
-func canonicalCertificateID(id string) (string, error) {
-	const prefix = "crt-"
-	const randomLen = 14
-	if len(id) != len(prefix)+randomLen || id[:len(prefix)] != prefix {
-		return "", fmt.Errorf("keystore: certificate id %q is not a certificate id", id)
-	}
-	for i := len(prefix); i < len(id); i++ {
-		c := id[i]
-		if (c < 'a' || c > 'z') && (c < '2' || c > '7') {
-			return "", fmt.Errorf("keystore: certificate id %q is not a certificate id", id)
-		}
-	}
-	return id, nil
-}
-
-// validateKeyID accepts a key fingerprint: 64 lowercase hex characters. It reads
-// values out of files on disk rather than off the wire, and checks them for the
-// same reason as above, since a file is no more trustworthy than the thing that
-// last wrote it.
+// rather than input hygiene: the fingerprint arrives from the Server in a
+// request_csr or a Deployment, filepath.Join resolves ".." instead of refusing
+// it, and this process runs as root, so an unchecked value would let whoever
+// sent it choose which file is read as a private key. The exact shape is
+// enforced, not merely "no path characters", because a looser check invites
+// two spellings of one key, and the name on disk has exactly one.
 func validateKeyID(fp string) error {
 	if len(fp) != sha256.Size*2 {
 		return fmt.Errorf("keystore: key id %q is not a SHA-256 fingerprint", fp)
@@ -429,38 +414,29 @@ func lower(c byte) byte {
 	return c
 }
 
-// ErrNoKey reports that this host holds no key for a certificate. It is a
-// distinct error because the answer differs by caller: the CSR flow generates
-// one, while a deployment must fail — a certificate whose key this host never
-// held cannot be installed here, and generating one would produce a key that
-// does not match the certificate.
-var ErrNoKey = errors.New("keystore: this host holds no key for that certificate")
+// ErrNoKey reports that this host holds no key under the named fingerprint. It
+// is a distinct error because every caller has to answer it the same way,
+// by reporting rather than generating: the Server named that key because a
+// certificate was, or is to be, issued from it, and a key generated in its
+// place would match nothing.
+var ErrNoKey = errors.New("keystore: this host holds no key under that fingerprint")
 
-// Load returns the key certificateID uses, or ErrNoKey when this host has none.
-// Unlike Ensure it never generates: the caller is installing something already
-// issued, so a missing key is a fact to report rather than a gap to fill.
-func Load(certificateID string) (*ecdsa.PrivateKey, error) {
-	id, err := canonicalCertificateID(certificateID)
-	if err != nil {
+// Load returns the key the Server named, or ErrNoKey when this host has none
+// under that fingerprint. It never generates.
+func Load(fingerprint string) (crypto.Signer, error) {
+	if err := validateKeyID(fingerprint); err != nil {
 		return nil, err
 	}
 	if err := requireRoot(); err != nil {
 		return nil, err
 	}
-	rec, found, err := readRecord(id)
-	if err != nil {
-		return nil, err
-	}
-	if !found {
-		return nil, ErrNoKey
-	}
-	return loadKey(rec.KeyFingerprint)
+	return loadKey(fingerprint)
 }
 
 // EncodePrivateKeyPEM renders a key as PKCS#8 PEM, the form a Plugin receives
 // it in. It never touches disk: the material goes over a pipe to the Plugin,
 // which writes it where it needs to and removes it.
-func EncodePrivateKeyPEM(key *ecdsa.PrivateKey) (string, error) {
+func EncodePrivateKeyPEM(key crypto.Signer) (string, error) {
 	der, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		return "", fmt.Errorf("keystore: encoding key: %w", err)

@@ -19,8 +19,10 @@ checkout that has `easyssl-contract` beside it, and read `replacement directory
 ../contract does not exist` as an environment problem rather than a defect in
 the change under review.
 
-`register`, `run` and `uninstall` drive systemd, `/etc/easyssl/` and the network,
-so they are exercised on a real Linux host or a systemd-enabled container.
+`register`, `run` and `uninstall` drive the host's init system, `/etc/easyssl/`
+and the network, so they are exercised on a real Linux host or a container
+running an init system; `internal/service`'s tests cover each init system's
+files and commands against a fake root.
 
 ## Code Review Rules
 

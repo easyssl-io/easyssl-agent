@@ -8,10 +8,15 @@
 // a Plugin artifact, issued from three call sites. Both of its construction
 // sites in cmd/easyssl-agent leave the HTTP field unset, so those requests run
 // on the process-wide http.DefaultClient and carry no timeout, and they would
-// go unrecorded. The rest of pluginmgr does come through here; it reports an
-// installed Plugin with ReportPlugin. The wrapper cannot be described as
-// complete until those three call sites move here. Standard library only, so
+// go unrecorded. The wrapper cannot be described as complete until those three
+// call sites move here. Standard library only, so
 // the Agent stays small and auditable.
+//
+// Those three call sites now miss something else as well: the transport policy
+// in transport.go, which is what requires TLS and refuses a redirect that drops
+// it. They carry no bearer token, so the downgrade matters less there than it
+// does here, and a Plugin artifact is checked against the catalog's digest
+// afterwards. It is still one more reason for them to move.
 package serverapi
 
 import (
@@ -35,12 +40,21 @@ type Client struct {
 	http    *http.Client
 }
 
-// New builds a Client for the given Server base URL (e.g. https://server:8080).
-func New(baseURL string) *Client {
+// New builds a Client for the given Server base URL (e.g. https://server:8080),
+// or fails if that URL is one this Agent must not talk to. CheckBaseURL in
+// transport.go says which those are and why; the check lives here, on the only
+// constructor, so no caller can hold a Client that skipped it.
+func New(baseURL string) (*Client, error) {
+	if err := CheckBaseURL(baseURL); err != nil {
+		return nil, err
+	}
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
-		http:    &http.Client{Timeout: 30 * time.Second},
-	}
+		http: &http.Client{
+			Timeout:       30 * time.Second,
+			CheckRedirect: noSchemeChange,
+		},
+	}, nil
 }
 
 // APIError is a non-2xx Server response. Code is the wire error code (e.g.
@@ -81,6 +95,12 @@ func (c *Client) RegistrationStatus(ctx context.Context, token string) (wire.Reg
 	var out wire.RegistrationStatus
 	err := c.do(ctx, http.MethodGet, wire.RouteRegistration, token, nil, &out)
 	return out, err
+}
+
+// ReportInventory PUTs the whole host inventory, replacing what the Server
+// holds for this Agent. Called only when a check-in answered ReportInventory.
+func (c *Client) ReportInventory(ctx context.Context, token string, inv wire.Inventory) error {
+	return c.do(ctx, http.MethodPut, wire.RouteAgentInventory, token, inv, nil)
 }
 
 // Unregister removes this Agent from its Organization, so an uninstalled host
@@ -162,9 +182,11 @@ func (c *Client) AckCommand(ctx context.Context, token, commandID, status string
 	return c.do(ctx, http.MethodPost, path, token, wire.AckRequest{Status: status}, nil)
 }
 
-// SubscribeCommands opens the long-lived event stream and calls onCommand for
-// every command id the Server pushes, until the context is canceled or the
-// stream drops. It returns nil when the stream simply ended, which is ordinary
+// SubscribeCommands opens the long-lived event stream and calls onCommand every
+// time the Server says something is waiting, until the context is canceled or
+// the stream drops. The event carries nothing, and could not usefully: what is
+// waiting is read over REST, which is also what delivers whatever arrived while
+// this Agent was disconnected. It returns nil when the stream simply ended, which is ordinary
 // rather than an error: the caller reconnects and keeps polling meanwhile.
 //
 // onConnect fires once the Server has accepted the stream. The caller cannot
@@ -175,7 +197,7 @@ func (c *Client) AckCommand(ctx context.Context, token, commandID, status string
 // Deliberately built on net/http and bufio rather than an SSE library. The
 // grammar this needs is two field names, and everything shipped to a host that
 // handles someone's private keys has to earn its place.
-func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect func(), onCommand func(commandID string)) error {
+func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect func(), onCommand func()) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+wire.RouteEvents, nil)
 	if err != nil {
 		return err
@@ -184,8 +206,11 @@ func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect 
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	// No timeout on this one: the stream is meant to stay open, so the shared
-	// 30s client would sever it on schedule.
-	res, err := (&http.Client{}).Do(req)
+	// 30s client would sever it on schedule. Everything else about it matches,
+	// the redirect policy above all: this request carries the bearer token like
+	// any other, and a client built bare here would be the one path that
+	// followed a downgrade with it.
+	res, err := (&http.Client{CheckRedirect: noSchemeChange}).Do(req)
 	if err != nil {
 		return err
 	}
@@ -210,17 +235,13 @@ func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect 
 		case strings.HasPrefix(line, "event:"):
 			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
-			data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			// The line's content is not read. The event carries no body, and
+			// this arm exists because SSE dispatches an event only when a data
+			// field arrives, so this is where a complete event lands.
 			if event != wire.EventCommand {
 				continue // unknown event name: ignore, same as an unknown command type
 			}
-			var ev wire.CommandEvent
-			if err := json.Unmarshal([]byte(data), &ev); err != nil {
-				continue // malformed: the poll will find the work anyway
-			}
-			if ev.CommandID != "" {
-				onCommand(ev.CommandID)
-			}
+			onCommand()
 		}
 	}
 	return scanner.Err()
@@ -246,14 +267,6 @@ func (c *Client) CSRWork(ctx context.Context, token, certificateID string) (wire
 func (c *Client) SubmitCSR(ctx context.Context, token, certificateID, csrPEM string) error {
 	path := "/api/v1/agent/certificates/" + url.PathEscape(certificateID) + "/csr"
 	return c.do(ctx, http.MethodPost, path, token, wire.CSRSubmission{CSR: csrPEM}, nil)
-}
-
-// ReportPlugin tells the Server what this Agent installed: the version, the
-// artifact digest, and the settings the Plugin declares for itself. The Server
-// answers every later question from this record, so nothing ever queries the
-// host.
-func (c *Client) ReportPlugin(ctx context.Context, token, pluginID string, rep wire.PluginReport) error {
-	return c.do(ctx, http.MethodPut, "/api/v1/agent/plugins/"+pluginID, token, rep, nil)
 }
 
 // DeploymentWork reads what a deploy command refers to: the certificate, the

@@ -35,11 +35,13 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/deploy"
 	"github.com/easyssl-io/easyssl-agent/internal/flow"
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
+	"github.com/easyssl-io/easyssl-agent/internal/inventory"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
+	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
 	"github.com/easyssl-io/easyssl-agent/internal/sdnotify"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
-	"github.com/easyssl-io/easyssl-agent/internal/sysd"
+	"github.com/easyssl-io/easyssl-agent/internal/service"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -134,12 +136,13 @@ func cmdRegister(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("register", flag.ExitOnError)
 	server := fs.String("server", "", "easySSL Server base URL (required)")
 	key := fs.String("key", os.Getenv("REGISTRATION_KEY"), "Organization registration key (defaults to $REGISTRATION_KEY)")
-	name := fs.String("name", os.Getenv("AGENT_NAME"), "Agent name (defaults to $AGENT_NAME, else the hostname; prompted when interactive)")
+	reactivation := fs.String("reactivation-token", os.Getenv("REACTIVATION_TOKEN"), "reactivation token from a deactivated Agent's page, to resume that Agent (defaults to $REACTIVATION_TOKEN)")
+	name := fs.String("name", os.Getenv("AGENT_NAME"), "Agent name (defaults to $AGENT_NAME, else the hostname; prompted when interactive; ignored with a reactivation token)")
 	_ = fs.Parse(args)
 	if *server == "" {
 		return errors.New("register: --server is required")
 	}
-	return flow.Register(ctx, flow.Options{ServerURL: *server, RegistrationKey: *key, Name: *name})
+	return flow.Register(ctx, flow.Options{ServerURL: *server, RegistrationKey: *key, ReactivationToken: *reactivation, Name: *name})
 }
 
 func cmdUninstall(ctx context.Context, args []string) error {
@@ -161,16 +164,20 @@ func cmdRun(ctx context.Context, args []string) error {
 		return stateError("run", err)
 	}
 
-	api := serverapi.New(cfg.ServerURL)
-	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+	api, err := serverapi.New(cfg.ServerURL)
+	if err != nil {
+		return stateError("run", err)
+	}
+	logger := agentLogger()
 	// So key generation is reported in the same format as everything else the
 	// service writes, rather than through the default handler.
 	keystore.SetLogger(logger)
 	// A command type with no handler here is reported unsupported, which is
 	// also what an Agent older than its Server does.
+	plugins := pluginmgr.New(nil, logger)
 	runner := commands.NewRunner(api, token, logger, map[string]commands.Handler{
 		wire.CommandRequestCSR: csr.New(api, token, logger),
-		wire.CommandDeploy:     deploy.New(api, pluginmgr.New(nil, nil), token, logger),
+		wire.CommandDeploy:     deploy.New(api, plugins, token, logger),
 	})
 
 	ctx, cancel := context.WithCancel(ctx)
@@ -190,7 +197,20 @@ func cmdRun(ctx context.Context, args []string) error {
 
 	poll := 60
 	for {
-		resp, err := api.Checkin(ctx, token, wire.CheckinRequest{AgentVersion: flow.Version})
+		// The whole inventory, every check-in, so the fingerprint on the wire is
+		// always over what the host is now; the document itself goes only when
+		// the Server says it lacks it. A contributor that could not be read
+		// leaves the fingerprint empty, so the Server keeps its last document
+		// rather than receiving one with a hole where the failure was.
+		inv, invErr := inventory.Collect(ctx, plugins)
+		fingerprint := ""
+		if invErr != nil {
+			logger.Warn("host inventory not computed this check-in", "err", invErr)
+		} else if fingerprint, invErr = wire.InventoryFingerprint(inv); invErr != nil {
+			logger.Warn("host inventory not fingerprinted", "err", invErr)
+			fingerprint = ""
+		}
+		resp, err := api.Checkin(ctx, token, flow.CheckinBody(fingerprint))
 		if err == nil {
 			if !removedSince.IsZero() {
 				// Nothing recovers a revoked token by itself, so this only
@@ -216,31 +236,45 @@ func cmdRun(ctx context.Context, args []string) error {
 				}
 			}
 			poll = resp.NextPollSeconds
+			if resp.ReportInventory && fingerprint != "" {
+				if err := api.ReportInventory(ctx, token, inv); err != nil {
+					// The next check-in's fingerprint still disagrees with the
+					// Server's, so it asks again; nothing to retry here.
+					logger.Warn("host inventory not accepted", "err", err)
+				} else {
+					logger.Info("host inventory reported", "plugins", len(inv.Plugins), "keys", len(inv.Keys))
+				}
+			}
 			if resp.Status == wire.StatusActive {
 				// Only now: every push-channel route refuses an Agent that is
 				// still awaiting authorization, exactly as the check-in does,
 				// so subscribing earlier would just loop on 401s.
 				streaming.Do(func() { go streamCommands(ctx, api, token, runner, logger) })
-				runner.Reconcile(ctx)
+				if shouldReconcile(resp) {
+					runner.Reconcile(ctx)
+				}
 			}
 		} else if isUnknownToken(err) {
-			// Removed from the web console, or the token revoked. The service keeps
+			// Deactivated or removed in the web console. The service keeps
 			// running and stops doing work: this Agent belongs to the host, not
-			// to the Server, so a decision taken in
-			// the web console does not stop a unit here, remove a file, or leave a
-			// failed unit in `systemctl --failed` for a host that is behaving
-			// correctly. Uninstalling stays the operator's action, and the
-			// message names both ways out.
+			// to the Server, so a decision taken in the web console does not
+			// stop a unit here, remove a file, or leave a failed unit in
+			// `systemctl --failed` for a host that is behaving correctly.
+			// Uninstalling stays the operator's action, and the message names
+			// every way out: the reactivation command the Agent's page in the
+			// web console generates, which makes this host the same Agent
+			// again; the installer with the registration key, which makes it a
+			// new one; or uninstalling.
 			if removedSince.IsZero() {
 				removedSince = time.Now()
-				logger.Error("this host is no longer registered with the Server: its token was rejected or revoked",
+				logger.Error("this host is no longer registered with the Server: the Agent was deactivated or removed, so its token is refused",
 					"server", cfg.ServerURL,
-					"next", "register again by re-running the installer, or remove this Agent with `easyssl-agent uninstall`",
+					"next", "run the reactivation command from the Agent's page in the web console to resume this Agent, re-run the installer with the registration key to register a new one, or remove this Agent with `easyssl-agent uninstall`",
 					"note", "no work will be done until then; nothing under "+identity.BaseDir+" has been touched")
-				sdnotify.Status("Not registered: token rejected or revoked. Re-run the installer to register again, or `easyssl-agent uninstall` to remove this Agent.")
+				sdnotify.Status("Not registered: the Agent was deactivated or removed. Run the reactivation command from its page in the web console, re-run the installer to register anew, or `easyssl-agent uninstall`.")
 			} else if time.Since(removedSince) > 30*time.Minute {
 				removedSince = time.Now()
-				logger.Error("still not registered with the Server; re-run the installer or uninstall this Agent",
+				logger.Error("still not registered with the Server; reactivate this Agent from the web console, re-run the installer, or uninstall it",
 					"server", cfg.ServerURL)
 			}
 			// Fall through to the wait: the loop keeps the service alive and
@@ -265,6 +299,45 @@ func cmdRun(ctx context.Context, args []string) error {
 // connections, and the check-in loop keeps delivering commands the whole time.
 // So this reconnects quietly and never ends the service. The one thing it will
 // not retry is a rejected credential, which no amount of waiting repairs.
+// shouldReconcile decides whether a check-in has to be followed by the
+// reconcile fetch.
+//
+// A reported zero is the Server saying it has nothing outstanding for this
+// host, and is the only case worth skipping. On a fleet that is mostly idle
+// that removes one request per Agent per cadence whose answer was an empty
+// list.
+//
+// nil is not zero. It is a Server that does not report the count, which is
+// every Server older than the field, and it means fetch exactly as before.
+// Reading a missing field as zero would make this Agent stop fetching commands
+// from an older Server and never notice, which is the one outcome this cannot
+// have.
+//
+// The count may be stale by the time it is read, because a command can be
+// created immediately after it was taken. That costs at most one cadence: the
+// event stream nudges, and the next check-in counts again. Nothing here
+// concludes that a command exists, only that none did, so a stale count delays
+// work rather than inventing or losing it.
+// agentLogger is what this Agent writes with: stderr, which systemd captures
+// into the journal, at the level EASYSSL_LOG_LEVEL asks for. The same function
+// serves the service and the subcommands an operator runs by hand, so
+// `easyssl-agent plugin install` shows the same Plugin exchange the service
+// would log rather than a second, differently-configured view of it.
+//
+// The level and the format are environment variables rather than flags so that
+// turning debug on needs no edit to the shipped unit: `systemctl edit
+// easyssl-agent`, one Environment= line, restart. Nothing about the Agent's
+// behavior changes with either, only how much of what it already does is
+// written down and in what shape.
+func agentLogger() *slog.Logger {
+	return slog.New(plugintrace.Handler(os.Stderr,
+		os.Getenv(plugintrace.LevelEnv), os.Getenv(plugintrace.FormatEnv)))
+}
+
+func shouldReconcile(resp wire.CheckinResponse) bool {
+	return resp.PendingCommands == nil || *resp.PendingCommands > 0
+}
+
 func streamCommands(ctx context.Context, api *serverapi.Client, token string, runner *commands.Runner, logger *slog.Logger) {
 	const (
 		minBackoff = 2 * time.Second
@@ -285,9 +358,10 @@ func streamCommands(ctx context.Context, api *serverapi.Client, token string, ru
 		err := api.SubscribeCommands(ctx, token, func() {
 			connectedAt = time.Now()
 			logger.Info("command stream connected")
-		}, func(commandID string) {
-			// The id is a nudge, not the work. Reconcile reads authoritative
-			// state, which also picks up anything this Agent missed.
+		}, func() {
+			// The event is a nudge and carries nothing. Reconcile reads
+			// authoritative state, which also picks up anything this Agent
+			// missed while the stream was down.
 			runner.Reconcile(ctx)
 		})
 		if ctx.Err() != nil {
@@ -353,17 +427,18 @@ func cmdStatus(args []string) error {
 	// proves only that one was issued once. Ask the Server. This is a read
 	// (GET), not a check-in, so running status never refreshes last-seen and
 	// therefore cannot make a stopped Agent look alive in the web console.
-	stateCode, stateDetail := serverState(cfg, token, tokenErr)
+	stateCode, stateDetail, reg := serverState(cfg, token, tokenErr)
+	serviceName, _, _ := service.Describe()
 
 	if *asJSON {
 		out := map[string]any{
-			"agentId":        cfg.AgentID,
-			"displayName":    cfg.DisplayName,
+			"agentId":        reg.AgentID,
+			"displayName":    reg.DisplayName,
 			"serverUrl":      cfg.ServerURL,
 			"organization":   cfg.OrganizationName,
 			"organizationId": cfg.OrganizationID,
-			"serviceName":    identity.ServiceName(),
-			"serviceState":   sysd.State(),
+			"serviceName":    serviceName,
+			"serviceState":   service.State(),
 			"tokenPresent":   tokenErr == nil,
 			// Short code for machines; the printed line spells it out.
 			"serverState": stateCode,
@@ -372,13 +447,19 @@ func cmdStatus(args []string) error {
 	}
 
 	line := func(label, value string) { fmt.Printf("%-12s %s\n", label, value) }
-	line("Agent", cfg.AgentID)
-	line("name", cfg.DisplayName)
+	// The id and name are the Server's to say, so they are printed only when
+	// it answered; a host holds neither.
+	if reg.AgentID != "" {
+		line("Agent", reg.AgentID)
+	}
+	if reg.DisplayName != "" {
+		line("name", reg.DisplayName)
+	}
 	line("Server", cfg.ServerURL)
 	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
 		line("Organization", cfg.Organization())
 	}
-	line("service", fmt.Sprintf("%s (%s)", identity.ServiceName(), sysd.State()))
+	line("service", fmt.Sprintf("%s (%s)", serviceName, service.State()))
 	if tokenErr == nil {
 		line("token", "stored in "+identity.TokenPath())
 	} else {
@@ -396,29 +477,34 @@ func cmdStatus(args []string) error {
 // wire calls an authorized Agent "active", which printed next to a stopped
 // systemd unit reads as if the Agent were running, when it only means the
 // operator admitted it; the web console says "Authorized" and so does this.
-func serverState(cfg identity.Config, token string, tokenErr error) (code, detail string) {
+// serverState asks the Server what it considers this host to be. The status
+// read carries the Agent's id and name too, which is the only place the host
+// learns them.
+func serverState(cfg identity.Config, token string, tokenErr error) (code, detail string, reg wire.RegistrationStatus) {
 	if tokenErr != nil {
-		return "not-registered", "not registered (no local token)"
+		return "not-registered", "not registered (no local token)", reg
 	}
-	// Short: status must stay snappy on a host that cannot reach the Server.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	resp, err := serverapi.New(cfg.ServerURL).RegistrationStatus(ctx, token)
+	api, err := serverapi.New(cfg.ServerURL)
+	if err != nil {
+		return "unknown", fmt.Sprintf("unknown (%v)", err), reg
+	}
+	resp, err := api.RegistrationStatus(ctx, token)
 	switch {
 	case err == nil && resp.Status == wire.StatusActive:
-		return "authorized", "authorized"
+		return "authorized", "authorized", resp
 	case err == nil && resp.Status == wire.StatusPending:
-		return "pending", "pending authorization"
+		return "pending", "pending authorization", resp
 	case err == nil:
-		return resp.Status, resp.Status
+		return resp.Status, resp.Status, resp
 	case isUnknownToken(err):
-		return "not-registered", "not registered (the Server rejected this token; it was removed or revoked there)"
+		return "not-registered", "not registered (the Server rejected this token; the Agent was deactivated or removed there)", reg
 	default:
-		return "unknown", fmt.Sprintf("unknown (could not reach %s: %v)", cfg.ServerURL, err)
+		return "unknown", fmt.Sprintf("unknown (could not reach %s: %v)", cfg.ServerURL, err), reg
 	}
 }
 
-// isUnknownToken reports whether err is the Server's unknown-token response.
 func isUnknownToken(err error) bool {
 	apiErr, ok := errors.AsType[*serverapi.APIError](err)
 	return ok && apiErr.Code == wire.CodeUnknownToken
@@ -492,39 +578,57 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 		}
 	}
 
-	mgr := pluginmgr.New(
-		pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL},
-		serverapi.New(cfg.ServerURL),
-	)
+	api, err := serverapi.New(cfg.ServerURL)
+	if err != nil {
+		return err
+	}
+	mgr := pluginmgr.New(pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL}, agentLogger())
 	// The host's own platform: an Agent installs for the machine it runs on,
 	// never for another, so there is no flag to get this wrong.
 	out := make([]pluginmgr.Installed, 0, len(names))
+	var installErr error
 	for _, name := range names {
-		inst, ierr := mgr.Install(ctx, token, name, runtime.GOOS, runtime.GOARCH)
+		inst, ierr := mgr.Install(ctx, name, runtime.GOOS, runtime.GOARCH)
 		if ierr != nil {
 			// Whatever was installed before this one stays installed and is
 			// reported, so a partial run says what it did rather than only
 			// what it could not do.
-			if !*asJSON {
-				printInstalled(out, cfg.ServerURL)
-			}
-			return ierr
+			installErr = ierr
+			break
 		}
 		out = append(out, inst)
 	}
-	if *asJSON {
-		return json.NewEncoder(os.Stdout).Encode(out)
+	// The Server learns of the install from the host inventory, and the
+	// service would send it on its next check-in; sending it from here makes
+	// the web console current within one round trip of the command rather than
+	// one cadence. Best-effort: a failure leaves the service's next check-in
+	// disagreeing with the Server, which then asks for the document.
+	reported := ""
+	if len(out) > 0 {
+		if inv, err := inventory.Collect(ctx, mgr); err != nil {
+			reported = fmt.Sprintf("not yet (%v); the service reports on its next check-in", err)
+		} else if err := api.ReportInventory(ctx, token, inv); err != nil {
+			reported = fmt.Sprintf("not yet (%v); the service reports on its next check-in", err)
+		} else {
+			reported = "to " + cfg.ServerURL
+		}
 	}
-	printInstalled(out, cfg.ServerURL)
-	return nil
+	if *asJSON {
+		if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
+			return err
+		}
+		return installErr
+	}
+	printInstalled(out, reported)
+	return installErr
 }
 
-func printInstalled(out []pluginmgr.Installed, serverURL string) {
+func printInstalled(out []pluginmgr.Installed, reported string) {
 	for _, inst := range out {
 		fmt.Printf("installed  %s v%s\n", inst.ID, inst.Version)
 		fmt.Printf("path       %s\n", inst.Path)
 		fmt.Printf("digest     sha256:%s\n", inst.Digest)
-		fmt.Printf("reported   to %s\n", serverURL)
+		fmt.Printf("reported   %s\n", reported)
 	}
 }
 
@@ -588,8 +692,9 @@ func cmdPluginList(args []string) error {
 	asJSON := fs.Bool("json", false, "print JSON")
 	_ = fs.Parse(args)
 
-	mgr := pluginmgr.New(nil, nil)
-	installed, err := mgr.List()
+	// What the host inventory would carry now: the executables on disk and
+	// what each answers, since that is the only record there is.
+	installed, err := pluginmgr.New(nil, nil).Discover(context.Background())
 	if err != nil {
 		return err
 	}
@@ -606,6 +711,9 @@ func cmdPluginList(args []string) error {
 	return nil
 }
 
-func pluginListLine(p pluginmgr.Installed) string {
+func pluginListLine(p wire.PluginInventory) string {
+	if p.Unobserved {
+		return fmt.Sprintf("%-16s %-11s sha256:%s  (did not answer discover)", p.ID, "?", p.Digest)
+	}
 	return fmt.Sprintf("%-16s v%-10s sha256:%s", p.ID, p.Version, p.Digest)
 }
