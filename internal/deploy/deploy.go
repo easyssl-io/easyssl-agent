@@ -288,8 +288,17 @@ func chunks(c *plugintrace.Capture) []wire.OutputChunk {
 		return nil
 	}
 	out := make([]wire.OutputChunk, 0, len(recorded))
+	// One redactor per stream, carried across that stream's chunks: a key the
+	// Plugin prints on stdout is split into several chunks whenever a stderr
+	// line lands in the middle of it, and the continuation has no begin marker.
+	redactors := map[string]*plugintrace.KeyRedactor{}
 	for _, ch := range recorded {
-		out = append(out, wire.OutputChunk{Stream: ch.Stream, Text: report(ch.Text)})
+		r := redactors[ch.Stream]
+		if r == nil {
+			r = &plugintrace.KeyRedactor{}
+			redactors[ch.Stream] = r
+		}
+		out = append(out, wire.OutputChunk{Stream: ch.Stream, Text: truncate(r.Redact(ch.Text))})
 	}
 	return out
 }

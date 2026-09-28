@@ -330,3 +330,33 @@ func mustWrite(t *testing.T, w *plugintrace.StreamWriter, s string) {
 		t.Fatal(err)
 	}
 }
+
+// A key split across pieces, as a Plugin's stdout is when stderr interleaves,
+// is masked in every piece: the continuation has no begin marker of its own.
+func TestKeyRedactorAcrossPieces(t *testing.T) {
+	body1, body2 := "MIIEvQIBADANBgkqhkiG9w0BAQEFAASC", "BKcwggSjAgEAAoIBAQC7secretrest"
+	pieces := []string{
+		"before\n-----BEGIN PRIVATE KEY-----\n" + body1 + "\n",
+		body2 + "\n",
+		"-----END PRIVATE KEY-----\nafter\n",
+	}
+	var r plugintrace.KeyRedactor
+	var got string
+	for _, p := range pieces {
+		got += r.Redact(p)
+	}
+	for _, leaked := range []string{body1, body2} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("key body %q survived redaction: %q", leaked, got)
+		}
+	}
+	for _, kept := range []string{"before", "after", "-----BEGIN PRIVATE KEY-----", "-----END PRIVATE KEY-----"} {
+		if !strings.Contains(got, kept) {
+			t.Fatalf("%q lost from %q", kept, got)
+		}
+	}
+	// And a later, separate piece is not treated as part of a key.
+	if out := r.Redact("plain text\n"); out != "plain text\n" {
+		t.Fatalf("redactor stayed open: %q", out)
+	}
+}

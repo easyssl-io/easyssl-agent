@@ -242,6 +242,38 @@ func RedactPrivateKeys(s string) string {
 	return s[:start[1]] + KeyPlaceholder
 }
 
+// KeyRedactor is RedactPrivateKeys over a stream that arrives in pieces. A key
+// is not guaranteed to fall inside one piece: a Plugin's stdout is recorded as
+// several chunks whenever its stderr interleaves, and redacting each chunk on
+// its own left the continuation of a key, which carries the rest of its body
+// and its end marker but no begin marker, unrecognized and reported as it was.
+// The redactor remembers that a key was left open and drops everything up to
+// the end marker in the pieces that follow. One redactor per stream.
+type KeyRedactor struct{ open bool }
+
+// Redact returns piece with every private key body masked, including the part
+// of one that began in an earlier piece.
+func (r *KeyRedactor) Redact(piece string) string {
+	prefix := ""
+	if r.open {
+		end := keyEnd.FindStringIndex(piece)
+		if end == nil {
+			return "" // the whole piece is key body
+		}
+		piece = piece[end[0]:]
+		prefix = KeyPlaceholder
+		r.open = false
+	}
+	out := RedactPrivateKeys(piece)
+	// Left open when the last begin marker has no end marker after it, which
+	// RedactPrivateKeys shows by ending on the placeholder it appended.
+	if begins := keyBegin.FindAllStringIndex(piece, -1); len(begins) > 0 {
+		last := begins[len(begins)-1]
+		r.open = keyEnd.FindStringIndex(piece[last[1]:]) == nil
+	}
+	return prefix + out
+}
+
 // MaxPluginOutput bounds how much of a Plugin's output the Agent will hold.
 // A Plugin is arbitrary code and can print without limit; nothing downstream
 // wants more than this either, since what reaches the Server is truncated to
