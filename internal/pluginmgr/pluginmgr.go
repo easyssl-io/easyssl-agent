@@ -9,6 +9,7 @@
 package pluginmgr
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -295,8 +296,15 @@ func discoverByExec(ctx context.Context, path string, logger *slog.Logger) (plug
 	cap := &plugintrace.Capture{Max: plugintrace.MaxPluginOutput}
 	stderr := cap.Writer(plugintrace.StreamStderr)
 	cmd.Stderr = stderr
+	// Stdout is bounded too: it is the answer, but a broken Plugin printing
+	// without end during the discover window would otherwise grow this
+	// Agent's memory on every inventory pass. Past the bound it is drained and
+	// dropped, so the Plugin is not blocked, and the answer is refused below.
+	answer := &boundedBuffer{max: plugintrace.MaxPluginOutput}
+	cmd.Stdout = answer
 	started := time.Now()
-	stdout, err := cmd.Output()
+	err := cmd.Run()
+	stdout := answer.buf.Bytes()
 	stderr.Flush()
 	code := 0
 	if cmd.ProcessState != nil {
@@ -312,6 +320,9 @@ func discoverByExec(ctx context.Context, path string, logger *slog.Logger) (plug
 			return out, fmt.Errorf("%w: %s", err, diag)
 		}
 		return out, err
+	}
+	if answer.over {
+		return out, fmt.Errorf("the discover answer exceeds %d bytes", plugintrace.MaxPluginOutput)
 	}
 	if err := json.Unmarshal(stdout, &out); err != nil {
 		return out, fmt.Errorf("the plugin's discover output is not JSON: %w", err)
@@ -450,4 +461,23 @@ func fileDigest(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// boundedBuffer keeps at most max bytes and records that more arrived, while
+// still accepting everything written so the writer is never blocked.
+type boundedBuffer struct {
+	buf  bytes.Buffer
+	max  int
+	over bool
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	if room := b.max - b.buf.Len(); room < len(p) {
+		b.over = true
+		if room > 0 {
+			b.buf.Write(p[:room])
+		}
+		return len(p), nil
+	}
+	return b.buf.Write(p)
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -220,5 +221,18 @@ func TestInstallRefusesAnUnusableAnswer(t *testing.T) {
 	}
 	if installed, _ := m.List(); len(installed) != 0 {
 		t.Fatalf("something was installed: %+v", installed)
+	}
+}
+
+// A Plugin whose discover answer runs past the output bound is refused rather
+// than read whole into memory.
+func TestDiscoverRefusesAnOversizedAnswer(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "flood")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nhead -c 600000 /dev/zero | tr '\\\\0' x\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := discoverByExec(context.Background(), script, slog.New(slog.DiscardHandler)); err == nil ||
+		!strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("err = %v, want the answer refused as too large", err)
 	}
 }
