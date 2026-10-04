@@ -5,6 +5,9 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/easyssl-io/easyssl-agent/internal/msg"
+	"github.com/easyssl-io/easyssl-contract/l10n"
 )
 
 func TestMarketplaceURL(t *testing.T) {
@@ -113,4 +116,92 @@ func TestConfirmName(t *testing.T) {
 			t.Fatal("confirmName with no proposal and an empty answer = nil error, want one")
 		}
 	})
+}
+
+func TestLanguageStep(t *testing.T) {
+	t.Setenv(msg.EnvVar, "")
+	t.Setenv("LC_ALL", "C")
+
+	t.Run("each language under its own name, the default marked, Enter accepts it", func(t *testing.T) {
+		term, out := fakeTerminal("")
+		if got := askLanguage(term, "es"); got != "es" {
+			t.Fatalf("askLanguage = %q, want es", got)
+		}
+		want := "Language / Idioma\n    1  English (en)\n  * 2  Español (es)\n[2]: "
+		if out.String() != want {
+			t.Fatalf("language step printed %q, want %q", out.String(), want)
+		}
+	})
+
+	for answer, want := range map[string]string{"1": "en", "2": "es", "es": "es", "EN": "en", "es-PE": "es", "español": "es"} {
+		t.Run("the answer "+answer, func(t *testing.T) {
+			term, _ := fakeTerminal(answer)
+			if got := askLanguage(term, "en"); got != want {
+				t.Fatalf("askLanguage = %q, want %q", got, want)
+			}
+		})
+	}
+
+	t.Run("an answer that names no language is asked again", func(t *testing.T) {
+		term, out := fakeTerminal("fr\n3\n2")
+		if got := askLanguage(term, "en"); got != "es" {
+			t.Fatalf("askLanguage = %q, want es", got)
+		}
+		if n := strings.Count(out.String(), "[1]: "); n != 3 {
+			t.Fatalf("asked %d times, want 3", n)
+		}
+	})
+
+	t.Run("a terminal that ends takes the default instead of asking forever", func(t *testing.T) {
+		term := &terminal{in: bufio.NewReader(strings.NewReader("fr\n")), out: &bytes.Buffer{}, close: func() {}}
+		if got := askLanguage(term, "es"); got != "es" {
+			t.Fatalf("askLanguage = %q, want es", got)
+		}
+	})
+
+	t.Run("--lang decides without asking", func(t *testing.T) {
+		term, out := fakeTerminal("1")
+		got, err := settleLanguage(term, "es", "en")
+		if err != nil || got != "es" || out.Len() != 0 {
+			t.Fatalf("settleLanguage = %q, %v, printed %q; want es, nil, nothing", got, err, out.String())
+		}
+	})
+
+	t.Run("an unsupported --lang is refused", func(t *testing.T) {
+		if _, err := settleLanguage(nil, "fr", ""); err == nil {
+			t.Fatal("settleLanguage with --lang fr = nil error, want one")
+		}
+	})
+
+	t.Run("without a terminal the default is taken", func(t *testing.T) {
+		t.Setenv(msg.EnvVar, "es")
+		got, err := settleLanguage(nil, "", "en")
+		if err != nil || got != "es" {
+			t.Fatalf("settleLanguage = %q, %v; want es, nil", got, err)
+		}
+	})
+
+	t.Run("the saved language is the default the step offers", func(t *testing.T) {
+		term, out := fakeTerminal("")
+		got, err := settleLanguage(term, "", "es")
+		if err != nil || got != "es" || !strings.Contains(out.String(), "* 2") {
+			t.Fatalf("settleLanguage = %q, %v, printed %q", got, err, out.String())
+		}
+	})
+}
+
+// A prompt is answered with the language's own affirmative, and the hint it
+// shows is that language's.
+func TestConfirmUninstallInSpanish(t *testing.T) {
+	msg.SetLanguage("es")
+	t.Cleanup(func() { msg.SetLanguage(l10n.English) })
+	for answer, want := range map[string]bool{"s": true, "Sí": true, "y": true, "": false, "n": false} {
+		term, out := fakeTerminal(answer)
+		if got := confirmUninstall(term, true, "Acme (org-abc)"); got != want {
+			t.Errorf("confirmUninstall(%q) = %v, want %v", answer, got, want)
+		}
+		if !strings.Contains(out.String(), "[s/N]") || !strings.Contains(out.String(), "Acme (org-abc)") {
+			t.Errorf("prompt = %q, want the Spanish hint and the Organization", out.String())
+		}
+	}
 }

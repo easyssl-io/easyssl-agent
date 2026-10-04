@@ -64,6 +64,42 @@ verify what it does. Flag any of the following.
   errors on stderr, non-zero exit on failure. `--json` codes are a stable
   interface: adding one is fine, redefining one is not.
 
+## Messages
+
+Everything a command says to a person goes through `internal/msg`: output,
+prompts, errors that reach stderr, usage and flag help.
+
+- **An explicit ID, the English beside it.** `msg.T("uninstall.aborted",
+  "Aborted; nothing was changed.")`. The ID names where the message appears,
+  lowercase and dotted; it is never derived from the English, and two places do
+  not share one because their English happens to match.
+- **One sentence is one message.** Values are named placeholders (`{path}`)
+  filled by `"path", value` pairs, which a translation may reorder. Never
+  concatenate translated fragments. A message that depends on a count uses
+  `msg.N` with `{n}`.
+- **Literals are not translated**: commands, flags, paths, environment
+  variables, Plugin ids, URLs and `easySSL` stay as they are inside every
+  language's text.
+- **An error is `msg.Err.T(id, english, args...)`.** It is rendered when read,
+  so a package-level sentinel speaks the host's language and `errors.Is` keeps
+  working; an error passed as an argument is wrapped, as `%w` would.
+- **A text sent to the Server is `msg.Text`**, which carries every language,
+  because its reader is not this host's.
+- **Spanish goes in `internal/msg/locales/es.json`** in the same change: neutral
+  Spanish addressing the reader as "tú", as short as the English, with
+  Organización, Usuario, Agente, Servidor, consola web, Plugin, Marketplace,
+  Certificado, Destino, Despliegue and Clave for the domain names.
+- **`TestCatalog` in `internal/msg` is the check.** It reads every `T`, `N` and
+  `Text` call in the module and fails on a message with no translation, a
+  translation no message uses, one ID with two English texts, or placeholders
+  that differ. The English must be a string literal for it to read.
+- **What is not for a person does not vary with the language**: `--json` output,
+  the service's logs (`run` switches to English once it has started), anything
+  sent to the Server, files written to the host, exit codes. A change that makes
+  any of them depend on the language is a finding.
+- **Adding a language is a catalog**, `locales/<code>.json`, once
+  `easyssl-contract` lists the code. Nothing changes where messages are used.
+
 ## Conventions
 
 American English. Capitalize Organization, Agent, Server, Plugin, Certificate,

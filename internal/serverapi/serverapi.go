@@ -24,13 +24,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
+	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -66,11 +66,23 @@ type APIError struct {
 	Message string
 }
 
+// Error words a refusal for a person. A code this Agent knows gets the
+// Agent's own message, which is the one that can be read in the host's
+// language; the Server's text is English whoever reads it, so it is shown
+// only for a code this Agent has no message for, as a newer Server may send.
 func (e *APIError) Error() string {
-	if e.Message != "" {
-		return fmt.Sprintf("server responded %d (%s): %s", e.Status, e.Code, e.Message)
+	switch e.Code {
+	case wire.CodeUnknownToken:
+		return msg.T("server.refused.unknown_token", "the Server does not accept this host's token: the Agent was deactivated or removed, or its registration was rejected")
+	case wire.CodeInvalidRegistrationKey:
+		return msg.T("server.refused.registration_key", "the Server did not accept the registration key")
+	case wire.CodeInvalidReactivationToken:
+		return msg.T("server.refused.reactivation_token", "the Server did not accept the reactivation token: it is unknown, expired or already used")
 	}
-	return fmt.Sprintf("server responded %d (%s)", e.Status, e.Code)
+	if e.Message != "" {
+		return msg.T("server.refused.other", "the Server responded {status} ({code}): {message}", "status", e.Status, "code", e.Code, "message", e.Message)
+	}
+	return msg.T("server.refused.no_text", "the Server responded {status} ({code})", "status", e.Status, "code", e.Code)
 }
 
 // Register performs the first check-in that creates a pending Agent and returns

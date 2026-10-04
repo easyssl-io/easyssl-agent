@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -27,9 +28,11 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-agent/internal/inventory"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
+	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-agent/internal/service"
+	"github.com/easyssl-io/easyssl-contract/l10n"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -60,6 +63,7 @@ type Options struct {
 	RegistrationKey   string // from --key or REGISTRATION_KEY; prompted if empty and interactive
 	ReactivationToken string // from --reactivation-token or REACTIVATION_TOKEN; wins over the key
 	Name              string // from --name or AGENT_NAME; else the hostname, editable at the prompt
+	Language          string // from --lang, which decides without asking; else the language step's answer
 }
 
 // reactivationPrefix is how a reactivation token is told from a registration
@@ -74,10 +78,24 @@ func Register(ctx context.Context, opts Options) error {
 	// the Server for a host that never actually installed one, which an
 	// operator then has to notice and clean up.
 	if os.Geteuid() != 0 {
-		return errors.New("register must run as root: use sudo, or run it from a root shell")
+		return msg.Err.T("register.not_root", "register must run as root: use sudo, or run it from a root shell")
 	}
 
-	// Before the first prompt, so a --server this Agent will not talk to fails
+	t := openTerminal()
+	if t != nil {
+		defer t.close()
+	}
+
+	// The language first, ahead of every other step and of anything this
+	// prints, so that all of it is read in the language chosen here.
+	cfg, cfgErr := identity.LoadConfig()
+	lang, err := settleLanguage(t, opts.Language, cfg.Language)
+	if err != nil {
+		return err
+	}
+	msg.SetLanguage(lang)
+
+	// Before the next prompt, so a --server this Agent will not talk to fails
 	// while there is still nothing to lose: no key typed in, no token issued,
 	// nothing written to disk. Options.ServerURL is required, and the register
 	// command refuses an empty one, so this always has something to check.
@@ -90,23 +108,65 @@ func Register(ctx context.Context, opts Options) error {
 		return err
 	}
 
-	fmt.Printf("easySSL Agent installer · v%s\n", Version)
-	fmt.Println("Registering this host to an easySSL Organization...")
+	fmt.Println(msg.T("register.banner", "easySSL Agent installer · v{version}", "version", Version))
+	fmt.Println(msg.T("register.start", "Registering this host to an easySSL Organization..."))
 	fmt.Println()
-
-	t := openTerminal()
-	if t != nil {
-		defer t.close()
-	}
 
 	// Installed means a config and a token: uninstall deletes both, so one
 	// without the other is a remnant, and a remnant is registered over.
-	if cfg, err := identity.LoadConfig(); err == nil {
+	if cfgErr == nil {
 		if _, terr := identity.LoadToken(); terr == nil {
 			return reinstall(ctx, t, opts, cfg)
 		}
 	}
 	return freshRegister(ctx, t, opts)
+}
+
+// settleLanguage is the installer's language step. `--lang` decides without
+// asking. Otherwise the default comes from msg.Resolve and, with a terminal,
+// the reader is asked; without one the default is taken, since there is
+// nobody to ask and an unattended install must not block on a read.
+func settleLanguage(t *terminal, flag, saved string) (string, error) {
+	lang, decided, err := msg.Resolve(flag, os.Getenv(msg.EnvVar), saved, os.Getenv)
+	if err != nil || decided || t == nil {
+		return lang, err
+	}
+	return askLanguage(t, lang), nil
+}
+
+// askLanguage offers every supported language under its own name, numbered,
+// with the default marked; Enter accepts it, and the number, the code or the
+// name chooses another. Nothing here is a translated sentence: whoever reads
+// it has not chosen a language yet, so the heading is the one word in every
+// language and the rest is names and numbers.
+func askLanguage(t *terminal, def string) string {
+	langs := l10n.Supported()
+	fmt.Fprintln(t.out, msg.LanguageHeading())
+	defaultNumber := 1
+	for i, l := range langs {
+		mark := " "
+		if l == def {
+			mark, defaultNumber = "*", i+1
+		}
+		fmt.Fprintf(t.out, "  %s %d  %s (%s)\n", mark, i+1, l10n.Name(l), l)
+	}
+	for {
+		answer, ok := t.ask(fmt.Sprintf("[%d]: ", defaultNumber))
+		if !ok || answer == "" {
+			return def
+		}
+		if n, err := strconv.Atoi(answer); err == nil && n >= 1 && n <= len(langs) {
+			return langs[n-1]
+		}
+		if l, ok := l10n.Base(answer); ok {
+			return l
+		}
+		for _, l := range langs {
+			if strings.EqualFold(answer, l10n.Name(l)) {
+				return l
+			}
+		}
+	}
 }
 
 // reinstall handles a host that already has a token: refresh the service onto
@@ -122,13 +182,24 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	// too. Moving the host is not done silently either, because it detaches
 	// this host from whatever the old Server still deploys to it.
 	if opts.ServerURL != "" && opts.ServerURL != cfg.ServerURL {
-		return fmt.Errorf("this host is registered to %s, but this installer came from %s.\n"+
+		return msg.Err.T("reinstall.other_server", "this host is registered to {registered}, but this installer came from {installer}.\n"+
 			"Nothing was changed. To move it, uninstall it from the old Server first:\n"+
 			"    sudo easyssl-agent uninstall\n"+
-			"then run this installer again", cfg.ServerURL, opts.ServerURL)
+			"then run this installer again", "registered", cfg.ServerURL, "installer", opts.ServerURL)
 	}
 
-	fmt.Printf("This host is already registered on %s in %s.\n", cfg.ServerURL, cfg.Organization())
+	// The language step's answer is kept even when nothing else about the
+	// registration changes: re-running the installer is one of the two ways
+	// to change it.
+	if cfg.Language != msg.Language() {
+		cfg.Language = msg.Language()
+		if err := identity.SaveConfig(cfg); err != nil {
+			return msg.Err.T("reinstall.save_language", "saving the language: {err}", "err", err)
+		}
+	}
+
+	fmt.Println(msg.T("reinstall.already_registered", "This host is already registered on {server} in {organization}.",
+		"server", cfg.ServerURL, "organization", cfg.Organization()))
 
 	api, err := serverapi.New(cfg.ServerURL)
 	if err != nil {
@@ -146,8 +217,8 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 		// dead and this host is registered again under whatever credential
 		// the operator gave this run: a reactivation token to be the same
 		// Agent, a registration key to be a new one.
-		fmt.Println("The Server no longer accepts this host's token: the Agent was deactivated or removed from the web console.")
-		fmt.Println("Registering this host again.")
+		fmt.Println(msg.T("reinstall.token_refused", "The Server no longer accepts this host's token: the Agent was deactivated or removed from the web console."))
+		fmt.Println(msg.T("reinstall.registering_again", "Registering this host again."))
 		fmt.Println()
 		return freshRegister(ctx, t, opts)
 	default:
@@ -155,24 +226,26 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 		// down. Name it and say why, because a Server that is briefly down and
 		// one that no longer exists are indistinguishable to the operator
 		// otherwise, and only the first resolves on its own.
-		fmt.Printf("\nCould not reach %s: %v\n", cfg.ServerURL, cerr)
+		fmt.Println()
+		fmt.Println(msg.T("reinstall.unreachable", "Could not reach {server}: {err}", "server", cfg.ServerURL, "err", cerr))
 		if err := service.Install(); err != nil {
-			return fmt.Errorf("updating the service: %w", err)
+			return msg.Err.T("reinstall.unreachable.update_service", "updating the service: {err}", "err", err)
 		}
-		fmt.Printf("✓ %s updated\n", serviceName())
+		fmt.Println(msg.T("reinstall.unreachable.service_updated", "✓ {service} updated", "service", serviceName()))
 		defer startServiceOnExit()
-		fmt.Println("The service will keep polling it, so registration completes once it is back.")
+		fmt.Println(msg.T("reinstall.unreachable.keeps_polling", "The service will keep polling it, so registration completes once it is back."))
 		return nil
 	}
 
 	if err := service.Install(); err != nil {
-		return fmt.Errorf("updating the service: %w", err)
+		return msg.Err.T("reinstall.update_service", "updating the service: {err}", "err", err)
 	}
-	fmt.Printf("✓ %s updated\n", serviceName())
+	fmt.Println(msg.T("reinstall.service_updated", "✓ {service} updated", "service", serviceName()))
 	defer startServiceOnExit()
 
 	if resp.Status == wire.StatusActive {
-		fmt.Printf("\n✓ %s is authorized and ACTIVE.\n", resp.DisplayName)
+		fmt.Println()
+		fmt.Println(msg.T("reinstall.active", "✓ {name} is authorized and ACTIVE.", "name", resp.DisplayName))
 		return nil
 	}
 	return awaitAuthorization(ctx, api, resp.DisplayName, token, resp.NextPollSeconds,
@@ -196,9 +269,9 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 			return err
 		}
 		if host != "" && host != name {
-			fmt.Printf("✓ Agent name  %s  (host %s)\n", name, host)
+			fmt.Println(msg.T("register.name_with_host", "✓ Agent name  {name}  (host {host})", "name", name, "host", host))
 		} else {
-			fmt.Printf("✓ Agent name  %s\n", name)
+			fmt.Println(msg.T("register.name", "✓ Agent name  {name}", "name", name))
 		}
 	}
 
@@ -215,24 +288,27 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 		ServerURL:        opts.ServerURL,
 		OrganizationName: resp.OrganizationName,
 		OrganizationID:   resp.OrganizationID,
+		Language:         msg.Language(),
 	}
 	if err := identity.SaveConfig(cfg); err != nil {
-		return fmt.Errorf("save config: %w", err)
+		return msg.Err.T("register.save_config", "saving the configuration: {err}", "err", err)
 	}
 	if err := identity.SaveToken(resp.AgentToken); err != nil {
-		return fmt.Errorf("save token: %w", err)
+		return msg.Err.T("register.save_token", "saving the token: {err}", "err", err)
 	}
-	fmt.Printf("✓ Agent token stored in %s\n", identity.TokenPath())
+	fmt.Println(msg.T("register.token_stored", "✓ Agent token stored in {path}", "path", identity.TokenPath()))
 
 	if err := service.Install(); err != nil {
-		return fmt.Errorf("installing the service: %w", err)
+		return msg.Err.T("register.install_service", "installing the service: {err}", "err", err)
 	}
-	fmt.Printf("✓ service installed: %s\n", serviceName())
+	fmt.Println(msg.T("register.service_installed", "✓ service installed: {service}", "service", serviceName()))
 	defer startServiceOnExit()
 
 	if resp.Status == wire.StatusActive {
-		fmt.Printf("\n✓ Reactivated as %s (%s), ACTIVE in %s.\n", resp.DisplayName, resp.AgentID, cfg.Organization())
-		fmt.Printf("  manage:  %s\n", statusHint())
+		fmt.Println()
+		fmt.Println(msg.T("register.reactivated", "✓ Reactivated as {name} ({id}), ACTIVE in {organization}.",
+			"name", resp.DisplayName, "id", resp.AgentID, "organization", cfg.Organization()))
+		fmt.Println(msg.T("register.reactivated.manage", "  manage:  {command}", "command", statusHint()))
 		offerRequiredPlugins(ctx, t, api, resp.AgentToken, opts.ServerURL, resp.RequiredPlugins)
 		return nil
 	}
@@ -262,16 +338,20 @@ func offerRequiredPlugins(ctx context.Context, t *terminal, api *serverapi.Clien
 	if len(missing) == 0 {
 		return
 	}
-	fmt.Printf("\nIts Targets use %d Plugin(s) this host does not have: %s\n", len(missing), strings.Join(missing, ", "))
-	fmt.Println("A Deployment to those Targets fails until each is installed. A Plugin runs with")
-	fmt.Println("this Agent's privileges, which is root: installing authorizes code execution at")
-	fmt.Println("that level on this host.")
+	fmt.Println()
+	fmt.Println(msg.N("register.plugins.missing", len(missing),
+		"Its Targets use 1 Plugin this host does not have: {plugins}",
+		"Its Targets use {n} Plugins this host does not have: {plugins}",
+		"plugins", strings.Join(missing, ", ")))
+	// One line, wrapped by the terminal rather than here: a fixed width is a
+	// guess about a window this program cannot see.
+	fmt.Println(msg.T("register.plugins.consequence", "A Deployment to those Targets fails until each is installed. A Plugin runs with this Agent's privileges, which is root: installing authorizes code execution at that level on this host."))
 	if t == nil {
-		fmt.Printf("Install them later with:  sudo easyssl-agent plugin install %s\n", strings.Join(missing, " "))
+		fmt.Println(msg.T("register.plugins.install_later", "Install them later with:  sudo easyssl-agent plugin install {plugins}", "plugins", strings.Join(missing, " ")))
 		return
 	}
-	if !strings.EqualFold(t.prompt("Install them now? [y/N]: "), "y") {
-		fmt.Printf("Not installed. Later:  sudo easyssl-agent plugin install %s\n", strings.Join(missing, " "))
+	if !msg.Yes(t.prompt(msg.T("register.plugins.confirm", "Install them now? [y/N]: "))) {
+		fmt.Println(msg.T("register.plugins.declined", "Not installed. Later:  sudo easyssl-agent plugin install {plugins}", "plugins", strings.Join(missing, " ")))
 		return
 	}
 	installed := 0
@@ -281,7 +361,7 @@ func offerRequiredPlugins(ctx context.Context, t *terminal, api *serverapi.Clien
 			fmt.Printf("! %s: %v\n", id, err)
 			continue
 		}
-		fmt.Printf("✓ installed %s v%s at %s\n", inst.ID, inst.Version, inst.Path)
+		fmt.Println(msg.T("register.plugins.installed", "✓ installed {id} v{version} at {path}", "id", inst.ID, "version", inst.Version, "path", inst.Path))
 		installed++
 	}
 	if installed == 0 {
@@ -291,17 +371,17 @@ func offerRequiredPlugins(ctx context.Context, t *terminal, api *serverapi.Clien
 	// first check-in; if that fails the service reports on its own.
 	if inv, err := inventory.Collect(ctx, mgr); err == nil {
 		if err := api.ReportInventory(ctx, token, inv); err == nil {
-			fmt.Println("✓ reported to the Server")
+			fmt.Println(msg.T("register.plugins.reported", "✓ reported to the Server"))
 		}
 	}
 }
 
 func startServiceOnExit() {
 	if err := service.Start(); err != nil {
-		fmt.Fprintf(os.Stderr,
-			"! could not start %s: %v\n"+
-				"  It is installed and enabled, so a reboot starts it; `%s` shows its state.\n",
-			serviceName(), err, statusHint())
+		fmt.Fprintln(os.Stderr, msg.T("register.start_failed",
+			"! could not start {service}: {err}\n"+
+				"  It is installed and enabled, so a reboot starts it; `{command}` shows its state.",
+			"service", serviceName(), "err", err, "command", statusHint()))
 	}
 }
 
@@ -324,7 +404,8 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 	organization, organizationID, err := waitForAuthorization(ctx, api, token, pollSeconds)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			fmt.Println("\n(installer interrupted; the systemd service keeps polling, so authorize any time)")
+			fmt.Println()
+			fmt.Println(msg.T("register.interrupted", "(installer interrupted; the service keeps polling, so authorize any time)"))
 			return nil
 		}
 		return err
@@ -334,11 +415,13 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 	if organization != "" {
 		rememberOrganization(organization, organizationID)
 		cfg, _ := identity.LoadConfig()
-		fmt.Printf("\n✓ %s was authorized and is now ACTIVE in %s.\n", name, cfg.Organization())
+		fmt.Println()
+		fmt.Println(msg.T("register.authorized_in", "✓ {name} was authorized and is now ACTIVE in {organization}.", "name", name, "organization", cfg.Organization()))
 	} else {
-		fmt.Printf("\n✓ %s was authorized and is now ACTIVE.\n", name)
+		fmt.Println()
+		fmt.Println(msg.T("register.authorized", "✓ {name} was authorized and is now ACTIVE.", "name", name))
 	}
-	fmt.Printf("  manage:  %s\n", statusHint())
+	fmt.Println(msg.T("register.authorized.manage", "  manage:  {command}", "command", statusHint()))
 	return nil
 }
 
@@ -365,7 +448,7 @@ func marketplaceURL(serverURL, fromServer string) string {
 }
 
 func authorizationInstructions(marketplaceURL string) string {
-	return fmt.Sprintf("Visit the Plugin marketplace: %s\n\nWaiting for authorization from the web console (approve it at your web console › Agents)...", marketplaceURL)
+	return msg.T("register.awaiting_authorization", "Visit the Plugin marketplace: {url}\n\nWaiting for authorization from the web console (approve it at your web console › Agents)...", "url", marketplaceURL)
 }
 
 // Uninstall takes the Agent off this host. It deactivates the Agent on the
@@ -383,16 +466,17 @@ func authorizationInstructions(marketplaceURL string) string {
 // back, on this host after a reinstall or on another one.
 func Uninstall(ctx context.Context, assumeYes bool) error {
 	if os.Geteuid() != 0 {
-		return errors.New("uninstall must run as root (use sudo)")
+		return msg.Err.T("uninstall.not_root", "uninstall must run as root (use sudo)")
 	}
 
 	cfg, cfgErr := identity.LoadConfig()
 	token, tokenErr := identity.LoadToken()
 	installed := cfgErr == nil && tokenErr == nil
 	if !installed {
-		fmt.Println("No easySSL Agent registration found on this host; removing any leftover files.")
+		fmt.Println(msg.T("uninstall.not_registered", "No easySSL Agent registration found on this host; removing any leftover files."))
 	} else {
-		fmt.Printf("The easySSL Agent on this host is registered with %s in %s.\n", cfg.ServerURL, cfg.Organization())
+		fmt.Println(msg.T("uninstall.registered", "The easySSL Agent on this host is registered with {server} in {organization}.",
+			"server", cfg.ServerURL, "organization", cfg.Organization()))
 	}
 
 	t := openTerminal()
@@ -400,7 +484,7 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 		defer t.close()
 	}
 	if !assumeYes && !confirmUninstall(t, installed, cfg.Organization()) {
-		fmt.Println("Aborted; nothing was changed.")
+		fmt.Println(msg.T("uninstall.aborted", "Aborted; nothing was changed."))
 		return nil
 	}
 
@@ -412,31 +496,32 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 	hadUnit, hadState, hadBinary := service.Installed(), exists(identity.BaseDir), exists(service.BinaryPath)
 
 	if err := service.Uninstall(); err != nil && !errors.Is(err, service.ErrUnsupportedInit) {
-		return fmt.Errorf("removing the service: %w", err)
+		return msg.Err.T("uninstall.remove_service", "removing the service: {err}", "err", err)
 	}
 	if hadUnit {
-		fmt.Printf("✓ %s stopped and removed\n", serviceName())
+		fmt.Println(msg.T("uninstall.service_removed", "✓ {service} stopped and removed", "service", serviceName()))
 	}
 
 	if err := identity.RemoveAll(); err != nil {
-		return fmt.Errorf("removing %s: %w", identity.BaseDir, err)
+		return msg.Err.T("uninstall.remove_state", "removing {path}: {err}", "path", identity.BaseDir, "err", err)
 	}
 	if hadState {
-		fmt.Printf("✓ config and token deleted from %s\n", identity.BaseDir)
+		fmt.Println(msg.T("uninstall.state_removed", "✓ config and token deleted from {path}", "path", identity.BaseDir))
 	}
 
 	if err := os.Remove(service.BinaryPath); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("removing %s: %w", service.BinaryPath, err)
+		return msg.Err.T("uninstall.remove_binary", "removing {path}: {err}", "path", service.BinaryPath, "err", err)
 	}
 	if hadBinary {
-		fmt.Printf("✓ %s deleted\n", service.BinaryPath)
+		fmt.Println(msg.T("uninstall.binary_removed", "✓ {path} deleted", "path", service.BinaryPath))
 	}
 
 	if !hadUnit && !hadState && !hadBinary {
-		fmt.Println("Nothing to remove; this host has no easySSL Agent installed.")
+		fmt.Println(msg.T("uninstall.nothing_to_remove", "Nothing to remove; this host has no easySSL Agent installed."))
 		return nil
 	}
-	fmt.Println("\neasySSL Agent uninstalled. Certificates it deployed were left in place.")
+	fmt.Println()
+	fmt.Println(msg.T("uninstall.done", "easySSL Agent uninstalled. Certificates it deployed were left in place."))
 	offerPluginRemoval(t)
 	offerKeyRemoval(t)
 	return nil
@@ -450,19 +535,20 @@ func deactivateOnServer(ctx context.Context, cfg identity.Config, token string) 
 	api, err := serverapi.New(cfg.ServerURL)
 	if err != nil {
 		fmt.Printf("! %v\n", err)
-		fmt.Printf("  The Server still accepts this host's token: deactivate this Agent from the web console at %s\n", cfg.ServerURL)
+		fmt.Println(msg.T("uninstall.deactivate.bad_url.by_hand", "  The Server still accepts this host's token: deactivate this Agent from the web console at {server}", "server", cfg.ServerURL))
 		return
 	}
 	host, _ := os.Hostname()
 	switch err := api.Unregister(ctx, token); {
 	case err == nil:
-		fmt.Printf("✓ deactivated in %s; its Targets are kept, and the web console can reactivate it on this or another host\n", cfg.Organization())
+		fmt.Println(msg.T("uninstall.deactivate.done", "✓ deactivated in {organization}; its Targets are kept, and the web console can reactivate it on this or another host", "organization", cfg.Organization()))
 	case isUnknownToken(err):
-		fmt.Println("✓ the Server no longer accepts this token (the Agent was already deactivated or removed)")
+		fmt.Println(msg.T("uninstall.deactivate.already", "✓ the Server no longer accepts this token (the Agent was already deactivated or removed)"))
 	default:
-		fmt.Printf("! could not reach %s: %v\n", cfg.ServerURL, err)
-		fmt.Printf("  The Server still accepts this host's token: deactivate this Agent from the web console at %s\n", cfg.ServerURL)
-		fmt.Printf("  (Organization %s, host %s), which is where the Agents are listed.\n", cfg.Organization(), host)
+		fmt.Println(msg.T("uninstall.deactivate.unreachable", "! could not reach {server}: {err}\n"+
+			"  The Server still accepts this host's token: deactivate this Agent from the web console at {server}\n"+
+			"  (Organization {organization}, host {host}), which is where the Agents are listed.",
+			"server", cfg.ServerURL, "err", err, "organization", cfg.Organization(), "host", host))
 	}
 }
 
@@ -474,29 +560,34 @@ func offerPluginRemoval(t *terminal) {
 	installed, err := pluginmgr.New(nil, nil).List()
 	switch {
 	case err != nil:
-		fmt.Printf("\n! Plugins may remain in %s and were NOT deleted (listing them failed: %v).\n",
-			pluginmgr.InstallDir, err)
+		fmt.Println()
+		fmt.Println(msg.T("uninstall.plugins.list_failed", "! Plugins may remain in {path} and were NOT deleted (listing them failed: {err}).",
+			"path", pluginmgr.InstallDir, "err", err))
 		return
 	case len(installed) == 0:
 		return
 	}
-	fmt.Printf("\n%d Plugin executable(s) remain in %s:\n", len(installed), pluginmgr.InstallDir)
+	fmt.Println()
+	fmt.Println(msg.N("uninstall.plugins.remain", len(installed),
+		"1 Plugin executable remains in {path}:",
+		"{n} Plugin executables remain in {path}:",
+		"path", pluginmgr.InstallDir))
 	for _, p := range installed {
 		fmt.Printf("    %s\n", p.Path)
 	}
 	if t == nil {
-		fmt.Println("  They were NOT deleted; delete that directory by hand if this host is being decommissioned.")
+		fmt.Println(msg.T("uninstall.plugins.not_deleted", "  They were NOT deleted; delete that directory by hand if this host is being decommissioned."))
 		return
 	}
-	if !strings.EqualFold(t.prompt(fmt.Sprintf("Delete %s? [y/N]: ", pluginmgr.InstallDir)), "y") {
-		fmt.Println("  Kept.")
+	if !msg.Yes(t.prompt(msg.T("uninstall.plugins.confirm", "Delete {path}? [y/N]: ", "path", pluginmgr.InstallDir))) {
+		fmt.Println(msg.T("uninstall.plugins.kept", "  Kept."))
 		return
 	}
 	if err := os.RemoveAll(pluginmgr.InstallDir); err != nil {
-		fmt.Printf("! could not delete %s: %v\n", pluginmgr.InstallDir, err)
+		fmt.Println(msg.T("uninstall.plugins.delete_failed", "! could not delete {path}: {err}", "path", pluginmgr.InstallDir, "err", err))
 		return
 	}
-	fmt.Printf("✓ %s deleted\n", pluginmgr.InstallDir)
+	fmt.Println(msg.T("uninstall.plugins.deleted", "✓ {path} deleted", "path", pluginmgr.InstallDir))
 }
 
 // offerKeyRemoval deletes the keystore after a confirmation that cannot be
@@ -509,33 +600,37 @@ func offerKeyRemoval(t *terminal) {
 	n, err := keystore.Count()
 	switch {
 	case err != nil:
-		fmt.Printf("\n! private keys may remain in %s and were NOT deleted (counting them failed: %v).\n", keystore.Dir(), err)
+		fmt.Println()
+		fmt.Println(msg.T("uninstall.keys.count_failed", "! private keys may remain in {path} and were NOT deleted (counting them failed: {err}).", "path", keystore.Dir(), "err", err))
 		return
 	case n == 0:
 		return
-	case n == 1:
-		fmt.Printf("\n1 private key remains in %s.\n", keystore.Dir())
-	default:
-		fmt.Printf("\n%d private keys remain in %s.\n", n, keystore.Dir())
 	}
-	fmt.Println("  This is the only copy easySSL has of them: a Certificate whose key is gone cannot be")
-	fmt.Println("  deployed or renewed from this host again, and reactivating this Agent elsewhere needs")
-	fmt.Println("  these files copied there first. Copies a Deployment installed elsewhere on this host")
-	fmt.Println("  are left in place either way.")
+	fmt.Println()
+	fmt.Println(msg.N("uninstall.keys_remain", n,
+		"1 private key remains in {path}.",
+		"{n} private keys remain in {path}.",
+		"path", keystore.Dir()))
+	// One line, wrapped by the terminal rather than here.
+	fmt.Println(msg.T("uninstall.keys.only_copy", "  This is the only copy easySSL has of them: a Certificate whose key is gone cannot be deployed or renewed from this host again, and reactivating this Agent elsewhere needs these files copied there first. Copies a Deployment installed elsewhere on this host are left in place either way."))
 	if t == nil {
-		fmt.Println("  They were NOT deleted; delete the directory by hand if this machine is being decommissioned.")
+		fmt.Println(msg.T("uninstall.keys.not_deleted", "  They were NOT deleted; delete the directory by hand if this machine is being decommissioned."))
 		return
 	}
-	answer := t.prompt(fmt.Sprintf("Type 'delete keys' to delete %s, anything else keeps it: ", keystore.Dir()))
-	if answer != "delete keys" {
-		fmt.Println("  Kept.")
+	// The phrase is a message too: what has to be typed is what the prompt
+	// shows, in the language it is shown in, and it stays long enough that no
+	// habit types it by accident.
+	phrase := msg.T("uninstall.keys.phrase", "delete keys")
+	answer := t.prompt(msg.T("uninstall.keys.confirm", "Type '{phrase}' to delete {path}, anything else keeps it: ", "phrase", phrase, "path", keystore.Dir()))
+	if answer != phrase {
+		fmt.Println(msg.T("uninstall.keys.kept", "  Kept."))
 		return
 	}
 	if err := os.RemoveAll(keystore.Dir()); err != nil {
-		fmt.Printf("! could not delete %s: %v\n", keystore.Dir(), err)
+		fmt.Println(msg.T("uninstall.keys.delete_failed", "! could not delete {path}: {err}", "path", keystore.Dir(), "err", err))
 		return
 	}
-	fmt.Printf("✓ %s deleted\n", keystore.Dir())
+	fmt.Println(msg.T("uninstall.keys.deleted", "✓ {path} deleted", "path", keystore.Dir()))
 }
 
 func exists(path string) bool {
@@ -548,14 +643,14 @@ func exists(path string) bool {
 // explicit way to say yes without one.
 func confirmUninstall(t *terminal, registered bool, organization string) bool {
 	if t == nil {
-		fmt.Println("Refusing to uninstall without confirmation: re-run with --yes.")
+		fmt.Println(msg.T("uninstall.needs_confirmation", "Refusing to uninstall without confirmation: re-run with --yes."))
 		return false
 	}
-	what := "the Agent and its files"
+	question := msg.T("uninstall.confirm.leftovers", "Remove the Agent and its files? [y/N]: ")
 	if registered {
-		what = "the Agent from this host, deactivating it in " + organization
+		question = msg.T("uninstall.confirm.registered", "Remove the Agent from this host, deactivating it in {organization}? [y/N]: ", "organization", organization)
 	}
-	return strings.EqualFold(t.prompt(fmt.Sprintf("Remove %s? [y/N]: ", what)), "y")
+	return msg.Yes(t.prompt(question))
 }
 
 // resolveCredential returns the registration key or the reactivation token
@@ -573,12 +668,12 @@ func resolveCredential(t *terminal, opts Options) (key, reactivation string, err
 		return opts.RegistrationKey, "", nil
 	}
 	if t == nil {
-		return "", "", errors.New("no registration key: set the REGISTRATION_KEY environment variable or pass --key (or REACTIVATION_TOKEN / --reactivation-token to resume a deactivated Agent)")
+		return "", "", msg.Err.T("register.key.missing", "no registration key: set the REGISTRATION_KEY environment variable or pass --key (or REACTIVATION_TOKEN / --reactivation-token to resume a deactivated Agent)")
 	}
-	v := t.prompt("Paste your registration key (or a reactivation token): ")
+	v := t.prompt(msg.T("register.key.prompt", "Paste your registration key (or a reactivation token): "))
 	switch {
 	case v == "":
-		return "", "", errors.New("a registration key is required")
+		return "", "", msg.Err.T("register.key.empty", "a registration key is required")
 	case strings.HasPrefix(v, reactivationPrefix):
 		return "", v, nil
 	}
@@ -602,24 +697,24 @@ func confirmName(t *terminal, fromFlag, proposed, hostname string) (string, erro
 	if fromFlag != "" {
 		return fromFlag, nil
 	}
-	label := "Agent name"
-	if hostname != "" && hostname != proposed {
-		label = fmt.Sprintf("Agent name (host %s)", hostname)
-	}
 	if t == nil {
 		if proposed == "" {
-			return "", errors.New("this host reports no hostname to name the Agent after: pass --name or set AGENT_NAME")
+			return "", msg.Err.T("register.name.no_hostname", "this host reports no hostname to name the Agent after: pass --name or set AGENT_NAME")
 		}
 		return proposed, nil
 	}
 	if proposed == "" {
-		v := t.prompt(label + ": ")
+		v := t.prompt(msg.T("register.name.prompt_empty", "Agent name: "))
 		if v == "" {
-			return "", errors.New("an Agent name is required: this host reports no hostname to propose one from")
+			return "", msg.Err.T("register.name.empty", "an Agent name is required: this host reports no hostname to propose one from")
 		}
 		return v, nil
 	}
-	v := t.prompt(fmt.Sprintf("%s [%s]: ", label, proposed))
+	question := msg.T("register.name.prompt", "Agent name [{proposed}]: ", "proposed", proposed)
+	if hostname != "" && hostname != proposed {
+		question = msg.T("register.name.prompt_with_host", "Agent name (host {host}) [{proposed}]: ", "host", hostname, "proposed", proposed)
+	}
+	v := t.prompt(question)
 	if v == "" {
 		return proposed, nil
 	}
@@ -631,11 +726,11 @@ func confirmName(t *terminal, fromFlag, proposed, hostname string) (string, erro
 // shows, which is all the host ever learns of either.
 func register(ctx context.Context, api *serverapi.Client, key, reactivation, name, serverURL string) (wire.RegistrationResponse, error) {
 	diag := hostinfo.Collect()
-	fmt.Printf("✓ host  %s · %s\n", diag.OS, diag.HostType)
+	fmt.Println(msg.T("register.host", "✓ host  {os} · {type}", "os", diag.OS, "type", diag.HostType))
 	if reactivation != "" {
-		fmt.Printf("→ submitting reactivation to %s\n", serverURL)
+		fmt.Println(msg.T("register.submitting_reactivation", "→ submitting reactivation to {server}", "server", serverURL))
 	} else {
-		fmt.Printf("→ submitting registration to %s\n", serverURL)
+		fmt.Println(msg.T("register.submitting", "→ submitting registration to {server}", "server", serverURL))
 	}
 
 	resp, err := api.Register(ctx, wire.RegistrationRequest{
@@ -650,15 +745,15 @@ func register(ctx context.Context, api *serverapi.Client, key, reactivation, nam
 		if apiErr, ok := errors.AsType[*serverapi.APIError](err); ok {
 			switch apiErr.Code {
 			case wire.CodeInvalidRegistrationKey:
-				return wire.RegistrationResponse{}, errors.New("registration failed: the registration key was not accepted")
+				return wire.RegistrationResponse{}, msg.Err.T("register.refused.key", "registration failed: the registration key was not accepted")
 			case wire.CodeInvalidReactivationToken:
-				return wire.RegistrationResponse{}, errors.New("reactivation failed: the token was not accepted (unknown, expired, or already used). Generate another from the Agent's page in the web console")
+				return wire.RegistrationResponse{}, msg.Err.T("register.refused.reactivation_token", "reactivation failed: the token was not accepted (unknown, expired, or already used). Generate another from the Agent's page in the web console")
 			}
 		}
-		return wire.RegistrationResponse{}, fmt.Errorf("registration failed: %w", err)
+		return wire.RegistrationResponse{}, msg.Err.T("register.failed", "registration failed: {err}", "err", err)
 	}
 	if resp.AgentID == "" {
-		return wire.RegistrationResponse{}, errors.New("registration failed: did not receive an Agent ID from the Server (is it older than this Agent?)")
+		return wire.RegistrationResponse{}, msg.Err.T("register.no_agent_id", "registration failed: did not receive an Agent ID from the Server (is it older than this Agent?)")
 	}
 	return resp, nil
 }
@@ -673,7 +768,7 @@ func waitForAuthorization(ctx context.Context, api *serverapi.Client, token stri
 			return resp.OrganizationName, resp.OrganizationID, nil
 		}
 		if err != nil && isUnknownToken(err) {
-			return "", "", errors.New("registration was rejected (or the token was revoked)")
+			return "", "", msg.Err.T("register.rejected", "registration was rejected (or the token was revoked)")
 		}
 		// Still pending, or a transient error: wait and ask again.
 		select {
@@ -728,6 +823,18 @@ func (t *terminal) prompt(label string) string {
 		return ""
 	}
 	return strings.TrimSpace(line)
+}
+
+// ask is prompt for a question that is asked again until its answer is one it
+// accepts: ok is false once nothing more can be read, which prompt cannot
+// tell from an empty answer and which would otherwise ask forever.
+func (t *terminal) ask(label string) (answer string, ok bool) {
+	fmt.Fprint(t.out, label)
+	line, err := t.in.ReadString('\n')
+	if err != nil && line == "" {
+		return "", false
+	}
+	return strings.TrimSpace(line), true
 }
 
 func isTerminal(f *os.File) bool {

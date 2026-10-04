@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/easyssl-io/easyssl-contract/l10n"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
 )
 
@@ -71,13 +72,13 @@ func answer() plugincontract.DiscoverResponse {
 		ContractVersion: plugincontract.ContractVersion,
 		Name:            "generic-cli",
 		Version:         "0.0.1",
-		Description:     "Installs by running a command you write.",
+		Description:     l10n.Text{"en": "Installs by running a command you write.", "es": "Instala ejecutando un comando que tú escribes."},
 		Settings: []plugincontract.SettingDeclaration{{
-			Key: "install", Label: "Install command", Type: plugincontract.SettingTypeCommand,
+			Key: "install", Label: l10n.Text{"en": "Install command"}, Type: plugincontract.SettingTypeCommand,
 			Default: "echo hi", Required: true,
 		}},
 		DiscoveredTargets: []plugincontract.DiscoveredTarget{},
-		Warnings:          []string{},
+		Warnings:          []l10n.Text{},
 	}
 }
 
@@ -134,8 +135,22 @@ func TestListAndDiscoverReadTheDirectory(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(inv) != 1 || !inv[0].Unobserved || inv[0].Version != "" || len(inv[0].Warnings) != 1 || !strings.Contains(inv[0].Warnings[0], "exit status 1") {
+		if len(inv) != 1 || !inv[0].Unobserved || inv[0].Version != "" || len(inv[0].Warnings) != 1 {
 			t.Fatalf("Discover after failure = %+v", inv)
+		}
+		// The warning is this Agent's own text, and whoever reads it on the
+		// Server may read any language, so it carries every one of them.
+		warning := inv[0].Warnings[0]
+		if err := warning.Validate(); err != nil {
+			t.Fatalf("warning = %v: %v", warning, err)
+		}
+		for _, lang := range l10n.Supported() {
+			if !strings.Contains(warning[lang], "exit status 1") {
+				t.Errorf("warning in %s = %q, want it to name the failure", lang, warning[lang])
+			}
+		}
+		if warning["en"] == warning["es"] {
+			t.Errorf("warning reads %q in both languages", warning["en"])
 		}
 	})
 

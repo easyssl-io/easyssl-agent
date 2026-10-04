@@ -3,13 +3,14 @@ package service
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/easyssl-io/easyssl-agent/internal/msg"
 )
 
 // systemd: one unit, Type=notify so the Agent can set the line `systemctl
@@ -132,7 +133,7 @@ func runit() (*backend, error) {
 		}
 	}
 	if watched == "" {
-		return nil, fmt.Errorf("runit is running but none of /var/service, /etc/service, /service or /etc/runit/runsvdir/default exists, so there is nowhere to link the service: %w", ErrUnsupportedInit)
+		return nil, msg.Err.T("service.runit.no_service_dir", "runit is running but none of /var/service, /etc/service, /service or /etc/runit/runsvdir/default exists, so there is nowhere to link the service: {err}", "err", ErrUnsupportedInit)
 	}
 	link := filepath.Join(watched, name)
 	logDir := "/var/log/" + name
@@ -219,7 +220,7 @@ func sysvinit() (*backend, error) {
 	case onPath("insserv"):
 		enable, disable = []string{"insserv", name}, []string{"insserv", "-r", name}
 	default:
-		return nil, fmt.Errorf("sysvinit is running but none of update-rc.d, chkconfig or insserv exists to enable the service at boot: %w", ErrUnsupportedInit)
+		return nil, msg.Err.T("service.sysvinit.no_enabler", "sysvinit is running but none of update-rc.d, chkconfig or insserv exists to enable the service at boot: {err}", "err", ErrUnsupportedInit)
 	}
 	pidFile := "/run/" + name + ".pid"
 	return &backend{

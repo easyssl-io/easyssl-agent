@@ -14,14 +14,17 @@ module; wire types are not duplicated here.
 ## Commands
 
 ```
-easyssl-agent register --server <url> [--key <key>] [--name <name>]   register this host
+easyssl-agent register --server <url> [--key <key>] [--name <name>] [--lang <code>]   register this host
 easyssl-agent register --server <url> --reactivation-token <token>    resume a deactivated Agent on this host
 easyssl-agent run                                                     the service loop (periodic check-in)
 easyssl-agent status [--json]                                         print local state and what the Server says
 easyssl-agent uninstall [--yes]                                       deactivate and remove the Agent
+easyssl-agent language [<code>]                                       print or change the language the commands speak
 ```
 
 Human-readable output goes to stdout (JSON with `--json`); errors go to stderr.
+Both are written in the host's language (Language below); `--json` output is the
+same in every language.
 This slice is root-only: every operational command refuses before reading a
 specific file or contacting the Server when run as another user, and names the
 corresponding `sudo easyssl-agent …` command. Top-level help and usage errors do
@@ -52,7 +55,9 @@ there is nothing to get wrong by copying a working command off a laptop.
 
 ## How registration works
 
-A host runs a single Agent. `register` runs an interactive line-based session:
+A host runs a single Agent. `register` runs an interactive line-based session.
+It settles the language first (Language below), so everything after it is read
+in the language chosen, and then:
 
 1. Resolves the credential: the Organization registration key from `--key` or
    `REGISTRATION_KEY`, or a reactivation token from `--reactivation-token` or
@@ -119,6 +124,63 @@ of the same command, with a single-use token that expires after a day:
 ```
 curl -sSL <server-url>/install | sudo REACTIVATION_TOKEN=<token> bash
 ```
+
+## Language
+
+The Agent's commands speak English (`en`) or Spanish (`es`). A regional variant
+(`es-PE`, `es_419`) is its base language.
+
+The installer's first step, before it prints anything else, offers each language
+under its own name with a default marked; Enter accepts it, and the number or
+the code chooses another:
+
+```
+Language / Idioma
+    1  English (en)
+  * 2  Español (es)
+[2]:
+```
+
+The default is the first of these that names a supported language:
+
+1. `EASYSSL_LANG`, which the install command given by the web console carries,
+   set to the language its reader uses there.
+2. The language already saved on a host that is being re-registered.
+3. The operating system's locale: the first of `LC_ALL`, `LC_MESSAGES` and
+   `LANG` that is set.
+4. English.
+
+`--lang <code>` decides without asking, and a code that is not supported is
+refused. Without a terminal (cloud-init, CI) nothing is asked and the default is
+taken. `EASYSSL_LANG` deliberately does not skip the step: every command the web
+console gives carries it, and the host's operator may read another language
+than whoever copied the command.
+
+The choice is saved as `language` in `/etc/easyssl/config.json` and every later
+command speaks it. `easyssl-agent language` prints it and `sudo easyssl-agent
+language <code>` changes it; re-running the installer asks again. `EASYSSL_LANG`
+overrides the saved language for one run:
+
+```
+sudo EASYSSL_LANG=en easyssl-agent status
+```
+
+A configuration with no language reads as the locale's, else English. A yes/no
+prompt accepts the language's own affirmative (`s`, `sí` in Spanish) and always
+`y`.
+
+Only what a command says to a person is translated. These are the same in every
+language: `--json` output, the service's logs and its status line, everything
+sent to the Server, the files written to the host, exit codes, and whatever a
+Plugin or another program printed. The flag package's own text under `--help`
+(default values, its parse errors) is in English too. The Server is never told
+the host's language; a text the Agent writes for the web console, the warning
+for a Plugin that did not answer `discover`, is sent in every language so each
+reader gets their own.
+
+A Plugin's own text (its Marketplace description in `easyssl-agent plugin
+catalog`) is shown in the host's language when the Plugin supplies it, and in
+English otherwise.
 
 ## Receiving work from the Server
 

@@ -26,7 +26,9 @@ import (
 	"sort"
 	"time"
 
+	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
+	"github.com/easyssl-io/easyssl-contract/l10n"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
@@ -98,10 +100,10 @@ func New(catalog Catalog, logger *slog.Logger) *Manager {
 	}
 }
 
-var ErrNotInCatalog = errors.New("pluginmgr: the Server's Marketplace does not offer this plugin")
+var ErrNotInCatalog = msg.Err.T("plugin.install.not_in_catalog", "the Server's Marketplace does not offer this Plugin")
 
 // ErrNoArtifact: the Plugin is offered but not for this host's platform.
-var ErrNoArtifact = errors.New("pluginmgr: no build of this plugin for this platform")
+var ErrNoArtifact = msg.Err.T("plugin.install.no_artifact", "the Marketplace has no build of this Plugin for this host's platform")
 
 // DigestMismatchError reports an artifact whose bytes are not what the catalog
 // said they would be.
@@ -112,7 +114,7 @@ type DigestMismatchError struct {
 }
 
 func (e DigestMismatchError) Error() string {
-	return fmt.Sprintf("pluginmgr: %s downloaded as %s but the catalog published %s", e.PluginID, e.Got, e.Want)
+	return msg.T("plugin.install.digest_mismatch", "{plugin} downloaded as {got} but the catalog published {want}", "plugin", e.PluginID, "got", e.Got, "want", e.Want)
 }
 
 // Install fetches a Plugin, verifies it against the catalog, places it, and
@@ -124,11 +126,11 @@ func (e DigestMismatchError) Error() string {
 // report, which asks every Plugin, this one included.
 func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (Installed, error) {
 	if !validPluginID.MatchString(pluginID) {
-		return Installed{}, fmt.Errorf("pluginmgr: %q is not a valid plugin name", pluginID)
+		return Installed{}, msg.Err.T("plugin.install.invalid_name", "\"{plugin}\" is not a valid Plugin name", "plugin", pluginID)
 	}
 	cat, err := m.catalog.Fetch(ctx)
 	if err != nil {
-		return Installed{}, fmt.Errorf("reading the Marketplace catalog: %w", err)
+		return Installed{}, msg.Err.T("plugin.install.catalog_failed", "reading the Marketplace catalog: {err}", "err", err)
 	}
 	entry, ok := cat.find(pluginID)
 	if !ok {
@@ -159,15 +161,15 @@ func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (I
 	desc, err := m.runDiscover(dctx, path)
 	if err != nil {
 		_ = os.Remove(path)
-		return Installed{}, fmt.Errorf("the plugin did not answer discover, so it was not installed: %w", err)
+		return Installed{}, msg.Err.T("plugin.install.no_answer", "the Plugin did not answer `discover`, so it was not installed: {err}", "err", err)
 	}
 	if desc.Name != "" && desc.Name != pluginID {
 		_ = os.Remove(path)
-		return Installed{}, fmt.Errorf("pluginmgr: the artifact for %q calls itself %q", pluginID, desc.Name)
+		return Installed{}, msg.Err.T("plugin.install.other_name", "the artifact for \"{plugin}\" calls itself \"{name}\"", "plugin", pluginID, "name", desc.Name)
 	}
 	if err := plugincontract.ValidateDiscover(desc); err != nil {
 		_ = os.Remove(path)
-		return Installed{}, fmt.Errorf("the plugin's answer is not usable, so it was not installed: %w", err)
+		return Installed{}, msg.Err.T("plugin.install.unusable_answer", "the Plugin's answer is not usable, so it was not installed: {err}", "err", err)
 	}
 	return Installed{ID: pluginID, Version: desc.Version, Digest: digest, Path: path}, nil
 }
@@ -181,7 +183,7 @@ func (m *Manager) List() ([]Installed, error) {
 		return []Installed{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("pluginmgr: listing %s: %w", m.installDir, err)
+		return nil, msg.Err.T("plugin.list.failed", "listing {path}: {err}", "path", m.installDir, "err", err)
 	}
 	out := make([]Installed, 0, len(entries))
 	for _, e := range entries {
@@ -191,7 +193,7 @@ func (m *Manager) List() ([]Installed, error) {
 		path := filepath.Join(m.installDir, e.Name())
 		digest, err := fileDigest(path)
 		if err != nil {
-			return nil, fmt.Errorf("pluginmgr: %s: %w", path, err)
+			return nil, msg.Err.T("plugin.list.unreadable", "reading {path}: {err}", "path", path, "err", err)
 		}
 		out = append(out, Installed{ID: e.Name(), Digest: digest, Path: path})
 	}
@@ -200,7 +202,7 @@ func (m *Manager) List() ([]Installed, error) {
 }
 
 // Discover runs every installed Plugin's discover under the timeout and
-// returns what the host inventory carries for each (S2 FR-026): the digest of
+// returns what the host inventory carries for each: the digest of
 // the bytes on disk and the answer, or, when a Plugin exits non-zero, times
 // out or answers something unusable, the Plugin as present but unobserved
 // with a warning naming the failure. A Plugin's failure to answer is not this
@@ -220,14 +222,16 @@ func (m *Manager) Discover(ctx context.Context) ([]wire.PluginInventory, error) 
 		desc, err := m.runDiscover(dctx, p.Path)
 		cancel()
 		if err == nil && desc.Name != "" && desc.Name != p.ID {
-			err = fmt.Errorf("the executable calls itself %q", desc.Name)
+			err = msg.Err.T("plugin.discover.other_name", "the executable calls itself \"{name}\"", "name", desc.Name)
 		}
 		if err == nil {
 			err = plugincontract.ValidateDiscover(desc)
 		}
 		if err != nil {
 			entry.Unobserved = true
-			entry.Warnings = []string{fmt.Sprintf("`discover` produced nothing this run: %v", err)}
+			// Written by this Agent rather than by the Plugin, and read on the
+			// Server by people of any language, so it carries every one.
+			entry.Warnings = []l10n.Text{msg.Text("plugin.discover.unobserved", "`discover` produced nothing this run: {err}", "err", err)}
 			m.logger.Warn("plugin unobserved", "plugin", p.ID, "err", err)
 		} else {
 			entry.Version, entry.Description = desc.Version, desc.Description
@@ -247,7 +251,7 @@ func (m *Manager) fetchTo(ctx context.Context, url, path string) (string, error)
 	}
 	body, err := m.catalog.Download(ctx, url)
 	if err != nil {
-		return "", fmt.Errorf("downloading the plugin: %w", err)
+		return "", msg.Err.T("plugin.install.download_failed", "downloading the Plugin: {err}", "err", err)
 	}
 	defer body.Close()
 
@@ -263,7 +267,7 @@ func (m *Manager) fetchTo(ctx context.Context, url, path string) (string, error)
 
 	h := sha256.New()
 	if _, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(body, maxArtifact)); err != nil {
-		return "", fmt.Errorf("writing the plugin to disk: %w", err)
+		return "", msg.Err.T("plugin.install.write_failed", "writing the Plugin to disk: {err}", "err", err)
 	}
 	if err := tmp.Chmod(0o755); err != nil {
 		return "", err
@@ -322,10 +326,10 @@ func discoverByExec(ctx context.Context, path string, logger *slog.Logger) (plug
 		return out, err
 	}
 	if answer.over {
-		return out, fmt.Errorf("the discover answer exceeds %d bytes", plugintrace.MaxPluginOutput)
+		return out, msg.Err.T("plugin.discover.too_large", "the `discover` answer exceeds {bytes} bytes", "bytes", plugintrace.MaxPluginOutput)
 	}
 	if err := json.Unmarshal(stdout, &out); err != nil {
-		return out, fmt.Errorf("the plugin's discover output is not JSON: %w", err)
+		return out, msg.Err.T("plugin.discover.not_json", "the Plugin's `discover` output is not JSON: {err}", "err", err)
 	}
 	return out, nil
 }
@@ -346,7 +350,7 @@ type CatalogArtifact struct {
 type CatalogPlugin struct {
 	ID          string            `json:"id"`
 	Version     string            `json:"version"`
-	Description string            `json:"description"`
+	Description l10n.Text         `json:"description"`
 	Party       string            `json:"party"`
 	Publisher   string            `json:"publisher"`
 	SourceURL   string            `json:"sourceUrl"`
@@ -402,7 +406,7 @@ func (c HTTPCatalog) Fetch(ctx context.Context) (CatalogResponse, error) {
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
-		return out, fmt.Errorf("the Server answered %s for the catalog", res.Status)
+		return out, msg.Err.T("plugin.catalog.http_status", "the Server answered {status} for the catalog", "status", res.Status)
 	}
 	return out, json.NewDecoder(res.Body).Decode(&out)
 }
@@ -418,7 +422,7 @@ func (c HTTPCatalog) Download(ctx context.Context, url string) (io.ReadCloser, e
 	}
 	if res.StatusCode != http.StatusOK {
 		res.Body.Close()
-		return nil, fmt.Errorf("the Server answered %s for the artifact", res.Status)
+		return nil, msg.Err.T("plugin.install.http_status", "the Server answered {status} for the artifact", "status", res.Status)
 	}
 	return res.Body, nil
 }
