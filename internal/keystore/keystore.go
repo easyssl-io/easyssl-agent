@@ -45,6 +45,7 @@ import (
 	"strings"
 
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
+	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -92,7 +93,7 @@ var euid = os.Geteuid
 
 func requireRoot() error {
 	if euid() != 0 {
-		return errors.New("keystore: must run as root: private keys are stored root-only, and a key written by another user would not have the protection this Agent documents")
+		return msg.Err.T("keystore.not_root", "keystore: must run as root: private keys are stored root-only, and a key written by another user would not have the protection this Agent documents")
 	}
 	return nil
 }
@@ -222,7 +223,7 @@ func List() ([]wire.KeyInfo, error) {
 		return []wire.KeyInfo{}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("keystore: listing keys: %w", err)
+		return nil, msg.Err.T("keystore.list_failed", "keystore: listing keys: {err}", "err", err)
 	}
 	keys := make([]wire.KeyInfo, 0, len(entries))
 	for _, e := range entries {

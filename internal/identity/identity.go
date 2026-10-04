@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/easyssl-io/easyssl-agent/internal/msg"
 )
 
 // BaseDir holds the single Agent's config and token on this host.
@@ -32,6 +34,12 @@ type Config struct {
 	// refreshed on every check-in. Optional so an older config still loads.
 	OrganizationName string `json:"organizationName,omitempty"`
 	OrganizationID   string `json:"organizationId,omitempty"`
+	// Language is the base code of the language this host's commands speak,
+	// chosen in the installer's language step or with `easyssl-agent
+	// language`. Only the host holds it: the Server is never told. Absent
+	// from a config written before the field existed, which reads as the
+	// operating system locale's language, else English (msg.Resolve).
+	Language string `json:"language,omitempty"`
 }
 
 // Organization names the Organization for a message, in whatever detail the
@@ -45,7 +53,7 @@ func (c Config) Organization() string {
 	case c.OrganizationID != "":
 		return c.OrganizationID
 	default:
-		return "its Organization"
+		return msg.T("config.organization.unnamed", "its Organization")
 	}
 }
 

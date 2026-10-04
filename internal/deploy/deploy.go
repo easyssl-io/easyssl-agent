@@ -24,9 +24,11 @@ import (
 
 	"github.com/easyssl-io/easyssl-agent/internal/commands"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
+	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
+	"github.com/easyssl-io/easyssl-contract/l10n"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
@@ -118,18 +120,24 @@ func New(api API, plugins Plugins, token string, logger *slog.Logger) commands.H
 // run performs one Deployment and always returns a result describing the
 // attempt: every failure here is this Deployment failing rather than the Agent
 // failing, so it is reported rather than retried.
+//
+// Each sentence the Agent reports is a message in every language (msg.Text),
+// never in this host's alone: it is read in the web console, by people who do
+// not share the host's language. An operating system's error inside one is
+// somebody else's text and stays as produced.
 func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger *slog.Logger) wire.DeploymentResult {
 	installed, found, err := plugins.Find(work.PluginID)
 	switch {
 	case err != nil:
-		return failed("", fmt.Sprintf("could not read this host's plugin record: %v", err))
+		return failed("", msg.Text("deploy.plugin_record_unreadable",
+			"could not read this host's Plugin record: {err}", "err", err))
 	case !found:
 		// The Plugin left the host, or was never installed here. Name it, because
 		// the fix is to install it and the Server cannot know that.
-		return failed("", fmt.Sprintf(
-			"the %s plugin is not installed on this host, so nothing could install this certificate.\n"+
-				"Install it there and deploy again:\n    easyssl-agent plugin install %s",
-			work.PluginID, work.PluginID))
+		return failed("", msg.Text("deploy.plugin_not_installed",
+			"the {plugin} Plugin is not installed on this host, so nothing could install this Certificate.\n"+
+				"Install it there and deploy again:\n    easyssl-agent plugin install {plugin}",
+			"plugin", work.PluginID))
 	}
 
 	// The record says the Plugin is installed; that the artifact is still there
@@ -137,34 +145,36 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	// so a host in this state produces a message naming the Plugin and the fix
 	// rather than the operating system's own words about a failed exec.
 	if err := runnable(installed.Path); err != nil {
-		return failed(installed.Version, fmt.Sprintf(
-			"the %s plugin is recorded on this host but cannot be run (%v), "+
-				"so nothing could install this certificate.\n"+
-				"Install it there again and deploy again:\n    easyssl-agent plugin install %s",
-			work.PluginID, err, work.PluginID))
+		return failed(installed.Version, msg.Text("deploy.plugin_not_runnable",
+			"the {plugin} Plugin is recorded on this host but cannot be run ({err}), "+
+				"so nothing could install this Certificate.\n"+
+				"Install it there again and deploy again:\n    easyssl-agent plugin install {plugin}",
+			"plugin", work.PluginID, "err", err))
 	}
 
 	// The key is the one the Server named, never one this host picks: the
 	// link between a certificate and its key is the Server's record, and a
 	// host holds only keys named by their own fingerprint.
 	if work.KeyFingerprint == "" {
-		return failed(installed.Version, fmt.Sprintf(
-			"the Server named no private key for %s, so nothing could install it. "+
-				"The Server is older than this Agent.", work.CertificateID))
+		return failed(installed.Version, msg.Text("deploy.no_key_named",
+			"the Server named no private key for {certificate}, so nothing could install it. "+
+				"The Server is older than this Agent.", "certificate", work.CertificateID))
 	}
 	key, err := loadKey(work.KeyFingerprint)
 	if err != nil {
 		if errors.Is(err, keystore.ErrNoKey) {
-			return failed(installed.Version, fmt.Sprintf(
-				"this host holds no private key %s for %s, so it cannot install it. "+
-					"A certificate is installable only by an Agent holding its key.",
-				work.KeyFingerprint, work.CertificateID))
+			return failed(installed.Version, msg.Text("deploy.no_key",
+				"this host holds no private key {fingerprint} for {certificate}, so it cannot install it. "+
+					"A Certificate is installable only by an Agent holding its key.",
+				"fingerprint", work.KeyFingerprint, "certificate", work.CertificateID))
 		}
-		return failed(installed.Version, fmt.Sprintf("reading the private key: %v", err))
+		return failed(installed.Version, msg.Text("deploy.key_unreadable",
+			"reading the private key: {err}", "err", err))
 	}
 	keyPEM, err := keystore.EncodePrivateKeyPEM(key)
 	if err != nil {
-		return failed(installed.Version, fmt.Sprintf("encoding the private key: %v", err))
+		return failed(installed.Version, msg.Text("deploy.key_not_encoded",
+			"encoding the private key: {err}", "err", err))
 	}
 
 	// The run's own directory, created here and removed here whatever happens.
@@ -172,7 +182,8 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	// had to kill cannot leave key material behind.
 	workDir, err := os.MkdirTemp("", "easyssl-deploy-")
 	if err != nil {
-		return failed(installed.Version, fmt.Sprintf("preparing the working directory: %v", err))
+		return failed(installed.Version, msg.Text("deploy.workdir",
+			"preparing the working directory: {err}", "err", err))
 	}
 	defer func() {
 		if err := os.RemoveAll(workDir); err != nil {
@@ -205,8 +216,9 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	if err != nil {
 		// The Agent's sentence and the process's facts, side by side and never
 		// merged: what the Plugin printed is on `run`, so this says only what
-		// the Agent concluded.
-		result.AgentMessage = err.Error()
+		// the Agent concluded. Through the same funnel as every other report:
+		// the error quotes the operating system's own words about the run.
+		result.AgentMessage = report(msg.TextOf(err))
 	}
 	return result
 }
@@ -239,7 +251,7 @@ func succeeded(err error, run *wire.PluginRun) bool {
 func runPlugin(ctx context.Context, path string, req plugincontract.DeployRequest, logger *slog.Logger, attrs ...any) (*wire.PluginRun, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
-		return nil, fmt.Errorf("encoding the deploy request: %w", err)
+		return nil, msg.Err.T("deploy.request_not_encoded", "encoding the deploy request: {err}", "err", err)
 	}
 
 	rctx, cancel := context.WithTimeout(ctx, runTimeout)
@@ -319,7 +331,7 @@ func runBounded(ctx context.Context, cmd *exec.Cmd) (captured *plugintrace.Captu
 	}()
 
 	if startErr := cmd.Start(); startErr != nil {
-		return captured, -1, fmt.Errorf("could not start the plugin: %w", startErr)
+		return captured, -1, msg.Err.T("deploy.plugin_not_started", "could not start the Plugin: {err}", "err", startErr)
 	}
 	done := make(chan error, 1)
 	go func() { done <- cmd.Wait() }()
@@ -332,11 +344,12 @@ func runBounded(ctx context.Context, cmd *exec.Cmd) (captured *plugintrace.Captu
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		}
 		<-done
-		return captured, -1, fmt.Errorf("the plugin did not finish within %s and was killed", runTimeout)
+		return captured, -1, msg.Err.T("deploy.plugin_killed",
+			"the Plugin did not finish within {timeout} and was killed", "timeout", runTimeout)
 	case waitErr := <-done:
 		code := cmd.ProcessState.ExitCode()
 		if waitErr != nil {
-			return captured, code, fmt.Errorf("the plugin exited with an error: %w", waitErr)
+			return captured, code, msg.Err.T("deploy.plugin_exited", "the Plugin exited with an error: {err}", "err", waitErr)
 		}
 		return captured, code, nil
 	}
@@ -346,16 +359,21 @@ func runBounded(ctx context.Context, cmd *exec.Cmd) (captured *plugintrace.Captu
 // could execute. The record saying a Plugin is installed and the file being
 // usable are separate facts, and they disagree when someone removes it by hand
 // or an upgrade leaves it unexecutable.
+//
+// What it returns is quoted inside the Agent's sentence about the Plugin: its
+// own two findings are messages, and the operating system's error is left as
+// produced.
 func runnable(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
 	}
 	if info.IsDir() {
-		return errors.New("it is a directory")
+		return msg.Err.T("deploy.artifact.is_directory", "it is a directory")
 	}
 	if info.Mode().Perm()&0o100 == 0 {
-		return fmt.Errorf("it is not executable (mode %o)", info.Mode().Perm())
+		return msg.Err.T("deploy.artifact.not_executable", "it is not executable (mode {mode})",
+			"mode", fmt.Sprintf("%o", info.Mode().Perm()))
 	}
 	return nil
 }
@@ -366,14 +384,23 @@ func runnable(path string) error {
 //
 // Still through the same funnel, because one of these messages quotes a path
 // and a redaction that only applies to some of them is one somebody forgets.
-func failed(pluginVersion, message string) wire.DeploymentResult {
+func failed(pluginVersion string, message l10n.Text) wire.DeploymentResult {
 	return wire.DeploymentResult{OK: false, PluginVersion: pluginVersion, AgentMessage: report(message)}
 }
 
-// report prepares any text for the Server: the key is removed first and the
-// result bounded afterwards, in that order, because truncating first can cut a
-// key's end marker off and leave the head of one unredactable.
-func report(s string) string { return truncate(plugintrace.RedactPrivateKeys(s)) }
+// report prepares the Agent's message for the Server, one language at a time:
+// in each, the key is removed first and the result bounded afterwards, in that
+// order, because truncating first can cut a key's end marker off and leave the
+// head of one unredactable. Every language goes through it because every
+// language quotes the same paths and errors, and one left out would carry
+// what the others had removed.
+func report(message l10n.Text) l10n.Text {
+	out := make(l10n.Text, len(message))
+	for lang, s := range message {
+		out[lang] = truncate(plugintrace.RedactPrivateKeys(s))
+	}
+	return out
+}
 
 // truncate bounds reported text, keeping the head and the tail around a marker
 // naming what was dropped: the start says what the script set out to do and the

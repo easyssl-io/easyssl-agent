@@ -1,11 +1,12 @@
 package serverapi
 
 import (
-	"fmt"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/easyssl-io/easyssl-agent/internal/msg"
 )
 
 // Everything this Agent sends the Server is either a credential or something
@@ -43,27 +44,27 @@ import (
 func CheckBaseURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("%q is not a URL: %w", raw, err)
+		return msg.Err.T("server_url.unparsable", "\"{url}\" is not a URL: {err}", "url", raw, "err", err)
 	}
 	switch {
 	case u.Scheme == "https":
 		if u.Host == "" {
-			return fmt.Errorf("%q names no host; the Server URL looks like https://server.example.com", raw)
+			return msg.Err.T("server_url.no_host", "\"{url}\" names no host; the Server URL looks like https://server.example.com", "url", raw)
 		}
 		return nil
 	case u.Scheme == "http":
 		if isLoopback(u.Hostname()) {
 			return nil
 		}
-		return fmt.Errorf("%q is not encrypted, and this Agent would send the registration key, "+
+		return msg.Err.T("server_url.not_encrypted", "\"{url}\" is not encrypted, and this Agent would send the registration key, "+
 			"its bearer token and every private key it installs over it in the clear; "+
-			"use https://%s (http is allowed only to localhost, for a Server running on this machine)",
-			raw, u.Host)
+			"use https://{host} (http is allowed only to localhost, for a Server running on this machine)",
+			"url", raw, "host", u.Host)
 	default:
 		// Includes the empty scheme, which is what "server.example.com" and
 		// "server.example.com:8080" parse to. Say the whole shape rather than
 		// "invalid scheme": the mistake is almost always a missing prefix.
-		return fmt.Errorf("%q is not a Server URL; it must start with https://, as in https://server.example.com", raw)
+		return msg.Err.T("server_url.no_scheme", "\"{url}\" is not a Server URL; it must start with https://, as in https://server.example.com", "url", raw)
 	}
 }
 
@@ -98,12 +99,12 @@ func noSchemeChange(req *http.Request, via []*http.Request) error {
 		return nil
 	}
 	if from := via[0].URL.Scheme; req.URL.Scheme != from {
-		return fmt.Errorf("refusing a redirect from %s to %s: it changes the scheme to %s",
-			via[0].URL.Redacted(), req.URL.Redacted(), req.URL.Scheme)
+		return msg.Err.T("server.redirect.scheme_change", "refusing a redirect from {from} to {to}: it changes the scheme to {scheme}",
+			"from", via[0].URL.Redacted(), "to", req.URL.Redacted(), "scheme", req.URL.Scheme)
 	}
 	// Go's own limit still applies on top of this one.
 	if len(via) >= 10 {
-		return fmt.Errorf("stopped after %d redirects", len(via))
+		return msg.Err.T("server.redirect.too_many", "stopped after {count} redirects", "count", len(via))
 	}
 	return nil
 }

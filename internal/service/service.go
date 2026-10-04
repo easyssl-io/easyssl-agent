@@ -22,12 +22,13 @@
 package service
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/easyssl-io/easyssl-agent/internal/msg"
 )
 
 // BinaryPath is where the installer places the Agent binary, which uninstall
@@ -40,11 +41,11 @@ const (
 )
 
 // ErrNotRoot is returned when the service is managed without root.
-var ErrNotRoot = errors.New("must run as root to manage the Agent's service")
+var ErrNotRoot = msg.Err.T("service.not_root", "must run as root to manage the Agent's service")
 
 // ErrUnsupportedInit is returned on a host whose init system is none of the
 // five. The Agent still runs there, under whatever the operator uses.
-var ErrUnsupportedInit = fmt.Errorf("this host's init system is not systemd, OpenRC, runit, sysvinit or BusyBox init, so the Agent cannot install its service; run `%s run` under the supervisor this host uses", BinaryPath)
+var ErrUnsupportedInit = msg.Err.T("service.unsupported_init", "this host's init system is not systemd, OpenRC, runit, sysvinit or BusyBox init, so the Agent cannot install its service; run `{binary} run` under the supervisor this host uses", "binary", BinaryPath)
 
 // file is one file a backend writes.
 type file struct {
@@ -165,7 +166,7 @@ func Install() error {
 			return err
 		}
 		if err := os.WriteFile(path(f.path), []byte(f.content), f.mode); err != nil {
-			return fmt.Errorf("write %s: %w", f.path, err)
+			return msg.Err.T("service.write_failed", "writing {path}: {err}", "path", f.path, "err", err)
 		}
 		// WriteFile keeps an existing file's mode; a run script must be
 		// executable whatever an earlier version left.
@@ -209,7 +210,7 @@ func Uninstall() error {
 	}
 	for _, f := range b.files {
 		if err := os.Remove(path(f.path)); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("remove %s: %w", f.path, err)
+			return msg.Err.T("service.remove_failed", "removing {path}: {err}", "path", f.path, "err", err)
 		}
 	}
 	return nil

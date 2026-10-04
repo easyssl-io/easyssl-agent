@@ -1,15 +1,20 @@
 // Command easyssl-agent is the easySSL Agent binary. Subcommands:
 //
-//	register --server <url> [--key <key>] [--name <name>]   interactive registration
+//	register --server <url> [--key <key>] [--name <name>] [--lang <code>]   interactive registration
 //	run                                                     the systemd service loop (periodic check-in)
 //	status [--json]                                         print local state + what the Server says
 //	uninstall [--yes]                                       unregister and remove the Agent
 //	plugin install <name> [--json]                          fetch a plugin from the Marketplace and report it
 //	plugin list [--json]                                    what this host has installed
+//	language [<code>]                                       print or change the language the commands speak
 //
 // A host runs one Agent, so the commands need no instance selector. The CLI
 // writes human output to stdout, JSON where asked, and errors to stderr;
 // connections are only ever made from Agent to Server, never the reverse.
+//
+// What a command says to a person is in the host's language (internal/msg).
+// JSON output, the service's logs and everything sent to the Server are the
+// same in every language.
 package main
 
 import (
@@ -37,15 +42,19 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-agent/internal/inventory"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
+	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
 	"github.com/easyssl-io/easyssl-agent/internal/sdnotify"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-agent/internal/service"
+	"github.com/easyssl-io/easyssl-contract/l10n"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
 func main() {
+	// Before anything is said, usage and refusals included.
+	msg.SetLanguage(commandLanguage())
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(2)
@@ -69,11 +78,13 @@ func main() {
 		err = cmdUninstall(ctx, os.Args[2:])
 	case "plugin":
 		err = cmdPlugin(ctx, os.Args[2:])
+	case "language":
+		err = cmdLanguage(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
 	default:
-		fmt.Fprintf(os.Stderr, "easyssl-agent: unknown command %q\n", os.Args[1])
+		fmt.Fprintln(os.Stderr, "easyssl-agent: "+msg.T("main.unknown_command", "unknown command \"{command}\"", "command", os.Args[1]))
 		usage()
 		os.Exit(2)
 	}
@@ -84,7 +95,36 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: easyssl-agent <register|run|status|uninstall|plugin> [flags]")
+	fmt.Fprintln(os.Stderr, msg.T("main.usage", "usage: easyssl-agent <register|run|status|uninstall|plugin|language> [flags]"))
+}
+
+// commandLanguage is the language this run speaks: EASYSSL_LANG when it names
+// a supported one, else the language saved on this host, else the operating
+// system locale's, else English. The installer starts from the same answer
+// and then settles its own in its language step.
+//
+// A configuration that cannot be read is a host with no saved language, not
+// a failure: nothing may be registered yet, or the caller may not be root, in
+// which case the refusal that follows is still said in the locale's language.
+func commandLanguage() string {
+	saved := ""
+	if cfg, err := identity.LoadConfig(); err == nil {
+		saved = cfg.Language
+	}
+	lang, _, _ := msg.Resolve("", os.Getenv(msg.EnvVar), saved, os.Getenv)
+	return lang
+}
+
+// newFlagSet is flag.NewFlagSet with the heading of `--help` as a message.
+// What the flag package itself writes under it, the default values and its
+// own parse errors, stays in English.
+func newFlagSet(name string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintln(fs.Output(), msg.T("main.flags_heading", "Flags of easyssl-agent {command}:", "command", name))
+		fs.PrintDefaults()
+	}
+	return fs
 }
 
 // rootPreflight refuses every operational command before it parses flags,
@@ -100,7 +140,7 @@ func rootPreflight(args []string, euid int) error {
 	if cmd == "register" {
 		// Registration has to name both routes to root: a host operator may
 		// already be in a root shell on a system where sudo is not installed.
-		return errors.New("register must run as root: use sudo, or run it from a root shell")
+		return msg.Err.T("main.register_not_root", "register must run as root: use sudo, or run it from a root shell")
 	}
 	return rootOnlyError(cmd)
 }
@@ -114,7 +154,7 @@ func rootCommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "register", "run", "status", "uninstall":
+	case "register", "run", "status", "uninstall", "language":
 		return args[0]
 	case "plugin":
 		if len(args) < 2 {
@@ -129,31 +169,69 @@ func rootCommand(args []string) string {
 }
 
 func rootOnlyError(cmd string) error {
-	return fmt.Errorf("this command requires root; re-run as root with \"sudo easyssl-agent %s\"", cmd)
+	return msg.Err.T("main.root_only", "this command requires root; re-run as root with \"sudo easyssl-agent {command}\"", "command", cmd)
 }
 
 func cmdRegister(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("register", flag.ExitOnError)
-	server := fs.String("server", "", "easySSL Server base URL (required)")
-	key := fs.String("key", os.Getenv("REGISTRATION_KEY"), "Organization registration key (defaults to $REGISTRATION_KEY)")
-	reactivation := fs.String("reactivation-token", os.Getenv("REACTIVATION_TOKEN"), "reactivation token from a deactivated Agent's page, to resume that Agent (defaults to $REACTIVATION_TOKEN)")
-	name := fs.String("name", os.Getenv("AGENT_NAME"), "Agent name (defaults to $AGENT_NAME, else the hostname; prompted when interactive; ignored with a reactivation token)")
+	fs := newFlagSet("register")
+	server := fs.String("server", "", msg.T("register.flag.server", "easySSL Server base URL (required)"))
+	key := fs.String("key", os.Getenv("REGISTRATION_KEY"), msg.T("register.flag.key", "Organization registration key (defaults to $REGISTRATION_KEY)"))
+	reactivation := fs.String("reactivation-token", os.Getenv("REACTIVATION_TOKEN"), msg.T("register.flag.reactivation_token", "reactivation token from a deactivated Agent's page, to resume that Agent (defaults to $REACTIVATION_TOKEN)"))
+	name := fs.String("name", os.Getenv("AGENT_NAME"), msg.T("register.flag.name", "Agent name (defaults to $AGENT_NAME, else the hostname; prompted when interactive; ignored with a reactivation token)"))
+	// No default from EASYSSL_LANG, unlike the flags above: the variable only
+	// pre-selects what the language step offers, because every install command
+	// the web console gives carries it, and the flag is what skips the step.
+	lang := fs.String("lang", "", msg.T("register.flag.lang", "language of this Agent's commands, set without asking: {supported} (otherwise asked, defaulting to $EASYSSL_LANG, then the language already saved on this host, then the locale's)", "supported", msg.SupportedList()))
 	_ = fs.Parse(args)
 	if *server == "" {
-		return errors.New("register: --server is required")
+		return msg.Err.T("register.server_required", "register: --server is required")
 	}
-	return flow.Register(ctx, flow.Options{ServerURL: *server, RegistrationKey: *key, ReactivationToken: *reactivation, Name: *name})
+	return flow.Register(ctx, flow.Options{ServerURL: *server, RegistrationKey: *key, ReactivationToken: *reactivation, Name: *name, Language: *lang})
 }
 
 func cmdUninstall(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
-	yes := fs.Bool("yes", false, "do not ask for confirmation")
+	fs := newFlagSet("uninstall")
+	yes := fs.Bool("yes", false, msg.T("uninstall.flag.yes", "do not ask for confirmation"))
 	_ = fs.Parse(args)
 	return flow.Uninstall(ctx, *yes)
 }
 
+// cmdLanguage prints the language saved on this host, or saves another. The
+// installer's language step is the other way to change it.
+func cmdLanguage(args []string) error {
+	fs := newFlagSet("language")
+	_ = fs.Parse(args)
+	if fs.NArg() > 1 {
+		return msg.Err.T("language.usage", "usage: easyssl-agent language [<code>]")
+	}
+	cfg, err := identity.LoadConfig()
+	if err != nil {
+		return stateError("language", err)
+	}
+	if fs.NArg() == 0 {
+		if saved, ok := l10n.Base(cfg.Language); ok {
+			fmt.Println(msg.Describe(saved))
+			return nil
+		}
+		fmt.Println(msg.T("language.none_saved", "No language is saved on this host, so its commands speak {language}, from $EASYSSL_LANG or the locale. Save one with: sudo easyssl-agent language <code>", "language", msg.Describe(msg.Language())))
+		return nil
+	}
+	lang, err := msg.Parse(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	cfg.Language = lang
+	if err := identity.SaveConfig(cfg); err != nil {
+		return msg.Err.T("language.save", "saving the language: {err}", "err", err)
+	}
+	// Said in the language just saved, which is the first proof it took.
+	msg.SetLanguage(lang)
+	fmt.Println(msg.T("language.saved", "✓ This host's Agent commands now speak {language}.", "language", msg.Describe(lang)))
+	return nil
+}
+
 func cmdRun(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("run", flag.ExitOnError)
+	fs := newFlagSet("run")
 	_ = fs.Parse(args)
 	cfg, err := identity.LoadConfig()
 	if err != nil {
@@ -168,6 +246,11 @@ func cmdRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return stateError("run", err)
 	}
+	// From here on this process is the service, and what it writes is its log
+	// and its reports to the Server, which read the same on every host: only
+	// the refusals to start, above, are said in the host's language.
+	msg.SetLanguage(l10n.English)
+
 	logger := agentLogger()
 	// So key generation is reported in the same format as everything else the
 	// service writes, rather than through the default handler.
@@ -230,6 +313,12 @@ func cmdRun(ctx context.Context, args []string) error {
 				}
 				if resp.OrganizationID != "" {
 					cfg.OrganizationID = resp.OrganizationID
+				}
+				// The language may have been changed on the host since this
+				// service read the configuration, and writing the copy held
+				// here would undo that.
+				if current, err := identity.LoadConfig(); err == nil {
+					cfg.Language = current.Language
 				}
 				if err := identity.SaveConfig(cfg); err != nil {
 					logger.Warn("could not record the Organization name", "err", err)
@@ -404,7 +493,7 @@ func jitter(d time.Duration) time.Duration {
 func stateError(cmd string, err error) error {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		return fmt.Errorf("no easySSL Agent is registered on this host (%s does not exist); register one with \"sudo easyssl-agent register --server <url>\"", identity.ConfigPath())
+		return msg.Err.T("main.not_registered", "no easySSL Agent is registered on this host ({path} does not exist); register one with \"sudo easyssl-agent register --server <url>\"", "path", identity.ConfigPath())
 	case errors.Is(err, fs.ErrPermission):
 		return rootOnlyError(cmd)
 	}
@@ -412,8 +501,8 @@ func stateError(cmd string, err error) error {
 }
 
 func cmdStatus(args []string) error {
-	fs := flag.NewFlagSet("status", flag.ExitOnError)
-	asJSON := fs.Bool("json", false, "print JSON")
+	fs := newFlagSet("status")
+	asJSON := fs.Bool("json", false, msg.T("status.flag.json", "print JSON"))
 	_ = fs.Parse(args)
 
 	cfg, err := identity.LoadConfig()
@@ -450,22 +539,23 @@ func cmdStatus(args []string) error {
 	// The id and name are the Server's to say, so they are printed only when
 	// it answered; a host holds neither.
 	if reg.AgentID != "" {
-		line("Agent", reg.AgentID)
+		line(msg.T("status.label.agent", "Agent"), reg.AgentID)
 	}
 	if reg.DisplayName != "" {
-		line("name", reg.DisplayName)
+		line(msg.T("status.label.name", "name"), reg.DisplayName)
 	}
-	line("Server", cfg.ServerURL)
+	line(msg.T("status.label.server", "Server"), cfg.ServerURL)
 	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
-		line("Organization", cfg.Organization())
+		line(msg.T("status.label.organization", "Organization"), cfg.Organization())
 	}
-	line("service", fmt.Sprintf("%s (%s)", serviceName, service.State()))
+	// The state is the init system's own word for it, shown as it gave it.
+	line(msg.T("status.label.service", "service"), fmt.Sprintf("%s (%s)", serviceName, service.State()))
 	if tokenErr == nil {
-		line("token", "stored in "+identity.TokenPath())
+		line(msg.T("status.label.token", "token"), msg.T("status.token.stored", "stored in {path}", "path", identity.TokenPath()))
 	} else {
-		line("token", "missing, so this Agent cannot authenticate")
+		line(msg.T("status.label.token", "token"), msg.T("status.token.missing", "missing, so this Agent cannot authenticate"))
 	}
-	line("state", stateDetail)
+	line(msg.T("status.label.state", "state"), stateDetail)
 	return nil
 }
 
@@ -482,26 +572,26 @@ func cmdStatus(args []string) error {
 // learns them.
 func serverState(cfg identity.Config, token string, tokenErr error) (code, detail string, reg wire.RegistrationStatus) {
 	if tokenErr != nil {
-		return "not-registered", "not registered (no local token)", reg
+		return "not-registered", msg.T("status.state.no_token", "not registered (no local token)"), reg
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	api, err := serverapi.New(cfg.ServerURL)
 	if err != nil {
-		return "unknown", fmt.Sprintf("unknown (%v)", err), reg
+		return "unknown", msg.T("status.state.bad_url", "unknown ({err})", "err", err), reg
 	}
 	resp, err := api.RegistrationStatus(ctx, token)
 	switch {
 	case err == nil && resp.Status == wire.StatusActive:
-		return "authorized", "authorized", resp
+		return "authorized", msg.T("status.state.authorized", "authorized"), resp
 	case err == nil && resp.Status == wire.StatusPending:
-		return "pending", "pending authorization", resp
+		return "pending", msg.T("status.state.pending", "pending authorization"), resp
 	case err == nil:
 		return resp.Status, resp.Status, resp
 	case isUnknownToken(err):
-		return "not-registered", "not registered (the Server rejected this token; the Agent was deactivated or removed there)", reg
+		return "not-registered", msg.T("status.state.token_rejected", "not registered (the Server rejected this token; the Agent was deactivated or removed there)"), reg
 	default:
-		return "unknown", fmt.Sprintf("unknown (could not reach %s: %v)", cfg.ServerURL, err), reg
+		return "unknown", msg.T("status.state.unreachable", "unknown (could not reach {server}: {err})", "server", cfg.ServerURL, "err", err), reg
 	}
 }
 
@@ -514,7 +604,7 @@ func isUnknownToken(err error) bool {
 // Server's Marketplace on demand; nothing is bundled into this binary.
 func cmdPlugin(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: easyssl-agent plugin <catalog|install|list> [flags]")
+		return msg.Err.T("plugin.usage", "usage: easyssl-agent plugin <catalog|install|list> [flags]")
 	}
 	switch args[0] {
 	case "catalog":
@@ -524,17 +614,17 @@ func cmdPlugin(ctx context.Context, args []string) error {
 	case "list":
 		return cmdPluginList(args[1:])
 	default:
-		return fmt.Errorf("unknown plugin command %q (want catalog, install or list)", args[0])
+		return msg.Err.T("plugin.unknown_command", "unknown plugin command \"{command}\" (want catalog, install or list)", "command", args[0])
 	}
 }
 
 func cmdPluginInstall(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("plugin install", flag.ExitOnError)
-	asJSON := fs.Bool("json", false, "print JSON")
-	yes := fs.Bool("yes", false, "install without the confirmation prompt")
+	fs := newFlagSet("plugin install")
+	asJSON := fs.Bool("json", false, msg.T("plugin.install.flag.json", "print JSON"))
+	yes := fs.Bool("yes", false, msg.T("plugin.install.flag.yes", "install without the confirmation prompt"))
 	_ = fs.Parse(args)
 	if fs.NArg() == 0 {
-		return errors.New("usage: easyssl-agent plugin install <name>... [--yes] [--json]")
+		return msg.Err.T("plugin.install.usage", "usage: easyssl-agent plugin install <name>... [--yes] [--json]")
 	}
 	names := fs.Args()
 
@@ -559,21 +649,17 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 		// narrower one every line is folded again a few words from its end, and
 		// the result reads as a ragged column with words split across it, which
 		// is the opposite of what wrapping the text was meant to achieve.
-		fmt.Fprintf(os.Stderr,
-			"Installing %s on this host.\n\n"+
+		fmt.Fprintln(os.Stderr, msg.T("plugin.install.warning",
+			"Installing {plugins} on this host.\n\n"+
 				"A Plugin runs with this Agent's privileges, which is root wherever the "+
 				"Agent runs as a system service. Authorizing this install authorizes code "+
 				"execution at that level on this host: a Plugin can read and write private "+
 				"key material and restart services. The Server's digest check is the only "+
 				"boundary, and it answers whether the artifact is the one easySSL published, "+
-				"not what it can do.\n\n",
-			strings.Join(names, ", "))
-		ok, err := confirm("Install and run it with those privileges?")
-		if err != nil {
-			return err
-		}
-		if !ok {
-			fmt.Fprintln(os.Stderr, "Nothing installed.")
+				"not what it can do.\n",
+			"plugins", strings.Join(names, ", ")))
+		if !confirm(msg.T("plugin.install.confirm", "Install and run it with those privileges? [y/N] ")) {
+			fmt.Fprintln(os.Stderr, msg.T("plugin.install.declined", "Nothing installed."))
 			return nil
 		}
 	}
@@ -603,15 +689,17 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 	// the web console current within one round trip of the command rather than
 	// one cadence. Best-effort: a failure leaves the service's next check-in
 	// disagreeing with the Server, which then asks for the document.
-	reported := ""
+	var reportErr error
 	if len(out) > 0 {
-		if inv, err := inventory.Collect(ctx, mgr); err != nil {
-			reported = fmt.Sprintf("not yet (%v); the service reports on its next check-in", err)
-		} else if err := api.ReportInventory(ctx, token, inv); err != nil {
-			reported = fmt.Sprintf("not yet (%v); the service reports on its next check-in", err)
-		} else {
-			reported = "to " + cfg.ServerURL
+		inv, err := inventory.Collect(ctx, mgr)
+		if err == nil {
+			err = api.ReportInventory(ctx, token, inv)
 		}
+		reportErr = err
+	}
+	reported := msg.T("plugin.install.reported", "reported   to {server}", "server", cfg.ServerURL)
+	if reportErr != nil {
+		reported = msg.T("plugin.install.not_reported", "reported   not yet ({err}); the service reports on its next check-in", "err", reportErr)
 	}
 	if *asJSON {
 		if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
@@ -623,35 +711,36 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 	return installErr
 }
 
+// printInstalled prints each installed Plugin as labeled lines. Each line is
+// one message, its label included, so a translation keeps the values in one
+// column with labels of its own length. reported is the last of them, already
+// worded by the caller.
 func printInstalled(out []pluginmgr.Installed, reported string) {
 	for _, inst := range out {
-		fmt.Printf("installed  %s v%s\n", inst.ID, inst.Version)
-		fmt.Printf("path       %s\n", inst.Path)
-		fmt.Printf("digest     sha256:%s\n", inst.Digest)
-		fmt.Printf("reported   %s\n", reported)
+		fmt.Println(msg.T("plugin.install.done.installed", "installed  {id} v{version}", "id", inst.ID, "version", inst.Version))
+		fmt.Println(msg.T("plugin.install.done.path", "path       {path}", "path", inst.Path))
+		fmt.Println(msg.T("plugin.install.done.digest", "digest     sha256:{digest}", "digest", inst.Digest))
+		fmt.Println(reported)
 	}
 }
 
-// confirm asks a yes/no question on the terminal. A closed stdin answers no:
-// a non-interactive run that reached this prompt did not mean to install.
-func confirm(question string) (bool, error) {
-	fmt.Fprintf(os.Stderr, "%s [y/N] ", question)
+// confirm asks a yes/no question on the terminal; the question carries its
+// own hint, `[y/N]` in English. A closed stdin answers no: a non-interactive
+// run that reached this prompt did not mean to install.
+func confirm(question string) bool {
+	fmt.Fprint(os.Stderr, question)
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil {
-		return false, nil //nolint:nilerr // no answer is not an answer of yes
+		return false // no answer is not an answer of yes
 	}
-	switch strings.ToLower(strings.TrimSpace(line)) {
-	case "y", "yes":
-		return true, nil
-	}
-	return false, nil
+	return msg.Yes(line)
 }
 
 // cmdPluginCatalog lists what the Marketplace offers for this host, so a Plugin
 // can be found and installed without knowing its name in advance.
 func cmdPluginCatalog(ctx context.Context, args []string) error {
-	fs := flag.NewFlagSet("plugin catalog", flag.ExitOnError)
-	asJSON := fs.Bool("json", false, "print JSON")
+	fs := newFlagSet("plugin catalog")
+	asJSON := fs.Bool("json", false, msg.T("plugin.catalog.flag.json", "print JSON"))
 	_ = fs.Parse(args)
 
 	cfg, err := identity.LoadConfig()
@@ -667,29 +756,31 @@ func cmdPluginCatalog(ctx context.Context, args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(entries)
 	}
 	if len(entries) == 0 {
-		fmt.Println("The Marketplace offers no Plugins for this host's platform.")
+		fmt.Println(msg.T("plugin.catalog.empty", "The Marketplace offers no Plugins for this host's platform."))
 		return nil
 	}
 	for _, e := range entries {
 		fmt.Printf("%-16s v%-10s %s\n", e.ID, e.Version, e.Party)
-		if e.Description != "" {
-			fmt.Printf("%-16s %s\n", "", e.Description)
+		// The Plugin's own text, in this host's language when the Plugin
+		// supplies it and in English otherwise.
+		if description := e.Description.In(msg.Language()); description != "" {
+			fmt.Printf("%-16s %s\n", "", description)
 		}
 		if e.Publisher != "" {
-			fmt.Printf("%-16s by %s\n", "", e.Publisher)
+			fmt.Printf("%-16s %s\n", "", msg.T("plugin.catalog.publisher", "by {publisher}", "publisher", e.Publisher))
 		}
 		if e.SourceURL != "" {
 			fmt.Printf("%-16s %s\n", "", e.SourceURL)
 		}
 		fmt.Println()
 	}
-	fmt.Println("Install one with: easyssl-agent plugin install <name>")
+	fmt.Println(msg.T("plugin.catalog.install_hint", "Install one with: easyssl-agent plugin install <name>"))
 	return nil
 }
 
 func cmdPluginList(args []string) error {
-	fs := flag.NewFlagSet("plugin list", flag.ExitOnError)
-	asJSON := fs.Bool("json", false, "print JSON")
+	fs := newFlagSet("plugin list")
+	asJSON := fs.Bool("json", false, msg.T("plugin.list.flag.json", "print JSON"))
 	_ = fs.Parse(args)
 
 	// What the host inventory would carry now: the executables on disk and
@@ -702,7 +793,7 @@ func cmdPluginList(args []string) error {
 		return json.NewEncoder(os.Stdout).Encode(installed)
 	}
 	if len(installed) == 0 {
-		fmt.Println("No Plugins installed. Install one with: easyssl-agent plugin install generic-cli")
+		fmt.Println(msg.T("plugin.list.empty", "No Plugins installed. Install one with: easyssl-agent plugin install generic-cli"))
 		return nil
 	}
 	for _, p := range installed {
@@ -713,7 +804,8 @@ func cmdPluginList(args []string) error {
 
 func pluginListLine(p wire.PluginInventory) string {
 	if p.Unobserved {
-		return fmt.Sprintf("%-16s %-11s sha256:%s  (did not answer discover)", p.ID, "?", p.Digest)
+		return msg.T("plugin.list.unobserved", "{id} {version} sha256:{digest}  (did not answer discover)",
+			"id", fmt.Sprintf("%-16s", p.ID), "version", fmt.Sprintf("%-11s", "?"), "digest", p.Digest)
 	}
 	return fmt.Sprintf("%-16s v%-10s sha256:%s", p.ID, p.Version, p.Digest)
 }
