@@ -84,7 +84,9 @@ prompts, errors that reach stderr, usage and flag help.
   so a package-level sentinel speaks the host's language and `errors.Is` keeps
   working; an error passed as an argument is wrapped, as `%w` would.
 - **A text sent to the Server is `msg.Text`**, which carries every language,
-  because its reader is not this host's.
+  because its reader is not this host's. An error sent there is
+  `msg.TextOf(err)`: every language of one made with `msg.Err.T`, and English
+  alone of any other, whose words are whatever produced it.
 - **Spanish goes in `internal/msg/locales/es.json`** in the same change: neutral
   Spanish addressing the reader as "tú", as short as the English, with
   Organización, Usuario, Agente, Servidor, consola web, Plugin, Marketplace,

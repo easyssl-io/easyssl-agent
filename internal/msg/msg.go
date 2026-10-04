@@ -96,6 +96,29 @@ func (e *Error) In(lang string) string {
 	return catalog.In(lang).T(e.id, e.english, in(lang, e.args)...)
 }
 
+// Text renders the error in every supported language, for one that is sent to
+// the Server instead of shown on this host. An argument that is itself a
+// message reads in each language; any other value, an operating system's
+// error included, is somebody else's text and stays as produced in all of
+// them.
+func (e *Error) Text() l10n.Text {
+	t := l10n.Text{}
+	for _, lang := range l10n.Supported() {
+		t[lang] = e.In(lang)
+	}
+	return t
+}
+
+// TextOf is err as a text to send to the Server: every language of an error
+// that is one of the Agent's messages, and English alone of any other, whose
+// words are whatever produced it.
+func TextOf(err error) l10n.Text {
+	if e, ok := err.(*Error); ok && e != nil {
+		return e.Text()
+	}
+	return l10n.Text{l10n.English: err.Error()}
+}
+
 // Unwrap returns the errors among the arguments.
 func (e *Error) Unwrap() []error {
 	var wrapped []error

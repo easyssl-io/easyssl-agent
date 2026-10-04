@@ -3,6 +3,7 @@ package msg
 import (
 	"errors"
 	"io/fs"
+	"strings"
 	"testing"
 
 	"github.com/easyssl-io/easyssl-contract/l10n"
@@ -105,6 +106,38 @@ func TestErrorIsRenderedWhenRead(t *testing.T) {
 	text := Text("language.save", "saving the language: {err}", "err", inner)
 	if text["en"] != english || text["es"] != spanish {
 		t.Fatalf("Text = %v, want %q and %q", text, english, spanish)
+	}
+}
+
+// An error sent to the Server carries every language whatever this host
+// speaks, with a message it holds rendered in each and anything else left as
+// produced; an error that is not the Agent's wording travels as English alone.
+func TestErrorAsText(t *testing.T) {
+	inner := Err.T("language.unsupported", "{code} is not a supported language; the supported ones are {supported}",
+		"code", "fr", "supported", "en")
+	err := Err.T("language.save", "saving the language: {err}", "err", inner)
+	english := err.Error()
+	inLanguage(t, "es")
+	spanish := err.Error()
+
+	text := TextOf(err)
+	if text["en"] != english || text["es"] != spanish || len(text) != len(l10n.Supported()) {
+		t.Fatalf("TextOf = %v, want %q and %q", text, english, spanish)
+	}
+	if verr := text.Validate(); verr != nil {
+		t.Fatal(verr)
+	}
+
+	produced := TextOf(Err.T("language.save", "saving the language: {err}", "err", fs.ErrPermission))
+	for lang, s := range produced {
+		if !strings.HasSuffix(s, fs.ErrPermission.Error()) {
+			t.Fatalf("%s reads %q, which rewords an error the Agent did not write", lang, s)
+		}
+	}
+
+	other := TextOf(fs.ErrPermission)
+	if len(other) != 1 || other["en"] != fs.ErrPermission.Error() {
+		t.Fatalf("TextOf of another's error = %v, want English alone", other)
 	}
 }
 
