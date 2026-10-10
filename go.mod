@@ -1,6 +1,6 @@
 module github.com/easyssl-io/easyssl-agent
 
-go 1.26.6
+go 1.26.9
 
 require github.com/easyssl-io/easyssl-contract v0.0.1
 
