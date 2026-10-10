@@ -148,6 +148,9 @@ func writeTrace(logger *slog.Logger, ex Exchange) {
 		// 0600 and O_APPEND: this file holds private keys, and a run that
 		// truncated the previous one would lose the exchange somebody is
 		// comparing against.
+		// #nosec G703 -- path is EASYSSL_PLUGIN_TRACE from this process's own
+		// environment, which only whoever configures the unit the Agent runs
+		// from can set, so there is no boundary for a path to cross.
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 		if err != nil {
 			if logger != nil {
