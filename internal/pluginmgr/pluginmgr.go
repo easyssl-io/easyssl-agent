@@ -1,11 +1,10 @@
 // Package pluginmgr installs Plugins on this host and asks each what it is and
 // what it sees. Nothing is bundled into the Agent binary: a Plugin is fetched
-// from the Server's Marketplace on demand and placed under InstallDir, and
-// that directory is the whole record of what is installed. Everything else
-// about a Plugin, its version, its declarations and the installation points it
-// found, is what the executable answers to discover, asked afresh on every
-// check-in and carried to the Server in the host inventory; the Agent keeps
-// no copy, because a copy is what goes stale and is then reported as fact.
+// from the Server's Marketplace on demand and placed under InstallDir, and that
+// directory is the whole record of what is installed. A Plugin's version,
+// declarations and installation points are what the executable answers to
+// discover, asked afresh on every check-in; the Agent keeps no copy, because a
+// copy goes stale and is then reported as fact.
 package pluginmgr
 
 import (
@@ -38,16 +37,16 @@ import (
 // write here could run code as root.
 const InstallDir = "/var/lib/easyssl/plugins"
 
-// maxArtifact bounds a download. A plugin is a static Go binary of a few
-// megabytes; this is generous while refusing to write an unbounded stream to
+// maxArtifact bounds a download. A Plugin is a static Go binary of a few
+// megabytes, so this is generous while refusing to write an unbounded stream to
 // the host's disk.
 const maxArtifact = 128 << 20
 
 // discoverTimeout bounds one discover execution. It runs on every check-in and
 // must be shorter than the check-in interval, or a hung Plugin (an `nginx -t`
-// stuck on a broken host) would delay the check-in it rides on and the Agent
-// would go Offline for a reason nothing names. A Plugin that exceeds it is
-// reported as present but unobserved this run.
+// stuck on a broken host) would delay the check-in and the Agent would go
+// Offline for a reason nothing names. A Plugin that exceeds it is reported as
+// present but unobserved this run.
 const discoverTimeout = 10 * time.Second
 
 // validPluginID is the Plugin naming rule, matching what the Server accepts on
@@ -73,16 +72,14 @@ type Catalog interface {
 	Download(ctx context.Context, url string) (io.ReadCloser, error)
 }
 
-// Manager installs, lists and discovers Plugins.
 type Manager struct {
 	catalog Catalog
 	// installDir is a field rather than the constant so a test can work
 	// somewhere it may write.
 	installDir string
 	logger     *slog.Logger
-	// runDiscover executes a Plugin's discover operation. A field so a test
-	// can exercise the flow without a real binary; production runs the
-	// executable.
+	// runDiscover executes a Plugin's discover operation. A field so a test can
+	// exercise the flow without a real binary.
 	runDiscover func(ctx context.Context, path string) (plugincontract.DiscoverResponse, error)
 }
 
@@ -118,12 +115,11 @@ func (e DigestMismatchError) Error() string {
 }
 
 // Install fetches a Plugin, verifies it against the catalog, places it, and
-// asks it to discover once so an artifact that cannot answer as the Plugin it
+// asks it to discover once, so an artifact that cannot answer as the Plugin it
 // was fetched as is refused now rather than reported unobserved later.
 //
-// Nothing is recorded and nothing is reported from here: the executable on
-// disk is the record, and the host inventory the caller sends next is the
-// report, which asks every Plugin, this one included.
+// Nothing is recorded or reported from here: the executable on disk is the
+// record, and the host inventory the caller sends next is the report.
 func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (Installed, error) {
 	if !validPluginID.MatchString(pluginID) {
 		return Installed{}, msg.Err.T("plugin.install.invalid_name", "\"{plugin}\" is not a valid Plugin name", "plugin", pluginID)
@@ -146,11 +142,9 @@ func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (I
 	if err != nil {
 		return Installed{}, err
 	}
-	// The catalog said which bytes these would be, so a mismatch means the
-	// download was not what was offered. Refuse rather than install it: this is
-	// integrity, not authentication — it catches a truncated, stale or
-	// wrong-architecture artifact and provides the digest comparison that later
-	// installed-build verification can reuse.
+	// A mismatch means the download was not what the catalog offered, so it is
+	// refused. This is integrity, not authentication: it catches a truncated,
+	// stale or wrong-architecture artifact.
 	if artifact.Digest != "" && digest != artifact.Digest {
 		_ = os.Remove(path)
 		return Installed{}, DigestMismatchError{PluginID: pluginID, Want: artifact.Digest, Got: digest}
@@ -201,15 +195,13 @@ func (m *Manager) List() ([]Installed, error) {
 	return out, nil
 }
 
-// Discover runs every installed Plugin's discover under the timeout and
-// returns what the host inventory carries for each: the digest of
-// the bytes on disk and the answer, or, when a Plugin exits non-zero, times
-// out or answers something unusable, the Plugin as present but unobserved
-// with a warning naming the failure. A Plugin's failure to answer is not this
-// method's failure: the inventory must still say the Plugin is there, or it
-// would look uninstalled. Only the directory being unreadable is an error,
-// since then nothing can be said about any Plugin and a report must not claim
-// the host has none.
+// Discover runs every installed Plugin's discover under the timeout and returns
+// what the host inventory carries for each: the digest of the bytes on disk and
+// the answer. A Plugin that exits non-zero, times out or answers something
+// unusable is returned as present but unobserved, with a warning naming the
+// failure, because otherwise it would look uninstalled. Only an unreadable
+// directory is an error, since a report must not then claim the host has no
+// Plugins.
 func (m *Manager) Discover(ctx context.Context) ([]wire.PluginInventory, error) {
 	installed, err := m.List()
 	if err != nil {
@@ -282,28 +274,27 @@ func (m *Manager) fetchTo(ctx context.Context, url, path string) (string, error)
 }
 
 // discoverByExec runs the Plugin's discover operation the way every operation
-// runs: the name on argv, JSON on stdout. Nothing is written to its stdin,
-// discover taking no request.
+// runs: the name on argv, JSON on stdout, and nothing on stdin, discover taking
+// no request.
 //
-// Recorded through plugintrace like an install, and worth it for the same
-// reason: what a build declares about itself is where a Plugin under
-// development most often disagrees with what it meant to declare, and nothing
-// else on the host shows the answer it actually gave.
+// Recorded through plugintrace: what a build declares about itself is where a
+// Plugin under development most often disagrees with what it meant to declare,
+// and nothing else on the host shows the answer it gave.
 func discoverByExec(ctx context.Context, path string, logger *slog.Logger) (plugincontract.DiscoverResponse, error) {
 	var out plugincontract.DiscoverResponse
 	// #nosec G204 -- path is InstallDir joined with a name matched against
 	// validPluginID, so it names a file this Agent just wrote.
 	cmd := exec.CommandContext(ctx, path, plugincontract.OpDiscover)
 	// Bounded like the install path's. A Plugin describing itself is the same
-	// arbitrary code, and an unbounded buffer here meant one that flooded
-	// stderr was limited by nothing but this Agent's memory.
+	// arbitrary code, and one that flooded stderr would otherwise be limited only
+	// by this Agent's memory.
 	cap := &plugintrace.Capture{Max: plugintrace.MaxPluginOutput}
 	stderr := cap.Writer(plugintrace.StreamStderr)
 	cmd.Stderr = stderr
-	// Stdout is bounded too: it is the answer, but a broken Plugin printing
-	// without end during the discover window would otherwise grow this
-	// Agent's memory on every inventory pass. Past the bound it is drained and
-	// dropped, so the Plugin is not blocked, and the answer is refused below.
+	// Stdout is bounded too: a broken Plugin printing without end would otherwise
+	// grow this Agent's memory on every inventory pass. Past the bound it is
+	// drained and dropped, so the Plugin is not blocked, and the answer is refused
+	// below.
 	answer := &boundedBuffer{max: plugintrace.MaxPluginOutput}
 	cmd.Stdout = answer
 	started := time.Now()
@@ -334,12 +325,10 @@ func discoverByExec(ctx context.Context, path string, logger *slog.Logger) (plug
 	return out, nil
 }
 
-// --- catalog shapes ---------------------------------------------------------
-
-// CatalogArtifact and CatalogPlugin mirror what the Server publishes
-// (contracts/server-api.md). They live here rather than in the wire package
-// because the Marketplace is a Server-to-anyone surface rather than part of the
-// Agent↔Server protocol: a browser reads the same JSON.
+// CatalogArtifact and CatalogPlugin mirror what the Server publishes. They live
+// here rather than in the wire package because the Marketplace is a
+// Server-to-anyone surface, not part of the Agent↔Server protocol: a browser
+// reads the same JSON.
 type CatalogArtifact struct {
 	OS     string `json:"os"`
 	Arch   string `json:"arch"`

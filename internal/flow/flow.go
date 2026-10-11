@@ -1,15 +1,14 @@
-// Package flow drives the interactive line-based registration session.
-// A host runs one Agent. The first run registers, stores the Server's token,
+// Package flow drives the interactive, line-based registration session over
+// plain stdin and stdout. The first run registers, stores the Server's token,
 // installs the systemd unit, and waits for the operator to authorize from the
-// web console; a run presenting a reactivation token resumes an Agent the
-// web console deactivated, active at once. A later run on an already-registered
+// web console; a run presenting a reactivation token resumes an Agent the web
+// console deactivated, active at once. A later run on an already-registered
 // host is idempotent: it refreshes the service onto the updated binary and
-// reports state instead of registering a second Agent. It is plain
-// stdin/stdout, no full-screen TUI shell in this slice.
+// reports state instead of registering a second Agent.
 //
 // The host keeps no Agent ID and no name: the Server is the only namer of
-// Agents, and what the host holds is its token, which is what proves it is
-// the Agent the web console shows. Both are reported by the Server on demand.
+// Agents, and the host holds its token, which is what proves it is the Agent
+// the web console shows.
 package flow
 
 import (
@@ -39,25 +38,21 @@ import (
 // Version is the Agent version reported to the Server.
 const Version = "0.0.1"
 
-// CheckinBody is what this host says about itself on every poll.
-//
-// It is a function rather than a struct literal at each caller because there
-// are two callers, the installer and the long-running service, and they must
-// report the same thing. A field added to the wire struct and filled in only
-// one of them would leave the Server's record correct or stale depending on
-// which process happened to check in last, which is not a difference anything
-// would report.
+// CheckinBody is what this host says about itself on every poll. It is a
+// function because its two callers, the installer and the long-running service,
+// must report the same thing: a field filled in by only one of them would leave
+// the Server's record correct or stale depending on which process checked in
+// last, and nothing would report that.
 //
 // inventoryFingerprint is the service's, over the host inventory it computed
-// for this check-in; the installer passes none, having computed no inventory,
-// and the Server then asks the service on its next check-in.
+// for this check-in. The installer passes none, and the Server then asks the
+// service on its next check-in.
 func CheckinBody(inventoryFingerprint string) wire.CheckinRequest {
 	return wire.CheckinRequest{AgentVersion: Version, ProtocolVersion: wire.ProtocolVersion, InventoryFingerprint: inventoryFingerprint}
 }
 
-// Options configures a registration session.
-// Options is what the register command resolved from its flags and
-// environment; anything empty is prompted for when there is a terminal.
+// Options is what the register command resolved from its flags and environment;
+// anything empty is prompted for when there is a terminal.
 type Options struct {
 	ServerURL         string // required
 	RegistrationKey   string // from --key or REGISTRATION_KEY; prompted if empty and interactive
@@ -71,12 +66,10 @@ type Options struct {
 // and keys `esrk_`.
 const reactivationPrefix = "esrt_"
 
-// Register is the entry point of the register command.
 func Register(ctx context.Context, opts Options) error {
-	// Check root before anything reaches the Server. Registering first and
-	// failing afterwards on the config write would leave a pending Agent on
-	// the Server for a host that never actually installed one, which an
-	// operator then has to notice and clean up.
+	// Check root before anything reaches the Server. Registering first and failing
+	// on the config write would leave a pending Agent on the Server for a host
+	// that never installed one.
 	if os.Geteuid() != 0 {
 		return msg.Err.T("register.not_root", "register must run as root: use sudo, or run it from a root shell")
 	}
@@ -96,9 +89,8 @@ func Register(ctx context.Context, opts Options) error {
 	msg.SetLanguage(lang)
 
 	// Before the next prompt, so a --server this Agent will not talk to fails
-	// while there is still nothing to lose: no key typed in, no token issued,
-	// nothing written to disk. Options.ServerURL is required, and the register
-	// command refuses an empty one, so this always has something to check.
+	// while there is nothing to lose: no key typed in, no token issued, nothing
+	// written to disk.
 	if err := serverapi.CheckBaseURL(opts.ServerURL); err != nil {
 		return err
 	}
@@ -123,9 +115,9 @@ func Register(ctx context.Context, opts Options) error {
 }
 
 // settleLanguage is the installer's language step. `--lang` decides without
-// asking. Otherwise the default comes from msg.Resolve and, with a terminal,
-// the reader is asked; without one the default is taken, since there is
-// nobody to ask and an unattended install must not block on a read.
+// asking. Otherwise the default comes from msg.Resolve and the reader is asked
+// when there is a terminal; without one the default is taken, since an
+// unattended install must not block on a read.
 func settleLanguage(t *terminal, flag, saved string) (string, error) {
 	lang, decided, err := msg.Resolve(flag, os.Getenv(msg.EnvVar), saved, os.Getenv)
 	if err != nil || decided || t == nil {
@@ -136,8 +128,8 @@ func settleLanguage(t *terminal, flag, saved string) (string, error) {
 
 // askLanguage offers every supported language under its own name, numbered,
 // with the default marked; Enter accepts it, and the number, the code or the
-// name chooses another. Nothing here is a translated sentence: whoever reads
-// it has not chosen a language yet, so the heading is the one word in every
+// name chooses another. Nothing here is a translated sentence, because the
+// reader has not chosen a language yet: the heading is the one word in every
 // language and the rest is names and numbers.
 func askLanguage(t *terminal, def string) string {
 	langs := l10n.Supported()
@@ -174,13 +166,13 @@ func askLanguage(t *terminal, def string) string {
 // the service is started, so an upgrade never races the old binary's clean
 // service exit (systemd does not auto-restart a clean exit).
 func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Config) error {
-	// An installer is downloaded from one Server and carries that Server's URL,
-	// so a mismatch means this host belongs to a different one. Continuing
-	// against the stored URL is the wrong answer twice over: the operator is
-	// watching the web console they installed from, where this host will never
-	// appear, and the credential they supplied belongs to that web console
-	// too. Moving the host is not done silently either, because it detaches
-	// this host from whatever the old Server still deploys to it.
+	// An installer carries the URL of the Server it was downloaded from, so a
+	// mismatch means this host belongs to a different one. Continuing against the
+	// stored URL is wrong twice: the operator is watching the web console they
+	// installed from, where this host will never appear, and the credential they
+	// supplied belongs to that one too. Moving the host is not done silently
+	// either, because it detaches this host from whatever the old Server still
+	// deploys to it.
 	if opts.ServerURL != "" && opts.ServerURL != cfg.ServerURL {
 		return msg.Err.T("reinstall.other_server", "this host is registered to {registered}, but this installer came from {installer}.\n"+
 			"Nothing was changed. To move it, uninstall it from the old Server first:\n"+
@@ -189,8 +181,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	}
 
 	// The language step's answer is kept even when nothing else about the
-	// registration changes: re-running the installer is one of the two ways
-	// to change it.
+	// registration changes: re-running the installer is one way to change it.
 	if cfg.Language != msg.Language() {
 		cfg.Language = msg.Language()
 		if err := identity.SaveConfig(cfg); err != nil {
@@ -213,19 +204,19 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	switch {
 	case cerr == nil:
 	case isUnknownToken(cerr):
-		// Deactivated or removed in the web console. Either way the token is
-		// dead and this host is registered again under whatever credential
-		// the operator gave this run: a reactivation token to be the same
-		// Agent, a registration key to be a new one.
+		// Deactivated or removed in the web console. Either way the token is dead and
+		// this host registers again under the credential this run was given: a
+		// reactivation token to be the same Agent, a registration key to be a new
+		// one.
 		fmt.Println(msg.T("reinstall.token_refused", "The Server no longer accepts this host's token: the Agent was deactivated or removed from the web console."))
 		fmt.Println(msg.T("reinstall.registering_again", "Registering this host again."))
 		fmt.Println()
 		return freshRegister(ctx, t, opts)
 	default:
-		// Keep the token and let the service retry: the Server may simply be
-		// down. Name it and say why, because a Server that is briefly down and
-		// one that no longer exists are indistinguishable to the operator
-		// otherwise, and only the first resolves on its own.
+		// Keep the token and let the service retry: the Server may simply be down.
+		// Name it and say why, because to the operator a Server that is briefly down
+		// and one that no longer exists look the same, and only the first resolves on
+		// its own.
 		fmt.Println()
 		fmt.Println(msg.T("reinstall.unreachable", "Could not reach {server}: {err}", "server", cfg.ServerURL, "err", cerr))
 		if err := service.Install(); err != nil {
@@ -319,10 +310,9 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 // offerRequiredPlugins installs, after confirmation, the Plugins the resumed
 // Agent's Targets are configured with and this host lacks. A reactivated host
 // is often a rebuilt one, and a Deployment pushed to it before the Plugin is
-// back fails on the host for want of an executable; asking here is what puts
-// that step before the first push rather than after it. Non-interactive runs
-// are told what to install and left to it: a Plugin runs as root, and that
-// consent is not inferred from an environment variable.
+// back fails for want of an executable. Non-interactive runs are told what to
+// install and left to it: a Plugin runs as root, and that consent is not
+// inferred from an environment variable.
 func offerRequiredPlugins(ctx context.Context, t *terminal, api *serverapi.Client, token, serverURL string, required []string) {
 	if len(required) == 0 {
 		return
@@ -452,18 +442,18 @@ func authorizationInstructions(marketplaceURL string) string {
 }
 
 // Uninstall takes the Agent off this host. It deactivates the Agent on the
-// Server (best effort: an unreachable Server must not stop an operator
-// cleaning up a host), deletes the config and token either way, stops and
-// removes the systemd unit and deletes the binary, then offers, each behind
-// its own confirmation, to delete the installed Plugins and the private keys.
-// Deliberately host-side only: the Server can never trigger it, so a
-// compromised Server or account cannot wipe an Agent off a machine it does
-// not own. Certificates the Agent deployed elsewhere on the host are never
-// touched, since removing them could take the host's services down.
+// Server (best effort: an unreachable Server must not stop an operator cleaning
+// up a host), deletes the config and token either way, stops and removes the
+// systemd unit and deletes the binary, then offers, each behind its own
+// confirmation, to delete the installed Plugins and the private keys. It is
+// host-side only: the Server can never trigger it, so a compromised Server or
+// account cannot wipe an Agent off a machine it does not own. Certificates the
+// Agent deployed elsewhere on the host are never touched, since removing them
+// could take the host's services down.
 //
-// Deactivating rather than removing is what keeps the Agent's Targets: the
-// web console can hand out a reactivation command that brings the same Agent
-// back, on this host after a reinstall or on another one.
+// Deactivating rather than removing keeps the Agent's Targets: the web console
+// can hand out a reactivation command that brings the same Agent back, on this
+// host or on another one.
 func Uninstall(ctx context.Context, assumeYes bool) error {
 	if os.Geteuid() != 0 {
 		return msg.Err.T("uninstall.not_root", "uninstall must run as root (use sudo)")
@@ -527,10 +517,10 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 	return nil
 }
 
-// deactivateOnServer tells the Server this token is done with. Every outcome
-// is reported in words, because what the operator does next depends on it:
-// a deactivated Agent needs nothing, and an Agent the Server still accepts
-// has to be deactivated from the web console by hand.
+// deactivateOnServer tells the Server this token is done with. Every outcome is
+// reported in words, because what the operator does next depends on it: a
+// deactivated Agent needs nothing, and one the Server still accepts has to be
+// deactivated from the web console by hand.
 func deactivateOnServer(ctx context.Context, cfg identity.Config, token string) {
 	api, err := serverapi.New(cfg.ServerURL)
 	if err != nil {
@@ -553,9 +543,9 @@ func deactivateOnServer(ctx context.Context, cfg identity.Config, token string) 
 }
 
 // offerPluginRemoval deletes the installed Plugin executables after a
-// confirmation. Only with a terminal: --yes consents to uninstalling the
-// Agent, not to everything it could take with it, so an unattended run
-// leaves the Plugins and says where they are.
+// confirmation. Only with a terminal: --yes consents to uninstalling the Agent,
+// not to everything it could take with it, so an unattended run leaves the
+// Plugins and says where they are.
 func offerPluginRemoval(t *terminal) {
 	installed, err := pluginmgr.New(nil, nil).List()
 	switch {
@@ -593,9 +583,7 @@ func offerPluginRemoval(t *terminal) {
 // offerKeyRemoval deletes the keystore after a confirmation that cannot be
 // given by accident: the keys are the Agent's only copy of what every
 // Certificate issued to this host is signed with, and nothing recovers them.
-// Never through --yes, never by an empty answer, and never without a
-// terminal: an uninstall is too ordinary a command to destroy something
-// unrecoverable on a default.
+// Never through --yes, never by an empty answer, and never without a terminal.
 func offerKeyRemoval(t *terminal) {
 	n, err := keystore.Count()
 	switch {
@@ -617,9 +605,8 @@ func offerKeyRemoval(t *terminal) {
 		fmt.Println(msg.T("uninstall.keys.not_deleted", "  They were NOT deleted; delete the directory by hand if this machine is being decommissioned."))
 		return
 	}
-	// The phrase is a message too: what has to be typed is what the prompt
-	// shows, in the language it is shown in, and it stays long enough that no
-	// habit types it by accident.
+	// The phrase is a message too: what has to be typed is what the prompt shows,
+	// in its language, and it is long enough that no habit types it by accident.
 	phrase := msg.T("uninstall.keys.phrase", "delete keys")
 	answer := t.prompt(msg.T("uninstall.keys.confirm", "Type '{phrase}' to delete {path}, anything else keeps it: ", "phrase", phrase, "path", keystore.Dir()))
 	if answer != phrase {
@@ -690,9 +677,8 @@ func proposedName(hostname string) string {
 // one, shown beside the proposal when it differs so the reader can see what was
 // trimmed.
 //
-// With no proposal and no terminal there is nothing to offer and nobody to ask,
-// so this returns an error rather than a silent empty name that the Server would
-// refuse later.
+// With no proposal and no terminal this returns an error rather than a silent
+// empty name that the Server would refuse later.
 func confirmName(t *terminal, fromFlag, proposed, hostname string) (string, error) {
 	if fromFlag != "" {
 		return fromFlag, nil
@@ -779,20 +765,16 @@ func waitForAuthorization(ctx context.Context, api *serverapi.Client, token stri
 	}
 }
 
-// isUnknownToken reports whether err is the Server's unknown-token response.
 func isUnknownToken(err error) bool {
 	apiErr, ok := errors.AsType[*serverapi.APIError](err)
 	return ok && apiErr.Code == wire.CodeUnknownToken
 }
 
-// --- small terminal helpers (stdlib only) ---
-
-// terminal is the operator's input source. It is deliberately NOT os.Stdin in
-// the common case: the one-line installer runs as `curl … | sudo bash`, so the
-// process inherits the *script pipe* as stdin and reading it would consume the
-// installer script rather than the operator's typing. Opening the controlling
-// terminal /dev/tty reaches the human instead, which is what makes the key and
-// name prompts work under `curl | bash` at all.
+// terminal is the operator's input source. It is deliberately not os.Stdin in
+// the common case: the one-line installer runs as `curl … | sudo bash`, so
+// stdin is the script pipe and reading it would consume the installer script
+// rather than the operator's typing. Opening the controlling terminal /dev/tty
+// reaches the human instead.
 type terminal struct {
 	in    *bufio.Reader
 	out   io.Writer

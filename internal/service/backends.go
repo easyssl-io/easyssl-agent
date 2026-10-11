@@ -17,12 +17,11 @@ import (
 // status` prints under it (see sdnotify).
 //
 // The unit orders itself after network.target and not network-online.target.
-// Reaching the second means running a wait-online helper, and on a host whose
-// interface that helper does not recognize as configured, which includes a
-// static address with no network manager and every container whose address
-// the runtime set up, it blocks for its full two-minute timeout after every
-// boot. A network that is not ready yet costs this poll loop one failed
-// attempt and RestartSec instead.
+// Reaching the second runs a wait-online helper, which blocks for its full
+// two-minute timeout after every boot on a host whose interface it does not
+// recognize as configured: a static address with no network manager, and every
+// container whose address the runtime set up. A network that is not ready yet
+// costs this poll loop one failed attempt and RestartSec instead.
 func systemd() *backend {
 	const unit = name + ".service"
 	unitPath := "/etc/systemd/system/" + unit
@@ -283,9 +282,9 @@ esac
 
 // BusyBox init: a respawn line in /etc/inittab, which init rereads on SIGHUP.
 // There is no service file, so Install only makes sure the log's directory
-// exists; Start adds the line, and when the Agent already runs, stops it so
+// exists. Start adds the line and, when the Agent already runs, stops it so
 // init respawns it on the new binary. BusyBox runs a line containing shell
-// characters through `sh -c`, which is what the redirection relies on.
+// characters through `sh -c`, which the redirection relies on.
 func busybox() *backend {
 	const inittab = "/etc/inittab"
 	line := "::respawn:" + BinaryPath + " run >>" + logPath + " 2>&1"
@@ -405,7 +404,6 @@ func processes(prog, arg string) []int {
 	return pids
 }
 
-// waitGone waits up to limit for no process to run as `prog arg`.
 func waitGone(prog, arg string, limit time.Duration) {
 	if root != "/" {
 		return

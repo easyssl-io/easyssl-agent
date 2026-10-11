@@ -13,11 +13,9 @@ import (
 
 // A Plugin is arbitrary code and is handed the private key on its stdin, so one
 // that echoes its request, prints the file it was given, or dumps its
-// environment on failure puts the key in its output. Reporting that verbatim
-// would store a usable key in the Server's database and show it in the web
-// console, and the debug log below passes the request itself through here,
-// where the key is the payload rather than an accident. These cover the shapes
-// that text actually arrives in.
+// environment on failure puts the key in its output. The debug log also passes
+// the request itself through here, where the key is the payload. These cover
+// the shapes that text arrives in.
 
 const secretBody = "MIIBSECRETKEYBYTESmustNeverBeReported"
 
@@ -29,8 +27,8 @@ func TestRedactPrivateKeys(t *testing.T) {
 		name: "a PEM block with real newlines, as a plugin printing the key file produces",
 		in:   "wrote it\n-----BEGIN PRIVATE KEY-----\n" + secretBody + "\n-----END PRIVATE KEY-----\ndone\n",
 	}, {
-		// The case the finding names: the request echoed back, where the whole
-		// key is one line and its newlines are two-character escapes.
+		// The request echoed back, where the whole key is one line and its newlines
+		// are two-character escapes.
 		name: "a key echoed inside JSON, newlines escaped",
 		in:   `{"privateKeyPem":"-----BEGIN PRIVATE KEY-----\n` + secretBody + `\n-----END PRIVATE KEY-----\n"}`,
 	}, {
@@ -169,10 +167,9 @@ func TestTraceWritesTheLiteralBytesToItsOwnFile(t *testing.T) {
 	}
 }
 
-// The reason KeyPlaceholder carries no newline. Nearly everything redacted here
+// The reason KeyPlaceholder carries no newline: nearly everything redacted here
 // is a JSON document with the key inside a string value, and a real newline
-// there makes the whole document unparseable — which costs a debugging session
-// `jq` in exchange for a prettier rendering of the one part that is gone.
+// there makes the whole document unparseable.
 func TestRedactedJSONIsStillJSON(t *testing.T) {
 	req := map[string]string{
 		"certificatePem": "-----BEGIN CERTIFICATE-----\nPUBLIC\n-----END CERTIFICATE-----\n",
@@ -229,8 +226,7 @@ func TestHandlerDefaultsToText(t *testing.T) {
 }
 
 // All three streams are bounded, so the count beside each is the only sign the
-// Agent clipped one: a body ending abruptly next to a number that did not stop
-// there is what tells a reader the Plugin said more than this.
+// Agent clipped one.
 func TestRecordCountsAllThreeStreams(t *testing.T) {
 	logger, out := debugLogger()
 	plugintrace.Record(logger, plugintrace.Exchange{
@@ -267,9 +263,8 @@ func TestCaptureStopsAtItsBound(t *testing.T) {
 	}
 }
 
-// The order between the streams is the thing two buffers could not hold: a
-// message on stderr means something different before a line of stdout than
-// after it.
+// The order between the streams is what two buffers could not hold: a message
+// on stderr means something different before a line of stdout than after it.
 func TestCaptureKeepsTheOrderBetweenStreams(t *testing.T) {
 	c := &plugintrace.Capture{Max: plugintrace.MaxPluginOutput}
 	out, errw := c.Writer(plugintrace.StreamStdout), c.Writer(plugintrace.StreamStderr)

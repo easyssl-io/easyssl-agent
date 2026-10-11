@@ -18,9 +18,8 @@ import (
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
 )
 
-// The tests exercise the flow against a fake Marketplace and a fake discover,
-// so no Plugin binary is run: what is checked is what the Manager does around
-// the executable, which is what it owns.
+// The tests use a fake Marketplace and a fake discover, so no Plugin binary is
+// run: what is checked is what the Manager does around the executable.
 
 const artifactBody = "#!/bin/false\nplugin bytes\n"
 

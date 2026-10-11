@@ -1,7 +1,7 @@
-// Package hostinfo collects best-effort host diagnostics the Agent reports at
+// Package hostinfo collects the host diagnostics the Agent reports at
 // registration: hostname, OS, host type, and the binary, config, and service
-// paths. Every field is best-effort; an unavailable value is reported as
-// an empty string rather than failing.
+// paths. Every field is best-effort; an unavailable value is an empty string
+// rather than a failure.
 package hostinfo
 
 import (
@@ -15,7 +15,6 @@ import (
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-// Collect gathers the host diagnostics reported at registration.
 func Collect() wire.Diagnostics {
 	bin, _ := os.Executable()
 	return wire.Diagnostics{
@@ -47,12 +46,11 @@ func osName() string {
 }
 
 // hostType classifies the host as container, vm, bare-metal, or unknown when it
-// genuinely cannot tell. It asks systemd-detect-virt first: it ships with
-// systemd (which this Agent already requires), and it recognizes dozens of
-// hypervisors and container runtimes, including ones the file heuristics below
-// miss entirely. The heuristics remain only as a fallback for hosts where the
-// tool is unavailable, and they never assert bare-metal on their own: guessing
-// bare-metal for anything unrecognized is how a VM ends up mislabeled.
+// cannot tell. It asks systemd-detect-virt first, which recognizes dozens of
+// hypervisors and container runtimes the file heuristics below miss. The
+// heuristics are only a fallback for hosts without the tool, and they never
+// assert bare-metal: guessing bare-metal for anything unrecognized is how a VM
+// ends up mislabeled.
 func hostType() string {
 	if t, ok := detectVirt(); ok {
 		return t
@@ -85,8 +83,8 @@ func hostType() string {
 
 // detectVirt classifies the host with systemd-detect-virt, returning false when
 // the tool is not available. `--quiet --container` and `--quiet --vm` each exit
-// 0 only when that kind of virtualization is detected, so systemd does the
-// classification and this Agent needs no table of hypervisor names.
+// 0 only when that kind of virtualization is detected, so this Agent needs no
+// table of hypervisor names.
 func detectVirt() (string, bool) {
 	if _, err := exec.LookPath("systemd-detect-virt"); err != nil {
 		return "", false

@@ -5,9 +5,8 @@
 // Implemented here rather than taken as a dependency because it is one datagram
 // to a socket whose path systemd puts in the environment, and because the Agent
 // must remain readable by whoever is trusting it with root. Every call is a
-// no-op when NOTIFY_SOCKET is unset, which is the
-// case when the Agent runs by hand, under a different init, or in a container
-// without systemd.
+// no-op when NOTIFY_SOCKET is unset: the Agent run by hand, under a different
+// init, or in a container without systemd.
 package sdnotify
 
 import (

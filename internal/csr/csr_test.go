@@ -26,10 +26,9 @@ import (
 
 const certificateID = "3f2b9c44-1a77-4ce0-8d21-0d5e8f6a4b72"
 
-// fakeAPI stands in for the Server wrapper. Keys still come from real keystore
-// code paths where possible: only Generate and Load are replaced (they require
-// root and a filesystem), with an in-memory keystore keyed by fingerprint so
-// what the Server named is observable.
+// fakeAPI stands in for the Server wrapper. Only Generate and Load are replaced
+// (they require root and a filesystem), by an in-memory keystore keyed by
+// fingerprint so what the Server named is observable.
 type fakeAPI struct {
 	work      wire.CSRWork
 	workErr   error
@@ -149,10 +148,9 @@ func TestBuildsAndSubmitsAVerifiableCSR(t *testing.T) {
 	}
 }
 
-// A re-run after a crash is handed the same command again, and the work now
-// names the stored CSR's key: the build must use that key, not a fresh one,
-// so the Server's stored CSR (from run one) matches what run two would have
-// sent.
+// A re-run after a crash gets the same command, and the work now names the
+// stored CSR's key: the build must use that key, not a fresh one, so it matches
+// the CSR the Server stored from the first run.
 func TestReRunUsesTheNamedKey(t *testing.T) {
 	api := &fakeAPI{work: work("app.example.test")}
 	h := newHandler(t, api)
@@ -265,7 +263,6 @@ func TestKeystoreTroubleLeavesTheCommandPending(t *testing.T) {
 	}
 }
 
-// TestRSAWorkBuildsAnRSACSR: the key type the work names is the one generated.
 func TestRSAWorkBuildsAnRSACSR(t *testing.T) {
 	w := work("app.example.test")
 	w.KeyType = wire.KeyTypeRSA2048

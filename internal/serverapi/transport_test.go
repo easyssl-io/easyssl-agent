@@ -96,9 +96,8 @@ func TestARedirectMayNotChangeTheScheme(t *testing.T) {
 	}))
 	defer plain.Close()
 
-	// The Agent is configured with https and the Server answers a redirect to
-	// the same host over http. Standing in for that here: any scheme change is
-	// the thing being refused, and https is what the test client cannot serve.
+	// Stands in for a Server answering a redirect to the same host over http: any
+	// scheme change is refused, and https is what the test client cannot serve.
 	from := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, plain.URL+r.URL.Path, http.StatusFound)
 	}))
@@ -123,15 +122,15 @@ func TestARedirectMayNotChangeTheScheme(t *testing.T) {
 	}
 }
 
-// The scenario test above builds its client by hand, so on its own it proves
-// only that noSchemeChange works — not that anything uses it. These two run
-// through the real constructors instead. Dropping CheckRedirect from either
-// place is otherwise a silent change: every existing test keeps passing while
-// the Agent will once again follow a downgrade carrying its bearer token.
+// The scenario test above builds its client by hand, so it proves only that
+// noSchemeChange works, not that anything uses it. These two run through the
+// real constructors, because dropping CheckRedirect from either is otherwise
+// silent: every other test keeps passing while the Agent follows a downgrade
+// carrying its bearer token.
 //
 // The redirect goes the other way here, loopback http to https, because a test
 // cannot serve an https URL the Agent's own client would trust. The rule is the
-// same one: the scheme changed.
+// same: the scheme changed.
 func TestNewWiresTheRedirectPolicyIn(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "https://elsewhere.example.com"+r.URL.Path, http.StatusFound)

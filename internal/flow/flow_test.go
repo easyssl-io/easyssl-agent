@@ -35,10 +35,9 @@ func TestAuthorizationInstructionsPutMarketplaceBeforeWait(t *testing.T) {
 	}
 }
 
-// The installer offers the hostname's first label, not the whole hostname.
-// Every host exercised during development had a single-label
-// hostname, where trimming and not trimming agree, which is why this went
-// unnoticed; the domain-qualified case is the one that matters.
+// The installer offers the hostname's first label, not the whole hostname. On a
+// single-label hostname trimming and not trimming agree, so the
+// domain-qualified case is the one that matters.
 func TestProposedNameIsTheHostnamesFirstLabel(t *testing.T) {
 	for _, c := range []struct{ hostname, want string }{
 		{"web-01.nw.internal", "web-01"},

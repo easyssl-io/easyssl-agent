@@ -1,8 +1,7 @@
 // Package plugintrace makes one Plugin invocation legible: what the Agent sent,
 // what the Plugin said back, how it exited and how long it took.
 //
-// None of it is on by default. There are two switches and they are separate on
-// purpose, because they differ in exactly one respect that matters.
+// None of it is on by default, and the two switches are separate on purpose:
 //
 //   - EASYSSL_LOG_LEVEL=debug logs every exchange with the private key removed.
 //     Safe to leave on, safe on somebody else's host, safe to paste into an
@@ -14,8 +13,8 @@
 // request carries privateKeyPem (plugincontract.DeployRequest), so logging the
 // exchange verbatim into the journal would put usable private keys somewhere
 // that persists, that anyone in `systemd-journal` can read, and that log
-// shipping copies off the host. Enabling that has to be a decision of its own,
-// and naming a file for the keys to go into is what makes it one.
+// shipping copies off the host. Naming a file for the keys to go into is what
+// makes enabling that a decision of its own.
 package plugintrace
 
 import (
@@ -39,10 +38,10 @@ const TraceEnv = "EASYSSL_PLUGIN_TRACE"
 // else, or nothing, leaves it at info.
 const LevelEnv = "EASYSSL_LOG_LEVEL"
 
-// FormatEnv chooses between the Agent's two log formats. `json` gives the same
-// shape the Server writes, which is what makes a debug session one `jq` call
-// rather than a parser for Go's quoting; anything else keeps the text handler,
-// which is what a person reading `journalctl` without a pipeline wants.
+// FormatEnv chooses between the Agent's two log formats. `json` makes a debug
+// session one `jq` call rather than a parser for Go's quoting; anything else
+// keeps the text handler, which suits a person reading `journalctl` without a
+// pipeline.
 const FormatEnv = "EASYSSL_LOG_FORMAT"
 
 // Handler builds the Agent's log handler from the two variables. Everything the
@@ -84,8 +83,8 @@ type Exchange struct {
 	ExitCode int
 	Duration time.Duration
 	Err      error
-	// Attrs names what this run was for — the Deployment, the Plugin and its
-	// version — in the caller's own terms, since this package knows none of it.
+	// Attrs names what this run was for (the Deployment, the Plugin and its
+	// version) in the caller's own terms, since this package knows none of it.
 	Attrs []any
 }
 
@@ -105,9 +104,9 @@ func Record(logger *slog.Logger, ex Exchange) {
 		"duration", ex.Duration.Round(time.Millisecond).String(),
 		"stdin_bytes", len(ex.Stdin),
 		"stdout_bytes", len(ex.Stdout),
-		// Counted like the other two, and for the same reason: all three are
-		// bounded, so a body that ends abruptly next to a count that did not
-		// stop there is the only sign the Agent clipped it.
+		// Counted like the other two: all three are bounded, so a body that ends
+		// abruptly next to a count that did not stop there is the only sign the Agent
+		// clipped it.
 		"stderr_bytes", len(ex.Stderr),
 	}
 	attrs = append(attrs, ex.Attrs...)
@@ -117,9 +116,7 @@ func Record(logger *slog.Logger, ex Exchange) {
 	if len(ex.Stdout) > 0 {
 		attrs = append(attrs, "stdout", RedactPrivateKeys(string(ex.Stdout)))
 	}
-	// Verbatim rather than through the Server's funnel: stderr is the Plugin's
-	// own diagnostics and never leaves this host, and truncating it here is
-	// what would hide the line explaining the failure.
+	// Not truncated: that is what would hide the line explaining a failure.
 	if len(ex.Stderr) > 0 {
 		attrs = append(attrs, "stderr", RedactPrivateKeys(string(ex.Stderr)))
 	}
@@ -188,9 +185,9 @@ func writeTrace(logger *slog.Logger, ex Exchange) {
 }
 
 // privateKeyBlock matches a PEM private key however it is framed. The body is
-// `[\s\S]` rather than `.` so it spans real newlines, and the same match
-// covers a key echoed inside JSON, where the newlines are two-character `\n`
-// escapes and the whole block is one line.
+// `[\s\S]` rather than `.` so it spans real newlines, and the same match covers
+// a key echoed inside JSON, where the newlines are two-character `\n` escapes
+// and the whole block is one line.
 var privateKeyBlock = regexp.MustCompile(
 	`(-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----)([\s\S]*?)(-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----)`)
 
@@ -204,36 +201,33 @@ var (
 // KeyPlaceholder stands in for what was removed, and says who removed it so a
 // reader does not go looking for a truncated file.
 //
-// It carries no newline of its own, and that is load-bearing rather than
-// cosmetic. Most of what passes through here is a JSON document with the key
-// inside a string value, and a real newline there makes the document
-// unparseable: the debug log stops being something `jq` can read, for a
-// prettier rendering of the one part that has been removed. The markers on
-// either side already show where the key was.
+// It carries no newline of its own, and that is load-bearing. Most of what
+// passes through here is a JSON document with the key inside a string value,
+// and a real newline there makes the document unparseable, so the debug log
+// stops being something `jq` can read. The markers on either side already
+// show where the key was.
 const KeyPlaceholder = " ****** private key redacted by the easySSL Agent ****** "
 
 // RedactPrivateKeys masks the body of any PEM private key in text.
 //
-// It guards two different exposures with one rule, which is why it lives here
-// rather than beside either of them. A Plugin is arbitrary code and receives
-// the key on its stdin, so one that echoes its request — or simply prints the
-// file it was handed — puts the key in its output; reporting that verbatim
-// would store a usable private key in the Server's database and show it in the
-// web console, which is worse than the exposure the whole design avoids by
-// never sending a key over the wire. And the debug log above passes the request
-// itself through here, where the key is not an accident but the payload.
+// It guards two exposures with one rule. A Plugin is arbitrary code and
+// receives the key on its stdin, so one that echoes its request, or prints the
+// file it was handed, puts the key in its output; reporting that verbatim would
+// store a usable private key in the Server's database and show it in the web
+// console, which the design otherwise avoids by never sending a key over the
+// wire. And the debug log passes the request itself through here, where the key
+// is the payload.
 //
 // The markers are kept so the redaction is visible rather than looking like a
 // Plugin that said nothing.
 func RedactPrivateKeys(s string) string {
 	s = privateKeyBlock.ReplaceAllString(s, "${1}"+KeyPlaceholder+"${3}")
-	// Whatever survives the pass above is a key with no end marker, which is
-	// what a bounded or interrupted echo leaves. Only the last begin marker can
-	// be unclosed — every earlier one was closed, or it would have swallowed
-	// the rest — so the tail from it is dropped. Done by index rather than by a
+	// Whatever survives the pass above is a key with no end marker, which is what
+	// a bounded or interrupted echo leaves. Only the last begin marker can be
+	// unclosed, so the tail from it is dropped. Done by index rather than by a
 	// second pattern: a pattern anchored to the end would also match the begin
-	// marker the pass above deliberately kept, and take the whole output after
-	// a redacted key with it.
+	// marker the pass above deliberately kept, and take the whole output after a
+	// redacted key with it.
 	last := keyBegin.FindAllStringIndex(s, -1)
 	if len(last) == 0 {
 		return s
@@ -245,13 +239,13 @@ func RedactPrivateKeys(s string) string {
 	return s[:start[1]] + KeyPlaceholder
 }
 
-// KeyRedactor is RedactPrivateKeys over a stream that arrives in pieces. A key
-// is not guaranteed to fall inside one piece: a Plugin's stdout is recorded as
-// several chunks whenever its stderr interleaves, and redacting each chunk on
-// its own left the continuation of a key, which carries the rest of its body
-// and its end marker but no begin marker, unrecognized and reported as it was.
-// The redactor remembers that a key was left open and drops everything up to
-// the end marker in the pieces that follow. One redactor per stream.
+// KeyRedactor is RedactPrivateKeys over a stream that arrives in pieces. A
+// Plugin's stdout is recorded as several chunks whenever its stderr
+// interleaves, and the continuation of a key carries the rest of its body and
+// its end marker but no begin marker, so redacting each chunk on its own would
+// report it as it was. The redactor remembers that a key was left open and
+// drops everything up to the end marker in the pieces that follow. One redactor
+// per stream.
 type KeyRedactor struct{ open bool }
 
 // Redact returns piece with every private key body masked, including the part
@@ -277,24 +271,21 @@ func (r *KeyRedactor) Redact(piece string) string {
 	return prefix + out
 }
 
-// MaxPluginOutput bounds how much of a Plugin's output the Agent will hold.
-// A Plugin is arbitrary code and can print without limit; nothing downstream
-// wants more than this either, since what reaches the Server is truncated to
-// the same bound.
+// MaxPluginOutput bounds how much of a Plugin's output the Agent will hold. A
+// Plugin is arbitrary code and can print without limit, and what reaches the
+// Server is truncated to the same bound.
 const MaxPluginOutput = 256 << 10
 
-// Capture collects a Plugin's two streams into one ordered record, bounded, so
+// Capture collects a Plugin's two streams into one ordered, bounded record, so
 // a Plugin printing without limit cannot exhaust this Agent's memory.
 //
-// One record rather than two buffers, because the order between the streams is
-// what a reader needs and two buffers cannot hold it: a message on stderr means
-// something quite different before a line of stdout than after it.
+// One record rather than two buffers, because a message on stderr means
+// something different before a line of stdout than after it.
 //
-// Approximate between the streams, and honestly so. Each is drained by its own
-// goroutine, so which of two near-simultaneous lines lands first is whatever
-// those goroutines are scheduled in; within a stream it is exact. Merging the
-// pipes would order them perfectly and lose which was which, which is the same
-// trade the other way round.
+// The order between the streams is approximate: each is drained by its own
+// goroutine, so which of two near-simultaneous lines lands first depends on
+// scheduling. Within a stream it is exact. Merging the pipes would order them
+// perfectly and lose which was which.
 type Capture struct {
 	// Max bounds each stream separately, so a flood on one does not push the
 	// other out of the record.
@@ -361,10 +352,10 @@ func (c *Capture) append(stream string, line []byte) {
 		c.dropped, c.kept = map[string]int{}, map[string]int{}
 	}
 	n := len(line) + 1 // the newline the recorded text carries
-	// Once anything has been dropped from a stream, everything after it goes
-	// too. Judging each line on its own would let a short line land after a
-	// long one was refused, leaving a transcript with a hole in the middle and
-	// nothing saying so; what truncation should leave is a clean prefix.
+	// Once anything has been dropped from a stream, everything after it goes too.
+	// Judging each line on its own would let a short line land after a long one
+	// was refused, leaving a hole in the middle with nothing saying so; truncation
+	// should leave a clean prefix.
 	if c.Max > 0 && (c.dropped[stream] > 0 || c.kept[stream]+n > c.Max) {
 		c.dropped[stream] += n
 		return
@@ -377,7 +368,6 @@ func (c *Capture) append(stream string, line []byte) {
 	c.chunks = append(c.chunks, Chunk{Stream: stream, Text: string(line) + "\n"})
 }
 
-// StreamWriter is one stream's end of a Capture.
 type StreamWriter struct {
 	cap     *Capture
 	stream  string

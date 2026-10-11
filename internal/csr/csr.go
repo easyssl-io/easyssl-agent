@@ -1,15 +1,12 @@
-// Package csr answers the Server's request_csr commands: read what to sign,
-// have the keystore produce a key or load the one the Server named, build the
-// CSR, and hand it back. The Agent is told what to sign, and with which key,
-// and chooses nothing.
+// Package csr answers the Server's request_csr commands: it has the keystore
+// produce a key or load the one the Server named, builds the CSR and hands it
+// back. The Agent is told what to sign and with which key, and chooses nothing.
 //
-// Every outcome here is deliberate about one distinction: an error return
-// leaves the command pending, so the Runner tries again later and, if the
-// condition never clears, the command's expiry fails the certificate naming
-// this Agent. A nil return acks the command as handled. Terminal refusals from
-// the Server (already submitted, stale, rejected) are therefore nil: retrying
-// the same submission cannot change them, and the Server has already recorded
-// what it thinks.
+// An error return leaves the command pending, so the Runner tries again and, if
+// the condition never clears, the command's expiry fails the certificate naming
+// this Agent. A nil return acks the command. Terminal refusals from the Server
+// (already submitted, stale, rejected) are therefore nil: retrying cannot
+// change them, and the Server has already recorded what it thinks.
 package csr
 
 import (
@@ -27,9 +24,8 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 )
 
-// API is the slice of the Server wrapper this handler uses, narrowed so a test
-// can stand in for the Server. The real implementation is *serverapi.Client,
-// the Agent's single HTTP path.
+// API is the slice of the Server wrapper this handler uses, so a test can stand
+// in for the Server.
 type API interface {
 	CSRWork(ctx context.Context, token, certificateID string) (wire.CSRWork, error)
 	SubmitCSR(ctx context.Context, token, certificateID, csrPEM string) error
@@ -39,8 +35,7 @@ var _ API = (*serverapi.Client)(nil)
 
 // generateKey and loadKey are keystore.Generate and keystore.Load, indirected
 // only so tests can supply in-memory keys: both require root and a real
-// filesystem, which is their job, not this handler's. CSR building stays the
-// real keystore code either way.
+// filesystem. CSR building stays the real keystore code either way.
 var (
 	generateKey = keystore.Generate
 	loadKey     = keystore.Load
@@ -75,13 +70,12 @@ func New(api API, token string, logger *slog.Logger) commands.Handler {
 
 		key, err := keyFor(work)
 		if err != nil {
-			// Keystore refusals are environmental (permissions, inconsistent
-			// state, a named key this host does not hold) and worth retrying
-			// only until the command expires; the expiry is the clock on this
-			// wait by design, and it fails the certificate naming this Agent.
-			// A key that is not here is never replaced by a fresh one: the
-			// Server named it because a certificate is to be issued from it,
-			// and a CSR from any other key would be rejected anyway.
+			// Keystore refusals are environmental (permissions, inconsistent state, a
+			// named key this host does not hold) and worth retrying only until the
+			// command expires, which fails the certificate naming this Agent. A key that
+			// is not here is never replaced by a fresh one: the Server named it because
+			// a certificate is to be issued from it, and a CSR from any other key would
+			// be rejected anyway.
 			logger.Error("csr work cannot be answered", "certificate", cmd.RefID, "err", err)
 			return fmt.Errorf("csr: %w", err)
 		}
@@ -106,10 +100,9 @@ func New(api API, token string, logger *slog.Logger) commands.Handler {
 			logger.Warn("certificate no longer awaiting a csr; discarding command", "certificate", work.CertificateID)
 			return nil
 		case errors.As(err, &apiErr) && apiErr.Code == wire.CodeCSRMismatch:
-			// The Server rejected what this Agent built and failed the
-			// certificate at the rejection, naming this Agent. Retrying the
-			// same build cannot help, so the refusal is recorded here and the
-			// command acked.
+			// The Server rejected what this Agent built and failed the certificate,
+			// naming this Agent. Retrying the same build cannot help, so the command is
+			// acked.
 			logger.Error("server rejected the csr", "certificate", work.CertificateID, "err", err)
 			return nil
 		default:
