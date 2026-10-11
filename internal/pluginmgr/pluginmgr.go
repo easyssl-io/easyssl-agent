@@ -336,8 +336,8 @@ func discoverByExec(ctx context.Context, path string, logger *slog.Logger) (plug
 
 // --- catalog shapes ---------------------------------------------------------
 
-// CatalogArtifact and CatalogPlugin mirror what the Server publishes
-// (contracts/server-api.md). They live here rather than in the wire package
+// CatalogArtifact and CatalogPlugin mirror what the Server publishes.
+// They live here rather than in the wire package
 // because the Marketplace is a Server-to-anyone surface rather than part of the
 // Agent↔Server protocol: a browser reads the same JSON.
 type CatalogArtifact struct {
