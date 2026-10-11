@@ -1,10 +1,5 @@
 // Package identity manages the Agent's on-disk identity and state. A host runs
-// a single Agent, identified by its public Agent ID (`agnt-` + 14 base32
-// characters): the Server mints it at registration, this package persists it,
-// and every reinstall presents it, so re-running the installer updates the
-// existing Agent instead of registering a second one. It is the same
-// identifier the web console shows; nothing here mints anything. The config and
-// bearer token live directly under BaseDir.
+// a single Agent, whose config and bearer token live directly under BaseDir.
 package identity
 
 import (
@@ -20,13 +15,12 @@ import (
 // BaseDir holds the single Agent's config and token on this host.
 const BaseDir = "/etc/easyssl"
 
-// Config is the Agent's persisted registration state.
 // Config is what the host keeps of its registration, beside the token: which
 // Server to talk to, and which Organization it joined, the latter only so an
-// offline `status` or `uninstall` can say where this host belongs. No Agent
-// ID and no name: the Server is the only namer of Agents, both are answered
-// by any authenticated call, and a reactivation token carries the identity
-// a host resumes.
+// offline `status` or `uninstall` can say where this host belongs. No Agent ID
+// and no name: the Server is the only namer of Agents, both are answered by any
+// authenticated call, and a reactivation token carries the identity a host
+// resumes.
 type Config struct {
 	ServerURL string `json:"serverUrl"`
 	// OrganizationName and OrganizationID are the display name and public id
@@ -34,10 +28,9 @@ type Config struct {
 	// refreshed on every check-in. Optional so an older config still loads.
 	OrganizationName string `json:"organizationName,omitempty"`
 	OrganizationID   string `json:"organizationId,omitempty"`
-	// Language is the base code of the language this host's commands speak,
-	// chosen in the installer's language step or with `easyssl-agent
-	// language`. Only the host holds it: the Server is never told. Absent
-	// from a config written before the field existed, which reads as the
+	// Language is the base code of the language this host's commands speak, chosen
+	// in the installer's language step or with `easyssl-agent language`. Only the
+	// host holds it: the Server is never told. When absent it reads as the
 	// operating system locale's language, else English (msg.Resolve).
 	Language string `json:"language,omitempty"`
 }
@@ -57,7 +50,6 @@ func (c Config) Organization() string {
 	}
 }
 
-// ConfigPath and TokenPath locate the two state files.
 func ConfigPath() string { return filepath.Join(BaseDir, "config.json") }
 func TokenPath() string  { return filepath.Join(BaseDir, "agent.token") }
 
@@ -73,7 +65,6 @@ func SaveConfig(cfg Config) error {
 	return os.WriteFile(ConfigPath(), append(data, '\n'), 0o600)
 }
 
-// LoadConfig reads the host's config.
 func LoadConfig() (Config, error) {
 	var cfg Config
 	data, err := os.ReadFile(ConfigPath())
@@ -91,15 +82,13 @@ func SaveToken(token string) error {
 	return os.WriteFile(TokenPath(), []byte(token), 0o600)
 }
 
-// RemoveAll deletes this Agent's identity: its config and its token. It is
-// idempotent, so an already-absent file is not an error.
+// RemoveAll deletes this Agent's config and token. An already-absent file is
+// not an error.
 //
 // It deliberately does not remove BaseDir itself, because the keystore lives
 // under it and is the Agent's only copy of every private key it generated.
 // Uninstalling is too ordinary a command to destroy that, so the keys are left
-// behind and the caller says so. This function used to remove the whole
-// directory, which was correct only while nothing but the config and the token
-// lived there.
+// behind and the caller says so.
 func RemoveAll() error {
 	for _, path := range []string{ConfigPath(), TokenPath()} {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -109,7 +98,6 @@ func RemoveAll() error {
 	return nil
 }
 
-// LoadToken reads the host's bearer token.
 func LoadToken() (string, error) {
 	data, err := os.ReadFile(TokenPath())
 	if err != nil {
