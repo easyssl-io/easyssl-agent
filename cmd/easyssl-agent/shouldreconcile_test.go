@@ -6,10 +6,9 @@ import (
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-// The reconcile fetch is what actually delivers work, so skipping it is only
-// ever safe when the Server said there is nothing. The case that matters most
-// is the third: an Agent newer than its Server sees no count at all, and must
-// behave exactly as it did before the field existed.
+// Skipping the reconcile fetch is safe only when the Server said there is
+// nothing. The case that matters most is a Server that reports no count at all:
+// the Agent must still fetch.
 func TestShouldReconcile(t *testing.T) {
 	n := func(i int) *int { return &i }
 

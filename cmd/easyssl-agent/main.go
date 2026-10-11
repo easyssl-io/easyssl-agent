@@ -1,16 +1,7 @@
-// Command easyssl-agent is the easySSL Agent binary. Subcommands:
-//
-//	register --server <url> [--key <key>] [--name <name>] [--lang <code>]   interactive registration
-//	run                                                     the systemd service loop (periodic check-in)
-//	status [--json]                                         print local state + what the Server says
-//	uninstall [--yes]                                       unregister and remove the Agent
-//	plugin install <name> [--json]                          fetch a plugin from the Marketplace and report it
-//	plugin list [--json]                                    what this host has installed
-//	language [<code>]                                       print or change the language the commands speak
-//
-// A host runs one Agent, so the commands need no instance selector. The CLI
-// writes human output to stdout, JSON where asked, and errors to stderr;
-// connections are only ever made from Agent to Server, never the reverse.
+// Command easyssl-agent is the easySSL Agent binary. A host runs one Agent, so
+// the commands need no instance selector. The CLI writes human output to
+// stdout, JSON where asked, and errors to stderr; connections are only ever
+// made from Agent to Server, never the reverse.
 //
 // What a command says to a person is in the host's language (internal/msg).
 // JSON output, the service's logs and everything sent to the Server are the
@@ -98,14 +89,13 @@ func usage() {
 	fmt.Fprintln(os.Stderr, msg.T("main.usage", "usage: easyssl-agent <register|run|status|uninstall|plugin|language> [flags]"))
 }
 
-// commandLanguage is the language this run speaks: EASYSSL_LANG when it names
-// a supported one, else the language saved on this host, else the operating
-// system locale's, else English. The installer starts from the same answer
-// and then settles its own in its language step.
+// commandLanguage is the language this run speaks: EASYSSL_LANG when it names a
+// supported one, else the language saved on this host, else the operating
+// system locale's, else English.
 //
-// A configuration that cannot be read is a host with no saved language, not
-// a failure: nothing may be registered yet, or the caller may not be root, in
-// which case the refusal that follows is still said in the locale's language.
+// A configuration that cannot be read counts as no saved language, not a
+// failure: nothing may be registered yet, or the caller may not be root, and
+// the refusal that follows is still said in the locale's language.
 func commandLanguage() string {
 	saved := ""
 	if cfg, err := identity.LoadConfig(); err == nil {
@@ -115,9 +105,9 @@ func commandLanguage() string {
 	return lang
 }
 
-// newFlagSet is flag.NewFlagSet with the heading of `--help` as a message.
-// What the flag package itself writes under it, the default values and its
-// own parse errors, stays in English.
+// newFlagSet words the heading of `--help` as a message. What the flag package
+// itself writes under it, the default values and its own parse errors, stays in
+// English.
 func newFlagSet(name string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
 	fs.Usage = func() {
@@ -127,11 +117,10 @@ func newFlagSet(name string) *flag.FlagSet {
 	return fs
 }
 
-// rootPreflight refuses every operational command before it parses flags,
-// reads a path, or contacts the Server. This slice keeps all Agent state under
-// a root-only directory, so waiting for the filesystem error both leaks which
-// particular file was reached first and gives otherwise-equivalent commands
-// inconsistent failures.
+// rootPreflight refuses every operational command before it parses flags, reads
+// a path, or contacts the Server. All Agent state is under a root-only
+// directory, so waiting for the filesystem error would leak which file was
+// reached first and give equivalent commands inconsistent failures.
 func rootPreflight(args []string, euid int) error {
 	cmd := rootCommand(args)
 	if euid == 0 || cmd == "" {
@@ -146,9 +135,8 @@ func rootPreflight(args []string, euid int) error {
 }
 
 // rootCommand returns only recognized commands that can read or change Agent
-// state. Keeping the inventory here makes the early gate reviewable as one
-// complete list; help, incomplete groups, and unknown commands retain their
-// normal usage errors.
+// state, so the early gate is reviewable as one complete list. Help, incomplete
+// groups and unknown commands keep their normal usage errors.
 func rootCommand(args []string) string {
 	if len(args) == 0 {
 		return ""
@@ -196,8 +184,7 @@ func cmdUninstall(ctx context.Context, args []string) error {
 	return flow.Uninstall(ctx, *yes)
 }
 
-// cmdLanguage prints the language saved on this host, or saves another. The
-// installer's language step is the other way to change it.
+// cmdLanguage prints the language saved on this host, or saves another.
 func cmdLanguage(args []string) error {
 	fs := newFlagSet("language")
 	_ = fs.Parse(args)
@@ -246,9 +233,9 @@ func cmdRun(ctx context.Context, args []string) error {
 	if err != nil {
 		return stateError("run", err)
 	}
-	// From here on this process is the service, and what it writes is its log
-	// and its reports to the Server, which read the same on every host: only
-	// the refusals to start, above, are said in the host's language.
+	// From here on this process is the service: its log and its reports to the
+	// Server read the same on every host. Only the refusals to start, above, are
+	// said in the host's language.
 	msg.SetLanguage(l10n.English)
 
 	logger := agentLogger()
@@ -272,19 +259,17 @@ func cmdRun(ctx context.Context, args []string) error {
 	sdnotify.Ready()
 	sdnotify.Status("Checking in.")
 
-	// Set once when the token stops being accepted, so the message is written
-	// at error level the first time and rarely after that: the condition does
-	// not change on its own, and a line a minute would bury everything else in
-	// the journal.
+	// Set once when the token stops being accepted, so the message is written at
+	// error level the first time and rarely after that: the condition does not
+	// change on its own, and a line a minute would bury the journal.
 	removedSince := time.Time{}
 
 	poll := 60
 	for {
-		// The whole inventory, every check-in, so the fingerprint on the wire is
-		// always over what the host is now; the document itself goes only when
-		// the Server says it lacks it. A contributor that could not be read
-		// leaves the fingerprint empty, so the Server keeps its last document
-		// rather than receiving one with a hole where the failure was.
+		// The fingerprint on the wire is always over the whole current inventory; the
+		// document itself goes only when the Server says it lacks it. A contributor
+		// that could not be read leaves the fingerprint empty, so the Server keeps
+		// its last document rather than one with a hole.
 		inv, invErr := inventory.Collect(ctx, plugins)
 		fingerprint := ""
 		if invErr != nil {
@@ -296,10 +281,8 @@ func cmdRun(ctx context.Context, args []string) error {
 		resp, err := api.Checkin(ctx, token, flow.CheckinBody(fingerprint))
 		if err == nil {
 			if !removedSince.IsZero() {
-				// Nothing recovers a revoked token by itself, so this only
-				// happens if the host was registered again while the service
-				// ran. Say so, since the last thing the log said was the
-				// opposite.
+				// Only a new registration while the service ran recovers a revoked token.
+				// Say so, since the last thing the log said was the opposite.
 				logger.Info("token accepted again; resuming work")
 				sdnotify.Status("Checking in.")
 				removedSince = time.Time{}
@@ -335,25 +318,23 @@ func cmdRun(ctx context.Context, args []string) error {
 				}
 			}
 			if resp.Status == wire.StatusActive {
-				// Only now: every push-channel route refuses an Agent that is
-				// still awaiting authorization, exactly as the check-in does,
-				// so subscribing earlier would just loop on 401s.
+				// Only now: every push-channel route refuses an Agent still awaiting
+				// authorization, as the check-in does, so subscribing earlier would loop on
+				// 401s.
 				streaming.Do(func() { go streamCommands(ctx, api, token, runner, logger) })
 				if shouldReconcile(resp) {
 					runner.Reconcile(ctx)
 				}
 			}
 		} else if isUnknownToken(err) {
-			// Deactivated or removed in the web console. The service keeps
-			// running and stops doing work: this Agent belongs to the host, not
-			// to the Server, so a decision taken in the web console does not
-			// stop a unit here, remove a file, or leave a failed unit in
-			// `systemctl --failed` for a host that is behaving correctly.
-			// Uninstalling stays the operator's action, and the message names
-			// every way out: the reactivation command the Agent's page in the
-			// web console generates, which makes this host the same Agent
-			// again; the installer with the registration key, which makes it a
-			// new one; or uninstalling.
+			// Deactivated or removed in the web console. The service keeps running and
+			// stops doing work: this Agent belongs to the host, so a decision taken in
+			// the web console does not stop a unit, remove a file, or leave a failed
+			// unit in `systemctl --failed` on a host that is behaving correctly.
+			// Uninstalling stays the operator's action, and the message names every way
+			// out: the reactivation command from the Agent's page in the web console
+			// (the same Agent again), the installer with the registration key (a new
+			// one), or uninstalling.
 			if removedSince.IsZero() {
 				removedSince = time.Now()
 				logger.Error("this host is no longer registered with the Server: the Agent was deactivated or removed, so its token is refused",
@@ -381,60 +362,52 @@ func cmdRun(ctx context.Context, args []string) error {
 	}
 }
 
-// streamCommands keeps the event stream open for as long as the service runs,
-// reconciling on connect and on every command the Server pushes.
-//
-// A dropped stream is ordinary, not a failure: networks and proxies close idle
-// connections, and the check-in loop keeps delivering commands the whole time.
-// So this reconnects quietly and never ends the service. The one thing it will
-// not retry is a rejected credential, which no amount of waiting repairs.
-// shouldReconcile decides whether a check-in has to be followed by the
-// reconcile fetch.
-//
-// A reported zero is the Server saying it has nothing outstanding for this
-// host, and is the only case worth skipping. On a fleet that is mostly idle
-// that removes one request per Agent per cadence whose answer was an empty
-// list.
-//
-// nil is not zero. It is a Server that does not report the count, which is
-// every Server older than the field, and it means fetch exactly as before.
-// Reading a missing field as zero would make this Agent stop fetching commands
-// from an older Server and never notice, which is the one outcome this cannot
-// have.
-//
-// The count may be stale by the time it is read, because a command can be
-// created immediately after it was taken. That costs at most one cadence: the
-// event stream nudges, and the next check-in counts again. Nothing here
-// concludes that a command exists, only that none did, so a stale count delays
-// work rather than inventing or losing it.
-// agentLogger is what this Agent writes with: stderr, which systemd captures
-// into the journal, at the level EASYSSL_LOG_LEVEL asks for. The same function
-// serves the service and the subcommands an operator runs by hand, so
-// `easyssl-agent plugin install` shows the same Plugin exchange the service
-// would log rather than a second, differently-configured view of it.
+// agentLogger writes to stderr, which systemd captures into the journal, at the
+// level EASYSSL_LOG_LEVEL asks for. The service and the subcommands an operator
+// runs by hand share it, so `easyssl-agent plugin install` shows the same
+// Plugin exchange the service would log.
 //
 // The level and the format are environment variables rather than flags so that
 // turning debug on needs no edit to the shipped unit: `systemctl edit
-// easyssl-agent`, one Environment= line, restart. Nothing about the Agent's
-// behavior changes with either, only how much of what it already does is
-// written down and in what shape.
+// easyssl-agent`, one Environment= line, restart. Neither changes the Agent's
+// behavior, only how much is written and in what shape.
 func agentLogger() *slog.Logger {
 	return slog.New(plugintrace.Handler(os.Stderr,
 		os.Getenv(plugintrace.LevelEnv), os.Getenv(plugintrace.FormatEnv)))
 }
 
+// shouldReconcile decides whether a check-in has to be followed by the
+// reconcile fetch. Only a reported zero skips it: the Server has nothing
+// outstanding for this host, which on a mostly idle fleet saves one request
+// per Agent per cadence.
+//
+// nil is not zero. It is an older Server that does not report the count, and
+// reading it as zero would make this Agent stop fetching commands from that
+// Server and never notice.
+//
+// The count may be stale, because a command can be created right after it was
+// taken. That costs at most one cadence: the event stream nudges, and the next
+// check-in counts again. A stale count delays work rather than inventing or
+// losing it.
 func shouldReconcile(resp wire.CheckinResponse) bool {
 	return resp.PendingCommands == nil || *resp.PendingCommands > 0
 }
 
+// streamCommands keeps the event stream open for as long as the service runs,
+// reconciling on connect and on every command the Server pushes.
+//
+// A dropped stream is ordinary: networks and proxies close idle connections,
+// and the check-in loop keeps delivering commands meanwhile. So this
+// reconnects quietly and never ends the service. The one thing it does not
+// retry is a rejected credential, which no amount of waiting repairs.
 func streamCommands(ctx context.Context, api *serverapi.Client, token string, runner *commands.Runner, logger *slog.Logger) {
 	const (
 		minBackoff = 2 * time.Second
 		maxBackoff = 5 * time.Minute
-		// A stream that stayed up this long proves the Server is reachable, so
-		// the next drop starts over at the short delay. Without it the delay
-		// only ever grows: an Agent up for weeks would wait the maximum after a
-		// routine proxy timeout, having been connected the entire time.
+		// A stream that stayed up this long proves the Server is reachable, so the
+		// next drop starts over at the short delay. Otherwise the delay only grows,
+		// and an Agent connected for weeks would wait the maximum after a routine
+		// proxy timeout.
 		healthyFor = time.Minute
 	)
 	backoff := minBackoff
@@ -448,9 +421,8 @@ func streamCommands(ctx context.Context, api *serverapi.Client, token string, ru
 			connectedAt = time.Now()
 			logger.Info("command stream connected")
 		}, func() {
-			// The event is a nudge and carries nothing. Reconcile reads
-			// authoritative state, which also picks up anything this Agent
-			// missed while the stream was down.
+			// The event is a nudge and carries nothing; Reconcile reads authoritative
+			// state.
 			runner.Reconcile(ctx)
 		})
 		if ctx.Err() != nil {
@@ -485,11 +457,10 @@ func jitter(d time.Duration) time.Duration {
 	return d/2 + time.Duration(rand.Int64N(int64(d/2)+1))
 }
 
-// stateError explains why the Agent's on-disk state could not be read. The two
-// common causes have obvious fixes, but the raw "permission denied" on
-// config.json sends people hunting for a filesystem problem instead: the state
-// is deliberately root-only (0600 under a 0700 directory) so an unprivileged
-// process cannot read the bearer token.
+// stateError explains why the Agent's on-disk state could not be read. The raw
+// "permission denied" on config.json sends people hunting for a filesystem
+// problem, when the state is deliberately root-only (0600 under a 0700
+// directory) so an unprivileged process cannot read the bearer token.
 func stateError(cmd string, err error) error {
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -511,11 +482,10 @@ func cmdStatus(args []string) error {
 	}
 	token, tokenErr := identity.LoadToken()
 
-	// Whether the Agent is still registered is not a local fact: the Server
-	// owns it and can drop an Agent without telling the host, so a stored token
-	// proves only that one was issued once. Ask the Server. This is a read
-	// (GET), not a check-in, so running status never refreshes last-seen and
-	// therefore cannot make a stopped Agent look alive in the web console.
+	// Whether the Agent is still registered is the Server's to say: it can drop an
+	// Agent without telling the host, so a stored token proves only that one was
+	// issued once. This is a GET, not a check-in, so status never refreshes
+	// last-seen and cannot make a stopped Agent look alive in the web console.
 	stateCode, stateDetail, reg := serverState(cfg, token, tokenErr)
 	serviceName, _, _ := service.Describe()
 
@@ -559,17 +529,15 @@ func cmdStatus(args []string) error {
 	return nil
 }
 
-// serverState asks the Server what this Agent actually is right now, which a
-// host cannot tell from its own files: it has no way to know it was removed
-// from the web console. Read-only, so status stays free of side effects.
+// serverState asks the Server what this Agent is right now, which a host cannot
+// tell from its own files: it has no way to know it was removed in the web
+// console. The read also carries the Agent's id and name, the only place the
+// host learns them. Read-only, so status has no side effects.
 //
 // It returns a short stable code for machines and a sentence for people. The
-// wire calls an authorized Agent "active", which printed next to a stopped
-// systemd unit reads as if the Agent were running, when it only means the
-// operator admitted it; the web console says "Authorized" and so does this.
-// serverState asks the Server what it considers this host to be. The status
-// read carries the Agent's id and name too, which is the only place the host
-// learns them.
+// wire calls an authorized Agent "active", which next to a stopped systemd unit
+// reads as if the Agent were running, so this says "Authorized" as the web
+// console does.
 func serverState(cfg identity.Config, token string, tokenErr error) (code, detail string, reg wire.RegistrationStatus) {
 	if tokenErr != nil {
 		return "not-registered", msg.T("status.state.no_token", "not registered (no local token)"), reg
@@ -637,18 +605,15 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 		return stateError("plugin install", err)
 	}
 
-	// Said before anything is installed, because this is the moment the
-	// authorization is given and it grants more than it looks like: a Plugin
-	// runs with this Agent's privileges, which is root wherever the Agent is
-	// a system service, and there is no boundary between the two past the
-	// digest check. Skipped for --json, which is a machine's call,
-	// and for --yes, which is the person saying they know.
+	// Said before anything is installed, because this is when the authorization is
+	// given and it grants more than it looks like: a Plugin runs with this Agent's
+	// privileges, root wherever the Agent is a system service, with no boundary
+	// between the two past the digest check. Skipped for --json, a machine's call,
+	// and for --yes, the person saying they know.
 	if !*asJSON && !*yes {
-		// One line per paragraph, wrapped by the terminal rather than here. A
-		// fixed width is a guess about a window this program cannot see: on a
-		// narrower one every line is folded again a few words from its end, and
-		// the result reads as a ragged column with words split across it, which
-		// is the opposite of what wrapping the text was meant to achieve.
+		// One line per paragraph, wrapped by the terminal. A fixed width is a guess
+		// about a window this program cannot see: on a narrower one every line folds
+		// again a few words from its end.
 		fmt.Fprintln(os.Stderr, msg.T("plugin.install.warning",
 			"Installing {plugins} on this host.\n\n"+
 				"A Plugin runs with this Agent's privileges, which is root wherever the "+
@@ -676,19 +641,17 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 	for _, name := range names {
 		inst, ierr := mgr.Install(ctx, name, runtime.GOOS, runtime.GOARCH)
 		if ierr != nil {
-			// Whatever was installed before this one stays installed and is
-			// reported, so a partial run says what it did rather than only
-			// what it could not do.
+			// Whatever was installed before this one stays installed and is reported, so
+			// a partial run says what it did.
 			installErr = ierr
 			break
 		}
 		out = append(out, inst)
 	}
-	// The Server learns of the install from the host inventory, and the
-	// service would send it on its next check-in; sending it from here makes
-	// the web console current within one round trip of the command rather than
-	// one cadence. Best-effort: a failure leaves the service's next check-in
-	// disagreeing with the Server, which then asks for the document.
+	// The service would send the inventory on its next check-in; sending it here
+	// makes the web console current within one round trip rather than one cadence.
+	// Best-effort: after a failure the service's next check-in disagrees with the
+	// Server, which then asks for the document.
 	var reportErr error
 	if len(out) > 0 {
 		inv, err := inventory.Collect(ctx, mgr)
@@ -712,9 +675,9 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 }
 
 // printInstalled prints each installed Plugin as labeled lines. Each line is
-// one message, its label included, so a translation keeps the values in one
-// column with labels of its own length. reported is the last of them, already
-// worded by the caller.
+// one message, label included, so a translation keeps the values in one column
+// with labels of its own length. reported is the last line, already worded by
+// the caller.
 func printInstalled(out []pluginmgr.Installed, reported string) {
 	for _, inst := range out {
 		fmt.Println(msg.T("plugin.install.done.installed", "installed  {id} v{version}", "id", inst.ID, "version", inst.Version))
