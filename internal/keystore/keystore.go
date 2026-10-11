@@ -2,29 +2,26 @@
 //
 // Keys are stored unencrypted. Filesystem permissions are the whole of their
 // protection, so anyone who is root on this host, or who holds a backup or disk
-// image of it, holds the keys. That limit is stated rather than left implied by
-// the word "keystore": encryption in easySSL exists to hand the Server a copy it
-// cannot read, and never to protect local disk, because an Agent renews and
-// deploys unattended and any key that unlocked its own keystore would have to
-// sit on the same disk.
+// image of it, holds the keys. Encryption is never used to protect local disk,
+// because an Agent renews and deploys unattended and any key that unlocked its
+// keystore would have to sit on the same disk.
 //
-// Nothing here removes key material. There is no Delete, no Purge and no
-// pruning, so the keystore only grows and reclaiming it is an operator's manual
-// act. Deleting a key is the one operation with no recovery, which is why the
-// code to do it is absent rather than guarded by a flag.
+// Nothing here removes key material: no Delete, no Purge and no pruning, so the
+// keystore only grows and reclaiming it is an operator's manual act. Deleting a
+// key has no recovery, which is why the code to do it is absent rather than
+// guarded by a flag.
 //
-// A key is named by its own public-key fingerprint, and that is the whole of
-// what the keystore holds:
+// A key is named by its own public-key fingerprint, and that is all the
+// keystore holds:
 //
 //	<base>/keys/<fingerprint>.key    PKCS#8 PEM, any wire.KeyTypes type
 //
 // Which certificate uses which key is the Server's record, taken from the
-// public key of each CSR it accepts, and every command that touches a key
-// names it by fingerprint. A copy of that link on the host would be Server
-// state cached where it goes stale. Naming the key after itself is what lets
-// one key serve several certificates without the secret being copied, and it
-// makes the directory self-checking, since a key file's name is derivable from
-// its contents.
+// public key of each CSR it accepts, and every command that touches a key names
+// it by fingerprint. A copy of that link on the host would go stale. Naming the
+// key after itself lets one key serve several certificates without the secret
+// being copied, and makes the directory self-checking, since a key file's name
+// is derivable from its contents.
 package keystore
 
 import (
@@ -55,8 +52,7 @@ var baseDir = identity.BaseDir
 
 // dirMode and fileMode are the whole of the at-rest protection, so they are
 // named once here and passed explicitly wherever something is created. Nothing
-// in this package relies on a default mode from elsewhere: a permission a
-// requirement depends on should be visible in the code that applies it.
+// in this package relies on a default mode from elsewhere.
 const (
 	dirMode  os.FileMode = 0o700
 	fileMode os.FileMode = 0o600
@@ -64,10 +60,8 @@ const (
 
 func keysDir() string { return filepath.Join(baseDir, "keys") }
 
-// log is where this package writes. SetLogger points it at the Agent's own
-// handler so keystore lines match every other line the service emits; until
-// then it is the default, which keeps a package used before wiring from being
-// silent.
+// log is where this package writes. Until SetLogger points it at the Agent's
+// own handler it is the default, so a package used before wiring is not silent.
 var log = slog.Default()
 
 // SetLogger routes this package's output through the caller's logger.
@@ -79,18 +73,16 @@ func SetLogger(l *slog.Logger) {
 
 func logger() *slog.Logger { return log }
 
-// requireRoot refuses a caller that cannot own what it is about to write.
-//
-// The permissions in this package are the whole of the at-rest protection, and
-// they only mean anything if root owns the files: a key written by some other
-// user is 0600 to that user, which is not the guarantee documented to operators.
-// Checking here rather than only in the install and uninstall commands matters
-// because the long-running service does not check, and that is the path the
-// Server's requests arrive on.
 // euid is os.Geteuid, indirected only so the tests can exercise both sides of
 // the check without running as root.
 var euid = os.Geteuid
 
+// requireRoot refuses a caller that cannot own what it is about to write. The
+// permissions here only mean anything if root owns the files: a key written by
+// another user is 0600 to that user, which is not the guarantee documented to
+// operators. Checked here, not only in the install and uninstall commands,
+// because the long-running service does not check, and that is the path the
+// Server's requests arrive on.
 func requireRoot() error {
 	if euid() != 0 {
 		return msg.Err.T("keystore.not_root", "keystore: must run as root: private keys are stored root-only, and a key written by another user would not have the protection this Agent documents")
@@ -101,14 +93,13 @@ func requireRoot() error {
 // Generate creates a fresh key, stores it, and returns it with its fingerprint,
 // which is the name the Server will know it by.
 //
-// Nothing here is idempotent per certificate, and nothing here knows what a
-// certificate is: a request that names no key gets a new one on every run. An
-// Agent that generated a key, died before the CSR reached the Server, and is
-// handed the same request again therefore generates afresh, and the first key
-// is an orphan. That is accepted: nothing was signed with it, it costs one
-// file on a host that keeps every key anyway, and the host inventory lists it
-// as a key no certificate names. Once a CSR is stored the Server names its key
-// on every re-run, so a key that was used is never generated past.
+// Nothing here knows what a certificate is: a request that names no key gets a
+// new one on every run. An Agent that generated a key, died before the CSR
+// reached the Server, and is handed the same request again generates afresh,
+// and the first key is an orphan. That is accepted: nothing was signed with it,
+// it costs one file, and the host inventory lists it as a key no certificate
+// names. Once a CSR is stored the Server names its key on every re-run, so a
+// key that was used is never generated past.
 func Generate(keyType string) (string, crypto.Signer, error) {
 	if err := requireRoot(); err != nil {
 		return "", nil, err
@@ -135,7 +126,6 @@ func Generate(keyType string) (string, crypto.Signer, error) {
 	return fp, key, nil
 }
 
-// newKey generates a key of one of wire.KeyTypes.
 func newKey(keyType string) (crypto.Signer, error) {
 	switch keyType {
 	case wire.KeyTypeECP256:
@@ -164,16 +154,14 @@ func signatureAlgorithm(key crypto.Signer) x509.SignatureAlgorithm {
 	return x509.SHA256WithRSA
 }
 
-// CSR builds a certificate signing request from key, for the domains it is
-// given. It never chooses them: the caller is told what to sign.
+// CSR builds a certificate signing request from key for the domains the caller
+// was told to sign. It is built on each call and never stored, so it cannot
+// come to disagree with its key.
 //
-// Built on each call and never stored, so it cannot come to disagree with the
-// key it belongs to.
-//
-// No Subject Common Name is set, deliberately. An ACME client reads the names to
-// order from the CSR, taking the Common Name first and then every SAN, so a
-// Common Name is either a duplicate of a SAN or a name nobody asked for, and the
-// second of those would put an unrequested name on the certificate.
+// No Subject Common Name is set, deliberately. An ACME client reads the names
+// to order from the CSR, taking the Common Name first and then every SAN, so a
+// Common Name is either a duplicate of a SAN or an unrequested name on the
+// certificate.
 func CSR(key crypto.Signer, domains []string) ([]byte, error) {
 	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
 		DNSNames:           domains,
@@ -210,10 +198,9 @@ func Count() (int, error) {
 // List reports every key this host holds, by its public half, for the host
 // inventory: fingerprint, algorithm and when the file was created. Never the
 // key. A file that does not parse or whose content does not match its name is
-// logged and left out rather than listed as usable, since the inventory is
-// what the Server offers for reuse; a directory that cannot be read at all is
-// an error, so the caller sends no inventory rather than one saying the host
-// holds nothing.
+// logged and left out, since the inventory is what the Server offers for reuse.
+// A directory that cannot be read at all is an error, so the caller sends no
+// inventory rather than one saying the host holds nothing.
 func List() ([]wire.KeyInfo, error) {
 	if err := requireRoot(); err != nil {
 		return nil, err
@@ -247,14 +234,13 @@ func List() ([]wire.KeyInfo, error) {
 	return keys, nil
 }
 
-// loadKey reads the key with the given fingerprint and checks that it is in fact
-// that key.
+// loadKey reads the key with the given fingerprint and checks that it is in
+// fact that key.
 //
 // A missing file is ErrNoKey and never a reason to generate a replacement.
 // Nothing in this package removes a key, so the file is absent because
-// something outside it did, or because this host never held it, and either is
-// a fact to report: a key generated in its place would not match whatever the
-// Server named it for.
+// something outside did, or because this host never held it, and a key
+// generated in its place would not match whatever the Server named it for.
 func loadKey(fp string) (crypto.Signer, error) {
 	if err := validateKeyID(fp); err != nil {
 		return nil, err
@@ -290,8 +276,8 @@ func loadKey(fp string) (crypto.Signer, error) {
 }
 
 // fingerprint is a key's name on disk: the SHA-256 of its DER
-// SubjectPublicKeyInfo, which is the standard public-key pin, is derivable from
-// the file, and is public, so the Server can record which key a certificate uses
+// SubjectPublicKeyInfo, the standard public-key pin. It is derivable from the
+// file and public, so the Server can record which key a certificate uses
 // without ever seeing key material.
 func fingerprint(pub crypto.PublicKey) (string, error) {
 	der, err := x509.MarshalPKIXPublicKey(pub)
@@ -305,12 +291,11 @@ func fingerprint(pub crypto.PublicKey) (string, error) {
 // writeFile puts data at dir/name so that a reader sees either nothing or a
 // complete file, and so that a crash cannot lose what a CSR was built from.
 //
-// The temporary file is created inside the destination directory, and at its
-// final permissions rather than adjusted afterwards, which would leave a window
-// in which the file is readable by others. It is opened with O_EXCL under a
-// random name, so it cannot collide with or reuse anything already there. Both
-// syncs are required rather than cautious: the rename is what makes the write
-// atomic, and the two flushes are what make it survive a power loss.
+// The temporary file is created inside the destination directory at its final
+// permissions, because adjusting them afterwards would leave a window in which
+// the file is readable by others. It is opened with O_EXCL under a random name,
+// so it cannot collide with or reuse anything already there. The rename makes
+// the write atomic, and the two syncs make it survive a power loss.
 func writeFile(dir, name string, data []byte) error {
 	if err := mkdirAllSynced(dir); err != nil {
 		return err
@@ -343,16 +328,14 @@ func writeFile(dir, name string, data []byte) error {
 	return syncDir(dir)
 }
 
-// mkdirAllSynced creates dir, and makes every directory it had to create durable
-// by syncing the parent that now holds that entry.
+// mkdirAllSynced creates dir, and makes every directory it had to create
+// durable by syncing the parent that now holds that entry.
 //
 // Syncing a directory makes the entries inside it durable, not the directory
-// itself, so creating <base>/keys and then syncing only <base>/keys leaves the
-// "keys" entry in <base> unflushed. A power loss in that window can take the
-// whole directory while the record naming a key inside it survives, which is
-// the dangling reference the key-before-record ordering exists to prevent. That
-// window is narrow, since it is only the first write after an install, but it
-// is exactly the state this package refuses to repair.
+// itself, so creating <base>/keys and syncing only <base>/keys leaves the
+// "keys" entry in <base> unflushed. A power loss in that window, which is only
+// the first write after an install, can take the whole directory while the
+// record naming a key inside it survives.
 //
 // A directory that already exists needs nothing: its entry was made durable
 // when it was created, or it predates this Agent.
@@ -390,8 +373,8 @@ func syncDir(dir string) error {
 // request_csr or a Deployment, filepath.Join resolves ".." instead of refusing
 // it, and this process runs as root, so an unchecked value would let whoever
 // sent it choose which file is read as a private key. The exact shape is
-// enforced, not merely "no path characters", because a looser check invites
-// two spellings of one key, and the name on disk has exactly one.
+// enforced, not merely "no path characters", because a looser check invites two
+// spellings of one key, and the name on disk has exactly one.
 func validateKeyID(fp string) error {
 	if len(fp) != sha256.Size*2 {
 		return fmt.Errorf("keystore: key id %q is not a SHA-256 fingerprint", fp)
@@ -415,11 +398,10 @@ func lower(c byte) byte {
 	return c
 }
 
-// ErrNoKey reports that this host holds no key under the named fingerprint. It
-// is a distinct error because every caller has to answer it the same way,
-// by reporting rather than generating: the Server named that key because a
-// certificate was, or is to be, issued from it, and a key generated in its
-// place would match nothing.
+// ErrNoKey reports that this host holds no key under the named fingerprint.
+// Every caller answers it by reporting rather than generating: the Server named
+// that key because a certificate was, or is to be, issued from it, and a key
+// generated in its place would match nothing.
 var ErrNoKey = errors.New("keystore: this host holds no key under that fingerprint")
 
 // Load returns the key the Server named, or ErrNoKey when this host has none

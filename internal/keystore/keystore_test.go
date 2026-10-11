@@ -1,7 +1,6 @@
-// These tests are in the keystore package rather than beside it so they can
-// point baseDir at a temporary directory. They run unprivileged, which is the
-// one thing they cannot check: the files must also be root-owned, and only a run
-// on a real host can confirm that.
+// These tests are inside the keystore package so they can point baseDir at a
+// temporary directory. They run unprivileged, so they cannot check that the
+// files are root-owned; only a run on a real host can.
 package keystore
 
 import (
@@ -36,8 +35,8 @@ func generate(t *testing.T) (string, *ecdsa.PrivateKey) {
 }
 
 // withTempBase points the keystore at a directory this test owns, and reports
-// the process as root. These tests run unprivileged, so the check has to be
-// stood in for; TestNonRootIsRefused covers the other side of it.
+// the process as root, since these tests run unprivileged. TestNonRootIsRefused
+// covers the other side.
 func withTempBase(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -47,10 +46,9 @@ func withTempBase(t *testing.T) string {
 	return dir
 }
 
-// TestNonRootIsRefused: the permissions are the whole of the at-rest
-// protection, and they mean nothing unless root owns the files, since a key
-// written by another user is 0600 to that user. The service does not check
-// euid, so this is the only check on the path the Server's requests arrive on.
+// The permissions mean nothing unless root owns the files, since a key written
+// by another user is 0600 to that user. The service does not check euid, so
+// this is the only check on the path the Server's requests arrive on.
 func TestNonRootIsRefused(t *testing.T) {
 	base := withTempBase(t)
 	euid = func() int { return 1000 }
@@ -63,10 +61,9 @@ func TestNonRootIsRefused(t *testing.T) {
 	}
 }
 
-// TestLayoutAndPermissions: the permissions are the entire at-rest protection,
-// so they are asserted rather than assumed, and a key file's name is
-// checked against its own contents, which is what makes the directory
-// self-verifying.
+// The permissions are the entire at-rest protection, so they are asserted
+// rather than assumed, and a key file's name is checked against its own
+// contents, which is what makes the directory self-verifying.
 func TestLayoutAndPermissions(t *testing.T) {
 	base := withTempBase(t)
 
@@ -108,10 +105,10 @@ func TestLayoutAndPermissions(t *testing.T) {
 	}
 }
 
-// TestGenerateIsFreshEveryCall: the keystore knows nothing of certificates,
-// so it cannot return "the key for this one" and must not try. Two calls are
-// two keys, both kept, which is what makes a renewal's key fresh and an
-// interrupted request's first key an orphan rather than a silent reuse.
+// The keystore knows nothing of certificates, so it cannot return "the key for
+// this one" and must not try. Two calls are two keys, both kept, which makes a
+// renewal's key fresh and an interrupted request's first key an orphan rather
+// than a silent reuse.
 func TestGenerateIsFreshEveryCall(t *testing.T) {
 	base := withTempBase(t)
 
@@ -125,9 +122,9 @@ func TestGenerateIsFreshEveryCall(t *testing.T) {
 	}
 }
 
-// TestCSRMatchesStoredKey: a CSR that merely parses shows only that it is
-// internally consistent. What matters is that it belongs to the key on this
-// host, because a mismatch yields a certificate its own host cannot serve.
+// A CSR that merely parses is only internally consistent. It must belong to the
+// key on this host, because a mismatch yields a certificate its own host cannot
+// serve.
 func TestCSRMatchesStoredKey(t *testing.T) {
 	withTempBase(t)
 
@@ -163,9 +160,9 @@ func TestCSRMatchesStoredKey(t *testing.T) {
 	}
 }
 
-// TestMalformedIdentifierIsRefused: the fingerprint arrives from the Server
-// and filepath.Join resolves ".." rather than refusing it, so without the check
-// a Server could choose which file this root process reads as a private key.
+// The fingerprint arrives from the Server and filepath.Join resolves ".."
+// rather than refusing it, so without the check a Server could choose which
+// file this root process reads as a private key.
 func TestMalformedIdentifierIsRefused(t *testing.T) {
 	base := withTempBase(t)
 
@@ -201,10 +198,9 @@ func TestMalformedIdentifierIsRefused(t *testing.T) {
 	}
 }
 
-// TestInconsistentStateIsRefused covers the ways a named key can fail to be
-// what its name says. Each must be reported: every way of continuing would use
-// or create key material on an assumption already known to be false, and the
-// failure would otherwise be silent.
+// Each way a named key can fail to be what its name says must be reported:
+// continuing would use or create key material on an assumption already known to
+// be false, and the failure would otherwise be silent.
 func TestInconsistentStateIsRefused(t *testing.T) {
 	t.Run("named key that is absent", func(t *testing.T) {
 		base := withTempBase(t)
@@ -257,11 +253,9 @@ func TestInconsistentStateIsRefused(t *testing.T) {
 	})
 }
 
-// TestCreatesMissingDirectories: the first write after an install creates the
-// whole tree, several levels of it when the base does not exist either. Each
-// level must end up present and 0700, since a level that is missing or wrong is
-// how the durability and permission guarantees both fail on exactly the run
-// that matters most, the first one.
+// The first write after an install creates the whole tree, several levels when
+// the base does not exist either. Each level must end up present and 0700, or
+// the durability and permission guarantees both fail on the first run.
 func TestCreatesMissingDirectories(t *testing.T) {
 	root := t.TempDir()
 	oldBase, oldEuid := baseDir, euid
@@ -336,15 +330,12 @@ func countFiles(t *testing.T, dir string) int {
 	return n
 }
 
-// TestLoadReturnsTheNamedKeyAndRefusesWhenThereIsNone covers the read-out
-// path: Load is how a key leaves this package for a CSR or a Plugin, and it is
-// the one function here whose whole job is to hand private material to
-// another program. Three properties matter. It returns the key Generate stored
-// under that name, so a Deployment installs the key the certificate was issued
-// against. It reports ErrNoKey rather than generating, because a host that
-// never held the named key cannot be given one that matches an already-issued
-// certificate. And it refuses a non-root caller like every other entry point,
-// since the file permissions are the whole of the at-rest protection.
+// Load is how a key leaves this package for a CSR or a Plugin. It returns the
+// key Generate stored under that name, so a Deployment installs the key the
+// certificate was issued against. It reports ErrNoKey rather than generating,
+// because no generated key can match an already-issued certificate. And it
+// refuses a non-root caller like every other entry point, since the file
+// permissions are the whole of the at-rest protection.
 func TestLoadReturnsTheNamedKeyAndRefusesWhenThereIsNone(t *testing.T) {
 	withTempBase(t)
 
@@ -374,7 +365,6 @@ func TestLoadReturnsTheNamedKeyAndRefusesWhenThereIsNone(t *testing.T) {
 	}
 }
 
-// TestEncodePrivateKeyPEMRoundTrips covers the form the key is handed over in.
 // The Plugin receives this string and writes it where the Target needs it, so a
 // wrong encoding is a Deployment that installs an unusable key, and the failure
 // would surface on the host rather than here.
@@ -435,9 +425,9 @@ func TestListReportsUsableKeysOnly(t *testing.T) {
 	}
 }
 
-// TestEveryKeyTypeRoundTrips generates one key of each type, and checks that
-// the CSR carries a key of that type signed with the matching algorithm, that
-// Load reads it back as the same key, and that the inventory names its type.
+// Each key type's CSR carries a key of that type signed with the matching
+// algorithm, Load reads it back as the same key, and the inventory names its
+// type.
 func TestEveryKeyTypeRoundTrips(t *testing.T) {
 	withTempBase(t)
 	want := map[string]x509.SignatureAlgorithm{
