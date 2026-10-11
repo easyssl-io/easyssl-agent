@@ -1,10 +1,8 @@
-// Package commands runs the work the Server asks this Agent to do.
-//
-// The Server cannot reach in, so this Agent asks. It asks whenever the Server
-// nudges it over the event stream, and it asks on a timer regardless. The timer
-// is what guarantees the work happens; the nudge only makes it prompt. Every
-// path through here is built on that assumption, which is why nothing retries a
-// delivery or tracks whether a nudge arrived.
+// Package commands runs the work the Server asks this Agent to do. The Agent
+// asks for it whenever the Server nudges it over the event stream, and on a
+// timer regardless. The timer guarantees the work happens and the nudge only
+// makes it prompt, which is why nothing retries a delivery or tracks whether a
+// nudge arrived.
 package commands
 
 import (
@@ -20,8 +18,8 @@ import (
 // resource the command refers to, not here.
 type Handler func(ctx context.Context, cmd wire.Command) error
 
-// Fetcher is the subset of the Server API this needs, narrowed so a test can
-// drive the loop without a Server.
+// Fetcher is the subset of the Server API this needs, so a test can drive the
+// loop without a Server.
 type Fetcher interface {
 	PendingCommands(ctx context.Context, token string) ([]wire.Command, error)
 	AckCommand(ctx context.Context, token, commandID, status string) error
@@ -42,11 +40,9 @@ func NewRunner(api Fetcher, token string, logger *slog.Logger, handlers map[stri
 	return &Runner{api: api, token: token, logger: logger, handlers: handlers, running: map[string]bool{}}
 }
 
-// Reconcile fetches everything outstanding and works through it.
-//
-// Safe to call from anywhere, as often as you like: the event stream and the
-// poll both call it, frequently at the same moment. Commands already in flight
-// are skipped rather than started twice.
+// Reconcile fetches everything outstanding and works through it. The event
+// stream and the poll both call it, often at the same moment; commands already
+// in flight are skipped rather than started twice.
 func (r *Runner) Reconcile(ctx context.Context) {
 	cmds, err := r.api.PendingCommands(ctx, r.token)
 	if err != nil {
@@ -63,13 +59,11 @@ func (r *Runner) Reconcile(ctx context.Context) {
 	}
 }
 
-// runOne executes a single command and reports the outcome.
-//
-// The order matters and is the whole recovery story: whatever the handler does,
-// it records its result on the referenced resource itself, and only then is the
-// command acked here. An Agent that dies in between leaves the command
-// outstanding, so it comes back on the next fetch and runs again against work
-// already recorded. That is why a handler has to tolerate running twice.
+// runOne executes a single command and reports the outcome. The handler records
+// its result on the referenced resource and only then is the command acked. An
+// Agent that dies in between leaves the command outstanding, so it runs again
+// on the next fetch against work already recorded, which is why a handler has
+// to tolerate running twice.
 func (r *Runner) runOne(ctx context.Context, cmd wire.Command) {
 	if !r.claim(cmd.ID) {
 		return
@@ -78,10 +72,9 @@ func (r *Runner) runOne(ctx context.Context, cmd wire.Command) {
 
 	handler, ok := r.handlers[cmd.Type]
 	if !ok {
-		// Older than the Server. Say so rather than acking, which would report
-		// work as done that never happened, and rather than staying silent,
-		// which would leave the Server waiting. Other commands are unaffected
-		// and the stream stays open.
+		// Older than the Server. Say so rather than acking, which would report work
+		// that never happened, or staying silent, which would leave the Server
+		// waiting. Other commands are unaffected and the stream stays open.
 		r.logger.Warn("unsupported command type", "command", cmd.ID, "type", cmd.Type)
 		r.ack(ctx, cmd, wire.CommandStatusUnsupported)
 		return
@@ -91,9 +84,9 @@ func (r *Runner) runOne(ctx context.Context, cmd wire.Command) {
 		if ctx.Err() != nil {
 			return // shutting down: leave it outstanding, it will be handed back
 		}
-		// The attempt terminated. It failed, and that failure belongs to the
-		// referenced resource; from the command's point of view this Agent is
-		// finished with it, so it is acked rather than retried forever.
+		// The attempt ended in a failure that belongs to the referenced resource.
+		// This Agent is finished with the command, so it is acked rather than retried
+		// forever.
 		r.logger.Error("command failed", "command", cmd.ID, "type", cmd.Type, "err", err)
 	}
 	r.ack(ctx, cmd, wire.CommandStatusAcked)
