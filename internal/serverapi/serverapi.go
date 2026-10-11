@@ -1,22 +1,17 @@
 // Package serverapi is the Agent's HTTP wrapper, and where a Server call
 // belongs. Routing Server interactions through one place is what will let a
-// future audit mode record every request with no unaudited paths, so new Server
-// calls go here rather than into ad-hoc HTTP code.
+// future audit mode record every request, so new Server calls go here rather
+// than into ad-hoc HTTP code. Standard library only, so the Agent stays small
+// and auditable.
 //
-// It is not yet every call. pluginmgr.HTTPCatalog makes two kinds of request
-// without coming through here, fetching the Marketplace catalog and downloading
-// a Plugin artifact, issued from three call sites. Both of its construction
-// sites in cmd/easyssl-agent leave the HTTP field unset, so those requests run
-// on the process-wide http.DefaultClient and carry no timeout, and they would
-// go unrecorded. The wrapper cannot be described as complete until those three
-// call sites move here. Standard library only, so
-// the Agent stays small and auditable.
-//
-// Those three call sites now miss something else as well: the transport policy
-// in transport.go, which is what requires TLS and refuses a redirect that drops
-// it. They carry no bearer token, so the downgrade matters less there than it
-// does here, and a Plugin artifact is checked against the catalog's digest
-// afterwards. It is still one more reason for them to move.
+// It is not yet every call. pluginmgr.HTTPCatalog fetches the Marketplace
+// catalog and downloads Plugin artifacts without coming through here, from
+// three call sites. Both of its construction sites in cmd/easyssl-agent leave
+// the HTTP field unset, so those requests run on http.DefaultClient with no
+// timeout, would go unrecorded, and miss the transport policy in transport.go
+// that requires TLS and refuses a redirect that drops it. They carry no bearer
+// token, so the downgrade matters less there, and a Plugin artifact is checked
+// against the catalog's digest afterwards.
 package serverapi
 
 import (
@@ -34,15 +29,13 @@ import (
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-// Client talks to one easySSL Server base URL.
 type Client struct {
 	baseURL string
 	http    *http.Client
 }
 
 // New builds a Client for the given Server base URL (e.g. https://server:8080),
-// or fails if that URL is one this Agent must not talk to. CheckBaseURL in
-// transport.go says which those are and why; the check lives here, on the only
+// or fails if CheckBaseURL refuses it. The check lives here, on the only
 // constructor, so no caller can hold a Client that skipped it.
 func New(baseURL string) (*Client, error) {
 	if err := CheckBaseURL(baseURL); err != nil {
@@ -66,10 +59,10 @@ type APIError struct {
 	Message string
 }
 
-// Error words a refusal for a person. A code this Agent knows gets the
-// Agent's own message, which is the one that can be read in the host's
-// language; the Server's text is English whoever reads it, so it is shown
-// only for a code this Agent has no message for, as a newer Server may send.
+// Error words a refusal for a person. A code this Agent knows gets the Agent's
+// own message, which can be read in the host's language. The Server's text is
+// always English, so it is shown only for a code this Agent has no message for,
+// as a newer Server may send.
 func (e *APIError) Error() string {
 	switch e.Code {
 	case wire.CodeUnknownToken:
@@ -93,7 +86,6 @@ func (c *Client) Register(ctx context.Context, req wire.RegistrationRequest) (wi
 	return out, err
 }
 
-// Checkin performs an authenticated poll with the bearer token.
 func (c *Client) Checkin(ctx context.Context, token string, req wire.CheckinRequest) (wire.CheckinResponse, error) {
 	var out wire.CheckinResponse
 	err := c.do(ctx, http.MethodPost, wire.RouteCheckin, token, req, &out)
@@ -115,8 +107,8 @@ func (c *Client) ReportInventory(ctx context.Context, token string, inv wire.Inv
 	return c.do(ctx, http.MethodPut, wire.RouteAgentInventory, token, inv, nil)
 }
 
-// Unregister removes this Agent from its Organization, so an uninstalled host
-// disappears from the Server without the operator also removing it there.
+// Unregister deactivates this Agent on the Server, so an uninstalled host is no
+// longer expected there without the operator also acting there.
 func (c *Client) Unregister(ctx context.Context, token string) error {
 	return c.do(ctx, http.MethodDelete, wire.RouteRegistration, token, nil, nil)
 }
@@ -160,7 +152,7 @@ func (c *Client) do(ctx context.Context, method, path, token string, body, out a
 }
 
 // decodeAPIError turns a non-2xx response into an APIError, keeping the wire
-// error code when the body carried one so callers can branch on it.
+// error code when the body carried one.
 func decodeAPIError(res *http.Response) error {
 	apiErr := &APIError{Status: res.StatusCode}
 	var e wire.ErrorResponse
@@ -171,10 +163,9 @@ func decodeAPIError(res *http.Response) error {
 	return apiErr
 }
 
-// PendingCommands lists the commands the Server is still waiting for this
-// Agent to finish. This is what actually delivers work: the event stream below
-// only makes it prompt, so this runs on every poll whether or not a stream is
-// open.
+// PendingCommands lists the commands the Server is still waiting for this Agent
+// to finish. This is what delivers work: the event stream only makes it prompt,
+// so this runs on every poll whether or not a stream is open.
 func (c *Client) PendingCommands(ctx context.Context, token string) ([]wire.Command, error) {
 	var out wire.CommandsResponse
 	if err := c.do(ctx, http.MethodGet, wire.RouteCommands+"?status=pending", token, nil, &out); err != nil {
@@ -186,9 +177,9 @@ func (c *Client) PendingCommands(ctx context.Context, token string) ([]wire.Comm
 // AckCommand reports that this Agent has finished with a command: it acted
 // (however that turned out), or it does not recognize the type.
 //
-// Sent after any outcome has been recorded on the resource the command refers
-// to, never before. A repeat is fine and expected: an Agent that recorded an
-// outcome and then died is handed the command again and acks a second time.
+// Sent only after the outcome has been recorded on the resource the command
+// refers to. A repeat is expected: an Agent that recorded an outcome and then
+// died is handed the command again and acks a second time.
 func (c *Client) AckCommand(ctx context.Context, token, commandID, status string) error {
 	path := wire.RouteCommands + "/" + url.PathEscape(commandID) + "/ack"
 	return c.do(ctx, http.MethodPost, path, token, wire.AckRequest{Status: status}, nil)
@@ -196,15 +187,14 @@ func (c *Client) AckCommand(ctx context.Context, token, commandID, status string
 
 // SubscribeCommands opens the long-lived event stream and calls onCommand every
 // time the Server says something is waiting, until the context is canceled or
-// the stream drops. The event carries nothing, and could not usefully: what is
-// waiting is read over REST, which is also what delivers whatever arrived while
-// this Agent was disconnected. It returns nil when the stream simply ended, which is ordinary
-// rather than an error: the caller reconnects and keeps polling meanwhile.
+// the stream drops. The event carries nothing: what is waiting is read over
+// REST, which also delivers whatever arrived while this Agent was disconnected.
+// A stream that simply ended returns nil, since the caller reconnects and keeps
+// polling meanwhile.
 //
-// onConnect fires once the Server has accepted the stream. The caller cannot
-// infer that moment from the return value, which arrives only after the
-// connection is already over, so without this there is no way to tell a stream
-// that never opened from one that stayed up for hours.
+// onConnect fires once the Server has accepted the stream. The return value
+// arrives only after the connection is over, so without it the caller could not
+// tell a stream that never opened from one that stayed up for hours.
 //
 // Deliberately built on net/http and bufio rather than an SSE library. The
 // grammar this needs is two field names, and everything shipped to a host that
@@ -217,11 +207,10 @@ func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect 
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+token)
 
-	// No timeout on this one: the stream is meant to stay open, so the shared
-	// 30s client would sever it on schedule. Everything else about it matches,
-	// the redirect policy above all: this request carries the bearer token like
-	// any other, and a client built bare here would be the one path that
-	// followed a downgrade with it.
+	// No timeout: the stream is meant to stay open, and the shared 30s client
+	// would sever it. The redirect policy still applies, because this request
+	// carries the bearer token like any other, and a client built bare here would
+	// be the one path that followed a downgrade with it.
 	res, err := (&http.Client{CheckRedirect: noSchemeChange}).Do(req)
 	if err != nil {
 		return err
@@ -247,8 +236,7 @@ func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect 
 		case strings.HasPrefix(line, "event:"):
 			event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
-			// The line's content is not read. The event carries no body, and
-			// this arm exists because SSE dispatches an event only when a data
+			// The line's content is not read. SSE dispatches an event only when a data
 			// field arrives, so this is where a complete event lands.
 			if event != wire.EventCommand {
 				continue // unknown event name: ignore, same as an unknown command type
@@ -282,8 +270,8 @@ func (c *Client) SubmitCSR(ctx context.Context, token, certificateID, csrPEM str
 }
 
 // DeploymentWork reads what a deploy command refers to: the certificate, the
-// chain and the resolved settings. Never the private key — that is already on
-// this host, which is why only this Agent can carry the Deployment out.
+// chain and the resolved settings. Never the private key, which is already on
+// this host, and that is why only this Agent can carry the Deployment out.
 func (c *Client) DeploymentWork(ctx context.Context, token, deploymentID string) (wire.DeploymentWork, error) {
 	var out wire.DeploymentWork
 	err := c.do(ctx, http.MethodGet, "/api/v1/agent/deployments/"+deploymentID, token, nil, &out)

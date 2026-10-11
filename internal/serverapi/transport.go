@@ -10,37 +10,33 @@ import (
 )
 
 // Everything this Agent sends the Server is either a credential or something
-// only that Server should see: the Organization's registration key, the bearer
-// token that stands for this host from then on, and the private key material
-// of every Certificate it installs. TLS is what keeps all of it off the wire in
-// the clear, and nothing in this package weakens it — there is no tls.Config
-// here, so Go's defaults apply whole: the system root pool, hostname
-// verification, TLS 1.2 as the floor.
+// only that Server should see: the Organization's registration key and the bearer
+// token that stands for this host from then on. TLS keeps all of it off the wire in the clear,
+// and nothing in this package weakens it: there is no tls.Config here, so Go's
+// defaults apply whole (the system root pool, hostname verification, TLS 1.2 as
+// the floor).
 //
-// What the defaults do not do is insist on TLS at all. That is what this file
-// is for, and both halves matter because either one alone leaves the other
-// open: a base URL is checked once, and a redirect can change the scheme
-// afterwards.
+// What the defaults do not do is insist on TLS at all, which is what this file
+// is for. Both halves are needed: a base URL is checked once, and a redirect
+// can change the scheme afterwards.
 
 // CheckBaseURL rejects a Server base URL this Agent must not talk to.
 //
 // It is called by New, so no path can build a Client around a URL that was
-// never checked, including a hand-edited /etc/easyssl/agent.json. Registration
-// gets the same check for free, which is where it matters most: the check
-// happens before the Server issues a token, so a mistyped --server fails while
-// there is still nothing to leak.
+// never checked, a hand-edited configuration included. At registration the
+// check happens before the Server issues a token, so a mistyped --server fails
+// while there is still nothing to leak.
 //
 // http is allowed to a loopback host and nowhere else. A developer running a
 // Server on their own machine has no certificate for it and no attacker on the
-// path either, so requiring https there would only teach people to want a way
-// around it. Restricting it to loopback is what keeps that from becoming one: a
-// real host can never be reached this way, so the exception cannot be widened
-// by a typo or by copying a working command from a laptop to a server.
+// path, so requiring https there would only teach people to want a way around
+// it. Restricting it to loopback means a real host can never be reached this
+// way, so the exception cannot be widened by a typo or by copying a working
+// command from a laptop to a server.
 //
-// The name "localhost" is accepted alongside the literal addresses, because it
-// is how people actually write it and RFC 6761 reserves it for exactly this.
-// Resolving it elsewhere takes an edit to /etc/hosts or the resolver, both of
-// which need the root this Agent already runs as.
+// The name "localhost" is accepted alongside the literal addresses: RFC 6761
+// reserves it for this, and resolving it elsewhere takes an edit to /etc/hosts
+// or the resolver, both of which need the root this Agent already runs as.
 func CheckBaseURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
@@ -82,18 +78,15 @@ func isLoopback(host string) bool {
 // one the request started on.
 //
 // Go strips the Authorization header when a redirect crosses to an unrelated
-// host, which is the case the standard library guards. It does not look at the
-// scheme: shouldCopyHeaderOnRedirect compares hostnames only, so
-// https://server → http://server is same-host, keeps the bearer token, and
-// sends it in the clear. That is the hole this closes, and it is worth closing
-// even though it takes a Server that is already compromised or a network
-// attacker who can inject a 302 — those are precisely the two the encryption is
-// there for.
+// host, but it does not look at the scheme: shouldCopyHeaderOnRedirect compares
+// hostnames only, so https://server → http://server is same-host, keeps the
+// bearer token, and sends it in the clear. Exploiting that takes a compromised
+// Server or a network attacker who can inject a 302, which are precisely the
+// two the encryption is there for.
 //
-// A redirect the other way, http → https, is refused too. Not because it is
-// dangerous, but because it means the configured URL is wrong: silently
-// upgrading would leave the first request of every future call still going out
-// in the clear, with nothing on screen ever saying so.
+// A redirect the other way, http → https, is refused too, because it means the
+// configured URL is wrong: silently upgrading would leave the first request of
+// every future call going out in the clear, with nothing on screen saying so.
 func noSchemeChange(req *http.Request, via []*http.Request) error {
 	if len(via) == 0 {
 		return nil
