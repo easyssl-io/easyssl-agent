@@ -1,24 +1,23 @@
 // Package service installs and manages the Agent's one long-running service
 // under whichever init system the host runs: systemd, OpenRC, runit, sysvinit
-// or BusyBox init. A host runs one Agent, so re-running the installer refreshes
-// the one service and restarts it onto the updated binary rather than adding a
-// second. Root-only.
+// or BusyBox init. Re-running the installer refreshes the one service and
+// restarts it onto the updated binary rather than adding a second. Root-only.
 //
-// The init system is detected, never asked for: the one running as PID 1 is
-// the one that will start the Agent at the next boot, and an operator naming
-// another would install a service nothing runs. A host running none of the
-// five is refused with the command to run under whatever supervises it.
+// The init system is detected, never asked for: the one running as PID 1 is the
+// one that will start the Agent at the next boot, and an operator naming
+// another would install a service nothing runs. A host running none of the five
+// is refused with the command to run under whatever supervises it.
 //
-// Every backend follows the same two steps, kept separate because the
-// installer waits for the operator to authorize this host before it wants a
-// second process polling the Server: Install writes and enables the service
-// without running it, and Start runs it, restarting it when it already runs so
-// a first install and a reinstall converge on the same state.
+// Every backend has two separate steps, because the installer waits for the
+// operator to authorize this host before it wants a second process polling the
+// Server: Install writes and enables the service without running it, and Start
+// runs it, restarting it when it already runs so a first install and a
+// reinstall converge on the same state.
 //
 // Only systemd restarts the Agent under a policy and collects its output in a
 // journal. OpenRC's supervise-daemon, runit and BusyBox's respawn restart it
 // too; sysvinit does not, which its status hint says. Outside systemd the
-// output goes to a log file, which is named in the hints.
+// output goes to a log file named in the hints.
 package service
 
 import (
@@ -40,14 +39,12 @@ const (
 	logPath = "/var/log/easyssl-agent.log"
 )
 
-// ErrNotRoot is returned when the service is managed without root.
 var ErrNotRoot = msg.Err.T("service.not_root", "must run as root to manage the Agent's service")
 
 // ErrUnsupportedInit is returned on a host whose init system is none of the
 // five. The Agent still runs there, under whatever the operator uses.
 var ErrUnsupportedInit = msg.Err.T("service.unsupported_init", "this host's init system is not systemd, OpenRC, runit, sysvinit or BusyBox init, so the Agent cannot install its service; run `{binary} run` under the supervisor this host uses", "binary", BinaryPath)
 
-// file is one file a backend writes.
 type file struct {
 	path    string
 	content string
@@ -123,11 +120,11 @@ func pid1() string {
 	return ""
 }
 
-// Detect returns the backend for the init system this host runs. The checks
-// run from the most specific marker to the least: each of the first three
-// leaves a directory under /run that nothing else creates, BusyBox is
-// recognized by PID 1's executable, and sysvinit is what an `init` PID 1 with
-// /etc/init.d is once the others are ruled out.
+// Detect returns the backend for the init system this host runs, checking from
+// the most specific marker to the least: each of the first three leaves a
+// directory under /run that nothing else creates, BusyBox is recognized by PID
+// 1's executable, and sysvinit is what an `init` PID 1 with /etc/init.d is once
+// the others are ruled out.
 func Detect() (*backend, error) {
 	switch {
 	case exists("/run/systemd/system"):
@@ -216,7 +213,6 @@ func Uninstall() error {
 	return nil
 }
 
-// Installed reports whether the service is installed.
 func Installed() bool {
 	b, err := Detect()
 	if err != nil {
@@ -242,8 +238,8 @@ func State() string {
 }
 
 // Describe returns the service's name and the two hints for the host's init
-// system, for the installer's messages and `easyssl-agent status`; the
-// systemd wording when the init system is unsupported, since the refusal
+// system, for the installer's messages and `easyssl-agent status`. On an
+// unsupported init system it gives the systemd wording, since the refusal
 // itself says what to do.
 func Describe() (serviceName, statusHint, logHint string) {
 	b, err := Detect()
