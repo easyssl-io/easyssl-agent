@@ -4,14 +4,12 @@
 //
 //	fmt.Println(msg.T("uninstall.aborted", "Aborted; nothing was changed."))
 //
-// The translations are `locales/<lang>.json`, embedded in the binary; English
-// has no file, the call sites being its catalog. TestCatalog fails when the
-// two disagree: a message with no translation, a translation no message uses,
-// one ID with two English texts, or placeholders that differ.
+// The translations are `locales/<lang>.json`, embedded in the binary; the call
+// sites are the English catalog, and TestCatalog fails when the two disagree.
 //
-// What is not for a person does not come through here and does not change
-// with the language: `--json` output, the running service's logs, what is sent
-// to the Server and what is written to the host.
+// What is not for a person does not come through here and does not change with
+// the language: `--json` output, the running service's logs, what is sent to
+// the Server and what is written to the host.
 package msg
 
 import (
@@ -40,7 +38,6 @@ func SetLanguage(lang string) {
 	active.Store(&p)
 }
 
-// Language returns the language messages are rendered in.
 func Language() string { return active.Load().Language() }
 
 // T renders the message id in the active language. english is its English
@@ -91,16 +88,14 @@ func (errs) T(id, english string, args ...any) error {
 
 func (e *Error) Error() string { return e.In(Language()) }
 
-// In renders the error in lang.
 func (e *Error) In(lang string) string {
 	return catalog.In(lang).T(e.id, e.english, in(lang, e.args)...)
 }
 
 // Text renders the error in every supported language, for one that is sent to
 // the Server instead of shown on this host. An argument that is itself a
-// message reads in each language; any other value, an operating system's
-// error included, is somebody else's text and stays as produced in all of
-// them.
+// message reads in each language; any other value, an operating system's error
+// included, stays as produced in all of them.
 func (e *Error) Text() l10n.Text {
 	t := l10n.Text{}
 	for _, lang := range l10n.Supported() {
@@ -110,8 +105,7 @@ func (e *Error) Text() l10n.Text {
 }
 
 // TextOf is err as a text to send to the Server: every language of an error
-// that is one of the Agent's messages, and English alone of any other, whose
-// words are whatever produced it.
+// that is one of the Agent's messages, and English alone of any other.
 func TextOf(err error) l10n.Text {
 	if e, ok := err.(*Error); ok && e != nil {
 		return e.Text()
@@ -119,7 +113,6 @@ func TextOf(err error) l10n.Text {
 	return l10n.Text{l10n.English: err.Error()}
 }
 
-// Unwrap returns the errors among the arguments.
 func (e *Error) Unwrap() []error {
 	var wrapped []error
 	for i := 1; i < len(e.args); i += 2 {

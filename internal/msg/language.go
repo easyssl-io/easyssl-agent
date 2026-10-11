@@ -13,17 +13,17 @@ const EnvVar = "EASYSSL_LANG"
 
 // Resolve is the one order a language is chosen in.
 //
-// flag is `--lang`, which only the installer has. It decides: nothing is
-// asked afterwards, and a code that is not supported is an error naming the
-// supported ones, because whoever typed it should learn it did nothing.
+// flag is `--lang`, which only the installer has. It decides: nothing is asked
+// afterwards, and an unsupported code is an error naming the supported ones,
+// because whoever typed it should learn it did nothing.
 //
-// Without it the answer is the first of these that names a supported
-// language: env (EASYSSL_LANG), saved (the host's configuration), the
-// operating system's locale read through getenv, and English. One that names
-// nothing supported falls through to the next instead of failing: none of
-// them was typed for this purpose by whoever is reading, and `C` is the
-// locale of most servers. For the installer that answer is only the default
-// its language step offers, which is what decided reports.
+// Without it the answer is the first of these that names a supported language:
+// env (EASYSSL_LANG), saved (the host's configuration), the operating system's
+// locale read through getenv, and English. One that names nothing supported
+// falls through instead of failing: none was typed for this purpose by whoever
+// is reading, and `C` is the locale of most servers. For the installer that
+// answer is only the default its language step offers, which is what decided
+// reports.
 func Resolve(flag, env, saved string, getenv func(string) string) (lang string, decided bool, err error) {
 	if flag != "" {
 		lang, err = Parse(flag)
