@@ -12,18 +12,18 @@ import (
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-// waitBudget bounds every wait below. It exists so a regression fails rather
-// than hangs: this loop retries anything that is not a rejected token, so an
-// installer that went back to checking in would be answered 418 by the fake
-// below and would then retry until the Go test binary's own panic timeout.
-// Three seconds is ample for two one-second polls against a loopback server.
+// waitBudget makes a regression fail rather than hang: this loop retries
+// anything that is not a rejected token, so an installer that went back to
+// checking in would be answered 418 by the fake below and retry until the test
+// binary's own panic timeout. Three seconds is ample for two one-second polls
+// against a loopback server.
 const waitBudget = 3 * time.Second
 
 // registrationFake answers the registration read with one state per request,
-// repeating the last, and records every path it was asked for. The recorded
-// paths are what these tests are really about: this wait must not check in,
-// because a check-in refreshes the Agent's last-seen and the systemd service
-// is the process that is meant to record.
+// repeating the last, and records every path it was asked for. The paths are
+// what these tests are about: this wait must not check in, because a check-in
+// refreshes the Agent's last-seen and the systemd service is the process that
+// is meant to record.
 type registrationFake struct {
 	mu     sync.Mutex
 	paths  []string
@@ -62,7 +62,6 @@ func (f *registrationFake) recorded() []string {
 	return append([]string(nil), f.paths...)
 }
 
-// start returns a client for a fake answering the given states, and the fake.
 func start(t *testing.T, states ...string) (*serverapi.Client, *registrationFake) {
 	t.Helper()
 	fake := &registrationFake{states: states}
