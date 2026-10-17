@@ -175,8 +175,8 @@ sent to the Server, the files written to the host, exit codes, and whatever a
 Plugin or another program printed. The flag package's own text under `--help`
 (default values, its parse errors) is in English too. The Server is never told
 the host's language; a text the Agent writes for the web console, the warning
-for a Plugin that did not answer `discover`, is sent in every language so each
-reader gets their own.
+for a Plugin that did not answer `describe` or `discover`, is sent in every
+language so each reader gets their own.
 
 A Plugin's own text (its Marketplace description in `easyssl-agent plugin
 catalog`) is shown in the host's language when the Plugin supplies it, and in
@@ -220,10 +220,11 @@ print. `--json` reports a short stable code (`authorized`, `pending`,
 ## Seeing what a Plugin was asked to do
 
 The Agent hands work to a Plugin over stdio: the operation on argv, JSON in,
-and out either JSON (`describe`) or the process's own exit status and streams
-(`deploy`). None of that is visible by default, and what reaches the Server is
-only the Plugin's own account of itself, so an argument the Agent got wrong, or
-a Plugin that failed before printing anything, leaves no trace anywhere.
+and out either JSON (`describe`, `discover`) or the process's own exit status
+and streams (`deploy`). None of that is visible by default, and what reaches
+the Server is only the Plugin's own account of itself, so an argument the Agent
+got wrong, or a Plugin that failed before printing anything, leaves no trace
+anywhere.
 
 Two switches make it visible, and they are separate because they differ in one
 respect that matters.

@@ -18,8 +18,9 @@ import (
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
 )
 
-// The tests use a fake Marketplace and a fake discover, so no Plugin binary is
-// run: what is checked is what the Manager does around the executable.
+// The tests use a fake Marketplace and a fake describe and discover, so no
+// Plugin binary is run: what is checked is what the Manager does around the
+// executable.
 
 const artifactBody = "#!/bin/false\nplugin bytes\n"
 
@@ -53,21 +54,24 @@ func newMarketplace(t *testing.T, publishDigest string) *httptest.Server {
 	return srv
 }
 
-func newManager(t *testing.T, srv *httptest.Server, desc plugincontract.DiscoverResponse, descErr error) *Manager {
+func newManager(t *testing.T, srv *httptest.Server, desc plugincontract.DescribeResponse, descErr error) *Manager {
 	t.Helper()
 	m := New(nil, nil)
 	if srv != nil {
 		m.catalog = HTTPCatalog{BaseURL: srv.URL}
 	}
 	m.installDir = filepath.Join(t.TempDir(), "plugins")
-	m.runDiscover = func(_ context.Context, _ string) (plugincontract.DiscoverResponse, error) {
+	m.runDescribe = func(_ context.Context, _ string) (plugincontract.DescribeResponse, error) {
 		return desc, descErr
+	}
+	m.runDiscover = func(_ context.Context, _ string) (plugincontract.DiscoverResponse, error) {
+		return found(), nil
 	}
 	return m
 }
 
-func answer() plugincontract.DiscoverResponse {
-	return plugincontract.DiscoverResponse{
+func answer() plugincontract.DescribeResponse {
+	return plugincontract.DescribeResponse{
 		ContractVersion: plugincontract.ContractVersion,
 		Name:            "generic-cli",
 		Version:         "0.0.1",
@@ -76,8 +80,14 @@ func answer() plugincontract.DiscoverResponse {
 			Key: "install", Label: l10n.Text{"en": "Install command"}, Type: plugincontract.SettingTypeCommand,
 			Default: "echo hi", Required: true,
 		}},
+	}
+}
+
+func found() plugincontract.DiscoverResponse {
+	return plugincontract.DiscoverResponse{
+		ContractVersion:   plugincontract.ContractVersion,
 		DiscoveredTargets: []plugincontract.DiscoveredTarget{},
-		Warnings:          []l10n.Text{},
+		Warnings:          []l10n.Text{{"en": "a warning", "es": "una advertencia"}},
 	}
 }
 
@@ -122,39 +132,90 @@ func TestListAndDiscoverReadTheDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(inv) != 1 || inv[0].Unobserved || inv[0].Version != "0.0.1" || len(inv[0].Declarations) != 1 || inv[0].Digest != trueDigest() {
+	// describe's identity and declarations, discover's findings, in one entry.
+	if len(inv) != 1 || inv[0].Unobserved || inv[0].Version != "0.0.1" || len(inv[0].Declarations) != 1 ||
+		inv[0].Digest != trueDigest() || len(inv[0].Warnings) != 1 || inv[0].Warnings[0]["en"] != "a warning" {
 		t.Fatalf("Discover = %+v", inv)
 	}
 
-	t.Run("a Plugin that fails discover is present but unobserved", func(t *testing.T) {
-		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) {
-			return plugincontract.DiscoverResponse{}, errors.New("exit status 1")
-		}
+	// Either operation failing leaves the Plugin present but unobserved, with
+	// a warning in this Agent's own words that names the operation and the
+	// failure. Whoever reads it on the Server may read any language, so it
+	// carries every one of them.
+	unobserved := func(t *testing.T, op string) {
+		t.Helper()
 		inv, err := m.Discover(context.Background())
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(inv) != 1 || !inv[0].Unobserved || inv[0].Version != "" || len(inv[0].Warnings) != 1 {
+		if len(inv) != 1 || !inv[0].Unobserved || inv[0].Version != "" || inv[0].Declarations != nil || len(inv[0].Warnings) != 1 {
 			t.Fatalf("Discover after failure = %+v", inv)
 		}
-		// The warning is this Agent's own text, and whoever reads it on the
-		// Server may read any language, so it carries every one of them.
 		warning := inv[0].Warnings[0]
 		if err := warning.Validate(); err != nil {
 			t.Fatalf("warning = %v: %v", warning, err)
 		}
 		for _, lang := range l10n.Supported() {
-			if !strings.Contains(warning[lang], "exit status 1") {
-				t.Errorf("warning in %s = %q, want it to name the failure", lang, warning[lang])
+			if !strings.Contains(warning[lang], "`"+op+"`") {
+				t.Errorf("warning in %s = %q, want it to name %s", lang, warning[lang], op)
 			}
 		}
 		if warning["en"] == warning["es"] {
 			t.Errorf("warning reads %q in both languages", warning["en"])
 		}
+	}
+	restore := func() {
+		m.runDescribe = func(context.Context, string) (plugincontract.DescribeResponse, error) { return answer(), nil }
+		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) { return found(), nil }
+	}
+
+	t.Run("a Plugin that fails describe is present but unobserved", func(t *testing.T) {
+		defer restore()
+		m.runDescribe = func(context.Context, string) (plugincontract.DescribeResponse, error) {
+			return plugincontract.DescribeResponse{}, errors.New("exit status 1")
+		}
+		unobserved(t, plugincontract.OpDescribe)
+	})
+
+	t.Run("a Plugin that fails discover is present but unobserved", func(t *testing.T) {
+		defer restore()
+		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) {
+			return plugincontract.DiscoverResponse{}, errors.New("exit status 1")
+		}
+		unobserved(t, plugincontract.OpDiscover)
+	})
+
+	// A finding that names a setting the same build never declared is checked
+	// against describe's declarations.
+	t.Run("a discover answer that does not fit describe's declarations is unobserved", func(t *testing.T) {
+		defer restore()
+		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) {
+			d := found()
+			d.DiscoveredTargets = []plugincontract.DiscoveredTarget{{PluginSettings: map[string]string{"bogus": "x"}}}
+			return d, nil
+		}
+		unobserved(t, plugincontract.OpDiscover)
+	})
+
+	// The two answers come from two processes; a binary replaced between them
+	// would mix one build's declarations with another's findings.
+	t.Run("an executable that changes between describe and discover is unobserved", func(t *testing.T) {
+		path := filepath.Join(m.installDir, "generic-cli")
+		defer func() {
+			restore()
+			_ = os.WriteFile(path, []byte(artifactBody), 0o755)
+		}()
+		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) {
+			if err := os.WriteFile(path, []byte("#!/bin/false\nanother build\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			return found(), nil
+		}
+		unobserved(t, plugincontract.OpDiscover)
 	})
 
 	t.Run("Find reports the executable and the version it answers", func(t *testing.T) {
-		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) { return answer(), nil }
+		m.runDescribe = func(context.Context, string) (plugincontract.DescribeResponse, error) { return answer(), nil }
 		inst, found, err := m.Find("generic-cli")
 		if err != nil || !found || inst.Version != "0.0.1" || inst.Path != filepath.Join(m.installDir, "generic-cli") {
 			t.Fatalf("Find = %+v %v %v", inst, found, err)
@@ -172,7 +233,7 @@ func TestReinstallReplacesTheExecutable(t *testing.T) {
 	}
 	upgraded := answer()
 	upgraded.Version = "0.0.2"
-	m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) { return upgraded, nil }
+	m.runDescribe = func(context.Context, string) (plugincontract.DescribeResponse, error) { return upgraded, nil }
 	inst, err := m.Install(context.Background(), "generic-cli", "linux", "amd64")
 	if err != nil || inst.Version != "0.0.2" {
 		t.Fatalf("reinstall = %+v, %v", inst, err)
@@ -194,10 +255,10 @@ func TestDigestMismatchInstallsNothing(t *testing.T) {
 	}
 }
 
-func TestDiscoverFailureInstallsNothing(t *testing.T) {
-	m := newManager(t, newMarketplace(t, ""), plugincontract.DiscoverResponse{}, errors.New("exit status 2"))
+func TestDescribeFailureInstallsNothing(t *testing.T) {
+	m := newManager(t, newMarketplace(t, ""), plugincontract.DescribeResponse{}, errors.New("exit status 2"))
 	if _, err := m.Install(context.Background(), "generic-cli", "linux", "amd64"); err == nil {
-		t.Fatal("installed a Plugin that did not answer discover")
+		t.Fatal("installed a Plugin that did not answer describe")
 	}
 	if installed, _ := m.List(); len(installed) != 0 {
 		t.Fatalf("something was installed: %+v", installed)
@@ -238,14 +299,15 @@ func TestInstallRefusesAnUnusableAnswer(t *testing.T) {
 	}
 }
 
-// A Plugin whose discover answer runs past the output bound is refused rather
-// than read whole into memory.
-func TestDiscoverRefusesAnOversizedAnswer(t *testing.T) {
+// A Plugin whose answer runs past the output bound is refused rather than read
+// whole into memory.
+func TestRunByExecRefusesAnOversizedAnswer(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "flood")
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nhead -c 600000 /dev/zero | tr '\\\\0' x\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := discoverByExec(context.Background(), script, slog.New(slog.DiscardHandler)); err == nil ||
+	var out plugincontract.DiscoverResponse
+	if err := runByExec(context.Background(), script, plugincontract.OpDiscover, slog.New(slog.DiscardHandler), &out); err == nil ||
 		!strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("err = %v, want the answer refused as too large", err)
 	}
