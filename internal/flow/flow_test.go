@@ -3,10 +3,12 @@ package flow
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
+	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-contract/l10n"
 )
 
@@ -201,6 +203,41 @@ func TestConfirmUninstallInSpanish(t *testing.T) {
 		}
 		if !strings.Contains(out.String(), "[s/N]") || !strings.Contains(out.String(), "Acme (org-abc)") {
 			t.Errorf("prompt = %q, want the Spanish hint and the Organization", out.String())
+		}
+	}
+}
+
+// A host that ends a registration with no Plugin is told how to get one,
+// unless the installer is about to install some or the host already has one.
+func TestNoPluginHint(t *testing.T) {
+	none := func() ([]pluginmgr.Installed, error) { return nil, nil }
+	one := func() ([]pluginmgr.Installed, error) { return []pluginmgr.Installed{{ID: "nginx"}}, nil }
+	failed := func() ([]pluginmgr.Installed, error) { return nil, errors.New("permission denied") }
+	env := func(v string) func(string) string {
+		return func(k string) string {
+			if k == installerPluginsEnv {
+				return v
+			}
+			return ""
+		}
+	}
+	for _, c := range []struct {
+		name string
+		list func() ([]pluginmgr.Installed, error)
+		env  string
+		want bool
+	}{
+		{"none installed, none coming", none, "", true},
+		{"none installed, the installer brings some", none, "nginx", false},
+		{"one installed", one, "", false},
+		{"listing failed", failed, "", false},
+	} {
+		got := noPluginHint(c.list, env(c.env))
+		if (got != "") != c.want {
+			t.Errorf("%s: hint = %q", c.name, got)
+		}
+		if c.want && !strings.Contains(got, "sudo easyssl-agent plugin install <name>") {
+			t.Errorf("%s: the hint names no install command: %q", c.name, got)
 		}
 	}
 }

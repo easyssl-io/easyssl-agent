@@ -97,8 +97,33 @@ func TestAFailedRunIsReportedInEveryLanguage(t *testing.T) {
 		t.Fatalf("result = %+v, want a run that exited 3", res)
 	}
 	want := l10n.Text{
-		"en": "the Plugin exited with an error: exit status 3",
-		"es": "el Plugin terminó con un error: exit status 3",
+		"en": "the Plugin exited with status 3; its output says why",
+		"es": "el Plugin terminó con el estado 3; su salida dice por qué",
+	}
+	if !reflect.DeepEqual(res.AgentMessage, want) {
+		t.Fatalf("AgentMessage = %v, want %v", res.AgentMessage, want)
+	}
+}
+
+// A Plugin ended by a signal has no status, so the Agent does not claim its
+// output explains it, and quotes the process's own error instead.
+func TestARunEndedBySignalQuotesTheError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "generic-cli")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nkill -TERM $$\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	loadKey = func(string) (crypto.Signer, error) { return ecdsa.GenerateKey(elliptic.P256(), rand.Reader) }
+	t.Cleanup(func() { loadKey = keystore.Load })
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	res := run(context.Background(), plugins{installed: pluginmgr.Installed{ID: "generic-cli", Path: path}},
+		wire.DeploymentWork{PluginID: "generic-cli", KeyFingerprint: "00"}, logger)
+	if res.OK || res.PluginRun == nil || res.PluginRun.ExitStatus != -1 {
+		t.Fatalf("result = %+v, want a run with no status", res)
+	}
+	want := l10n.Text{
+		"en": "the Plugin ended without an exit status: signal: terminated",
+		"es": "el Plugin terminó sin un estado de salida: signal: terminated",
 	}
 	if !reflect.DeepEqual(res.AgentMessage, want) {
 		t.Fatalf("AgentMessage = %v, want %v", res.AgentMessage, want)

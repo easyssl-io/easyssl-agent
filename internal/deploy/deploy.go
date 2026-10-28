@@ -337,7 +337,15 @@ func runBounded(ctx context.Context, cmd *exec.Cmd) (captured *plugintrace.Captu
 	case waitErr := <-done:
 		code := cmd.ProcessState.ExitCode()
 		if waitErr != nil {
-			return captured, code, msg.Err.T("deploy.plugin_exited", "the Plugin exited with an error: {err}", "err", waitErr)
+			// A Plugin that exits with a status has said why in its output, which
+			// the reader sees beside this sentence; Go's "exit status 1" alone
+			// read as though nothing had explained it. A process ended by a
+			// signal has no status and may have said nothing.
+			if code >= 0 {
+				return captured, code, msg.Err.T("deploy.plugin_exited",
+					"the Plugin exited with status {status}; its output says why", "status", code)
+			}
+			return captured, code, msg.Err.T("deploy.plugin_ended", "the Plugin ended without an exit status: {err}", "err", waitErr)
 		}
 		return captured, code, nil
 	}

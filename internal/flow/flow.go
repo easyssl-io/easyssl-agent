@@ -301,6 +301,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 			"name", resp.DisplayName, "id", resp.AgentID, "organization", cfg.Organization()))
 		fmt.Println(msg.T("register.reactivated.manage", "  manage:  {command}", "command", statusHint()))
 		offerRequiredPlugins(ctx, t, api, resp.AgentToken, opts.ServerURL, resp.RequiredPlugins)
+		printNoPluginHint()
 		return nil
 	}
 	return awaitAuthorization(ctx, api, name, resp.AgentToken, resp.NextPollSeconds,
@@ -412,7 +413,34 @@ func awaitAuthorization(ctx context.Context, api *serverapi.Client, name, token 
 		fmt.Println(msg.T("register.authorized", "✓ {name} was authorized and is now ACTIVE.", "name", name))
 	}
 	fmt.Println(msg.T("register.authorized.manage", "  manage:  {command}", "command", statusHint()))
+	printNoPluginHint()
 	return nil
+}
+
+// installerPluginsEnv names the Plugins the installer installs right after
+// registering returns, so a run that has some coming says nothing about none.
+const installerPluginsEnv = "EASYSSL_PLUGINS"
+
+func printNoPluginHint() {
+	if h := noPluginHint(pluginmgr.New(nil, nil).List, os.Getenv); h != "" {
+		fmt.Println()
+		fmt.Println(h)
+	}
+}
+
+// noPluginHint tells the operator how to get a Plugin when the host ends a
+// registration with none: the Agent finds and updates Certificates only
+// through one, and the host is the one place that knows whether it has any.
+// It is "" when the host has one, the installer is about to install some, or
+// the Plugins cannot be listed.
+func noPluginHint(list func() ([]pluginmgr.Installed, error), getenv func(string) string) string {
+	if strings.TrimSpace(getenv(installerPluginsEnv)) != "" {
+		return ""
+	}
+	if installed, err := list(); err != nil || len(installed) > 0 {
+		return ""
+	}
+	return msg.T("register.no_plugin", "No Plugin is installed on this host, and the Agent finds and updates Certificates only through one.\n  see them:    sudo easyssl-agent plugin catalog\n  install one: sudo easyssl-agent plugin install <name>")
 }
 
 // rememberOrganization records a name learned after the config was written:
