@@ -17,6 +17,7 @@ import (
 
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
+	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-contract/l10n"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
@@ -162,5 +163,30 @@ func TestSucceededIsTheExitStatusAndNothingElse(t *testing.T) {
 		if got := succeeded(tc.err, tc.run); got != tc.want {
 			t.Errorf("%s: succeeded = %v, want %v", name, got, tc.want)
 		}
+	}
+}
+
+type workAPI struct{ err error }
+
+func (a workAPI) DeploymentWork(context.Context, string, string) (wire.DeploymentWork, error) {
+	return wire.DeploymentWork{}, a.err
+}
+
+func (workAPI) ReportDeploymentResult(context.Context, string, string, wire.DeploymentResult) error {
+	return nil
+}
+
+// Only the contract's code says a Deployment is gone; a bare 404, such as a
+// proxy's, leaves the command for a retry.
+func TestOnlyDeploymentNotFoundDiscardsTheCommand(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cmd := wire.Command{ID: "cmd-1", Type: wire.CommandDeploy, RefID: "dep-1"}
+	gone := New(workAPI{&serverapi.APIError{Status: 404, Code: wire.CodeDeploymentNotFound}}, plugins{}, "tok", logger)
+	if err := gone(context.Background(), cmd); err != nil {
+		t.Fatalf("deployment_not_found: handler = %v, want nil (discarded)", err)
+	}
+	bare := New(workAPI{&serverapi.APIError{Status: 404}}, plugins{}, "tok", logger)
+	if err := bare(context.Background(), cmd); err == nil {
+		t.Fatal("bare 404: handler = nil, want error (retry later)")
 	}
 }

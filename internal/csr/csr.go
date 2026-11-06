@@ -3,10 +3,12 @@
 // back. The Agent is told what to sign and with which key, and chooses nothing.
 //
 // An error return leaves the command pending, so the Runner tries again and, if
-// the condition never clears, the command's expiry fails the certificate naming
+// the condition never clears, the command's expiry fails the Certificate naming
 // this Agent. A nil return acks the command. Terminal refusals from the Server
 // (already submitted, stale, rejected) are therefore nil: retrying cannot
-// change them, and the Server has already recorded what it thinks.
+// change them, and the Server has already recorded what it thinks. Work this
+// Agent cannot do returns commands.ErrUnsupported, which fails the Certificate
+// at once.
 package csr
 
 import (
@@ -47,25 +49,20 @@ func New(api API, token string, logger *slog.Logger) commands.Handler {
 		work, err := api.CSRWork(ctx, token, cmd.RefID)
 		if err != nil {
 			var apiErr *serverapi.APIError
-			if errors.As(err, &apiErr) && apiErr.Status == 404 {
-				// Unknown here means "not this Agent's or gone", which no
-				// retry changes: a stale instruction, discarded and acked.
+			if errors.As(err, &apiErr) && apiErr.Code == wire.CodeCertificateNotFound {
+				// Not this Agent's, or gone, which no retry changes: a stale
+				// instruction, discarded and acked. Only this code says so; any other
+				// 404, such as a proxy's, is retried.
 				logger.Warn("csr work not found; discarding command", "certificate", cmd.RefID)
 				return nil
 			}
 			return err // transport or Server trouble: leave pending, retry later
 		}
 		if !wire.ValidKeyType(work.KeyType) {
-			// A key type this Agent cannot generate. Acked as handled; the
-			// certificate keeps waiting and the command's expiry reports the
-			// failure naming this Agent.
-			logger.Error("csr work asks for a key type this Agent cannot generate",
-				"certificate", cmd.RefID, "keyType", work.KeyType)
-			return nil
+			return fmt.Errorf("csr: key type %q: %w", work.KeyType, commands.ErrUnsupported)
 		}
 		if len(work.Domains) == 0 {
-			logger.Error("csr work carries no domains; discarding command", "certificate", cmd.RefID)
-			return nil
+			return fmt.Errorf("csr: the work names no domains: %w", commands.ErrUnsupported)
 		}
 
 		key, err := keyFor(work)
