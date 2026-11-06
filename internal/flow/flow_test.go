@@ -3,7 +3,9 @@ package flow
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -239,5 +241,35 @@ func TestNoPluginHint(t *testing.T) {
 		if c.want && !strings.Contains(got, "sudo easyssl-agent plugin install <name>") {
 			t.Errorf("%s: the hint names no install command: %q", c.name, got)
 		}
+	}
+}
+
+// The install script restores the Agent build it replaced only when register
+// changed nothing on the host, so an error after the first write must not read
+// as unchanged, and one before it must, without hiding what it wraps.
+func TestMarkUnchanged(t *testing.T) {
+	cause := errors.New("refused")
+	if markUnchanged(nil, false) != nil {
+		t.Error("a nil error became one")
+	}
+	if err := markUnchanged(cause, true); Unchanged(err) {
+		t.Error("an error after the host changed reads as unchanged")
+	}
+	err := markUnchanged(cause, false)
+	if !Unchanged(err) {
+		t.Error("an error before any write does not read as unchanged")
+	}
+	if !errors.Is(err, cause) || err.Error() != cause.Error() {
+		t.Errorf("the wrapped error is %q, not the cause", err)
+	}
+}
+
+func TestRegisterRefusedBeforeWritingIsUnchanged(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("the refusal tested is the one for a user other than root")
+	}
+	err := Register(context.Background(), Options{ServerURL: "https://easyssl.example"})
+	if err == nil || !Unchanged(err) {
+		t.Fatalf("Register as a non-root user = %v, want an unchanged error", err)
 	}
 }

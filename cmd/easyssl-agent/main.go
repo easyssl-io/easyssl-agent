@@ -81,9 +81,17 @@ func main() {
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "easyssl-agent: "+err.Error())
+		if flow.Unchanged(err) {
+			os.Exit(exitUnchanged)
+		}
 		os.Exit(1)
 	}
 }
+
+// exitUnchanged is the status of a `register` that failed before it changed
+// anything on the host. The install script restores the Agent build it
+// replaced on this status and on no other.
+const exitUnchanged = 3
 
 func usage() {
 	fmt.Fprintln(os.Stderr, msg.T("main.usage", "usage: easyssl-agent <register|run|status|uninstall|plugin|language> [flags]"))

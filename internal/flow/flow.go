@@ -66,7 +66,40 @@ type Options struct {
 // and keys `esrk_`.
 const reactivationPrefix = "esrt_"
 
-func Register(ctx context.Context, opts Options) error {
+// unchangedError is a registration that failed before it wrote anything to
+// this host: no configuration, no token, no service unit. The install script
+// puts back the Agent build it replaced only for this error, because after any
+// write the host already runs, or will run on its next restart, with what the
+// new build wrote.
+type unchangedError struct{ error }
+
+func (e unchangedError) Unwrap() error { return e.error }
+
+// Unchanged reports whether err ended a registration before it changed this
+// host.
+func Unchanged(err error) bool {
+	var u unchangedError
+	return errors.As(err, &u)
+}
+
+// hostChanged is set by changingHost just before a registration first writes
+// to this host.
+var hostChanged bool
+
+func changingHost() { hostChanged = true }
+
+// markUnchanged wraps a registration's error as unchangedError when nothing
+// was written to the host before it.
+func markUnchanged(err error, changed bool) error {
+	if err == nil || changed {
+		return err
+	}
+	return unchangedError{err}
+}
+
+func Register(ctx context.Context, opts Options) (err error) {
+	hostChanged = false
+	defer func() { err = markUnchanged(err, hostChanged) }()
 	// Check root before anything reaches the Server. Registering first and failing
 	// on the config write would leave a pending Agent on the Server for a host
 	// that never installed one.
@@ -184,6 +217,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	// registration changes: re-running the installer is one way to change it.
 	if cfg.Language != msg.Language() {
 		cfg.Language = msg.Language()
+		changingHost()
 		if err := identity.SaveConfig(cfg); err != nil {
 			return msg.Err.T("reinstall.save_language", "saving the language: {err}", "err", err)
 		}
@@ -219,6 +253,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 		// its own.
 		fmt.Println()
 		fmt.Println(msg.T("reinstall.unreachable", "Could not reach {server}: {err}", "server", cfg.ServerURL, "err", cerr))
+		changingHost()
 		if err := service.Install(); err != nil {
 			return msg.Err.T("reinstall.unreachable.update_service", "updating the service: {err}", "err", err)
 		}
@@ -228,6 +263,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 		return nil
 	}
 
+	changingHost()
 	if err := service.Install(); err != nil {
 		return msg.Err.T("reinstall.update_service", "updating the service: {err}", "err", err)
 	}
@@ -281,6 +317,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 		OrganizationID:   resp.OrganizationID,
 		Language:         msg.Language(),
 	}
+	changingHost()
 	if err := identity.SaveConfig(cfg); err != nil {
 		return msg.Err.T("register.save_config", "saving the configuration: {err}", "err", err)
 	}
