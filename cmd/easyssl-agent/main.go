@@ -172,9 +172,9 @@ func rootOnlyError(cmd string) error {
 func cmdRegister(ctx context.Context, args []string) error {
 	fs := newFlagSet("register")
 	server := fs.String("server", "", msg.T("register.flag.server", "easySSL Server base URL (required)"))
-	key := fs.String("key", os.Getenv("REGISTRATION_KEY"), msg.T("register.flag.key", "Organization registration key (defaults to $REGISTRATION_KEY)"))
-	reactivation := fs.String("reactivation-token", os.Getenv("REACTIVATION_TOKEN"), msg.T("register.flag.reactivation_token", "reactivation token from a deactivated Agent's page, to resume that Agent (defaults to $REACTIVATION_TOKEN)"))
-	name := fs.String("name", os.Getenv("AGENT_NAME"), msg.T("register.flag.name", "Agent name (defaults to $AGENT_NAME, else the hostname; prompted when interactive; ignored with a reactivation token)"))
+	key := fs.String("registration-key", os.Getenv(wire.EnvRegistrationKey), msg.T("register.flag.key", "Organization registration key (defaults to ${env})", "env", wire.EnvRegistrationKey))
+	reactivation := fs.String("reactivation-token", os.Getenv(wire.EnvReactivationToken), msg.T("register.flag.reactivation_token", "reactivation token from a deactivated Agent's page, to resume that Agent (defaults to ${env})", "env", wire.EnvReactivationToken))
+	name := fs.String("agent-name", os.Getenv(wire.EnvAgentName), msg.T("register.flag.name", "Agent name (defaults to ${env}, else the hostname; prompted when interactive; ignored with a reactivation token)", "env", wire.EnvAgentName))
 	// No default from EASYSSL_LANG, unlike the flags above: the variable only
 	// pre-selects what the language step offers, because every install command
 	// the web console gives carries it, and the flag is what skips the step.
@@ -355,7 +355,7 @@ func cmdRun(ctx context.Context, args []string) error {
 				logger.Error("this host is no longer registered with the Server: the Agent was deactivated or removed, so its token is refused",
 					"server", cfg.ServerURL,
 					"next", "run the reactivation command from the Agent's page in the web console to resume this Agent, re-run the installer with the registration key to register a new one, or remove this Agent with `easyssl-agent uninstall`",
-					"note", "no work will be done until then; nothing under "+identity.BaseDir+" has been touched")
+					"note", "no work will be done until then; nothing under "+identity.ConfigDir+" or "+identity.StateDir+" has been touched")
 				sdnotify.Status("Not registered: the Agent was deactivated or removed. Run the reactivation command from its page in the web console, re-run the installer to register anew, or `easyssl-agent uninstall`.")
 			} else if time.Since(removedSince) > 30*time.Minute {
 				removedSince = time.Now()

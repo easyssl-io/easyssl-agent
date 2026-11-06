@@ -29,6 +29,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
 	"github.com/easyssl-io/easyssl-contract/l10n"
@@ -39,7 +40,7 @@ import (
 // InstallDir is where Plugin executables live on the host. Root-owned: a
 // Plugin is executed by the Agent, which runs as root, so anything that could
 // write here could run code as root.
-const InstallDir = "/var/lib/easyssl/plugins"
+const InstallDir = identity.StateDir + "/plugins"
 
 // maxArtifact bounds a download. A Plugin is a static Go binary of a few
 // megabytes, so this is generous while refusing to write an unbounded stream to

@@ -22,7 +22,7 @@ func Collect() wire.Diagnostics {
 		OS:          osName(),
 		HostType:    hostType(),
 		BinaryPath:  bin,
-		ConfigPath:  identity.BaseDir,
+		ConfigPath:  identity.ConfigPath(),
 		ServiceName: serviceName(),
 	}
 }
