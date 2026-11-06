@@ -173,7 +173,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	// supplied belongs to that one too. Moving the host is not done silently
 	// either, because it detaches this host from whatever the old Server still
 	// deploys to it.
-	if opts.ServerURL != "" && opts.ServerURL != cfg.ServerURL {
+	if opts.ServerURL != "" && serverapi.NormalizeURL(opts.ServerURL) != serverapi.NormalizeURL(cfg.ServerURL) {
 		return msg.Err.T("reinstall.other_server", "this host is registered to {registered}, but this installer came from {installer}.\n"+
 			"Nothing was changed. To move it, uninstall it from the old Server first:\n"+
 			"    sudo easyssl-agent uninstall\n"+
@@ -276,7 +276,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	}
 
 	cfg := identity.Config{
-		ServerURL:        opts.ServerURL,
+		ServerURL:        serverapi.NormalizeURL(opts.ServerURL),
 		OrganizationName: resp.OrganizationName,
 		OrganizationID:   resp.OrganizationID,
 		Language:         msg.Language(),

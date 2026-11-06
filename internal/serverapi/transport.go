@@ -37,6 +37,26 @@ import (
 // The name "localhost" is accepted alongside the literal addresses: RFC 6761
 // reserves it for this, and resolving it elsewhere takes an edit to /etc/hosts
 // or the resolver, both of which need the root this Agent already runs as.
+// NormalizeURL is a Server URL in one spelling: scheme and host in lower case,
+// no default port and no trailing slash, so two spellings of one Server compare
+// equal. A URL that does not parse is returned as given.
+func NormalizeURL(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return raw
+	}
+	u.Scheme, u.Host = strings.ToLower(u.Scheme), strings.ToLower(u.Host)
+	if (u.Scheme == "https" && u.Port() == "443") || (u.Scheme == "http" && u.Port() == "80") {
+		u.Host = u.Hostname()
+		if strings.Contains(u.Host, ":") {
+			u.Host = "[" + u.Host + "]"
+		}
+	}
+	u.Path = strings.TrimRight(u.Path, "/")
+	u.RawPath, u.RawQuery, u.Fragment = "", "", ""
+	return u.String()
+}
+
 func CheckBaseURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {

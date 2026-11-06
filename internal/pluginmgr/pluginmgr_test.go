@@ -312,3 +312,18 @@ func TestRunByExecRefusesAnOversizedAnswer(t *testing.T) {
 		t.Fatalf("err = %v, want the answer refused as too large", err)
 	}
 }
+
+// The catalog names artifacts by path on the Server, and a URL naming any other
+// origin is refused rather than followed.
+func TestDownloadStaysOnTheServer(t *testing.T) {
+	srv := newMarketplace(t, "")
+	c := HTTPCatalog{BaseURL: srv.URL}
+	body, err := c.Download(context.Background(), "/download/plugins/generic-cli/linux/amd64")
+	if err != nil {
+		t.Fatalf("a path on the Server: %v", err)
+	}
+	body.Close()
+	if _, err := c.Download(context.Background(), "https://elsewhere.example/plugin"); err == nil {
+		t.Fatal("a URL on another origin was followed")
+	}
+}
