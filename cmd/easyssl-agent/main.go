@@ -178,9 +178,17 @@ func cmdRegister(ctx context.Context, args []string) error {
 	// pre-selects what the language step offers, because every install command
 	// the web console gives carries it, and the flag is what skips the step.
 	lang := fs.String("lang", "", msg.T("register.flag.lang", "language of this Agent's commands, set without asking: {supported} (otherwise asked, defaulting to $EASYSSL_LANG, then the language already saved on this host, then the locale's)", "supported", msg.SupportedList()))
-	_ = fs.Parse(args)
+	// A refusal here wrote nothing, so it exits with the status that tells the
+	// install script to put back the build it replaced.
+	fs.Init("register", flag.ContinueOnError)
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return flow.RefusedUnchanged(err)
+	}
 	if *server == "" {
-		return msg.Err.T("register.server_required", "register: --server is required")
+		return flow.RefusedUnchanged(msg.Err.T("register.server_required", "register: --server is required"))
 	}
 	return flow.Register(ctx, flow.Options{ServerURL: *server, RegistrationKey: *key, ReactivationToken: *reactivation, Name: *name, Language: *lang})
 }

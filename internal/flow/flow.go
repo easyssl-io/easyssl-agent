@@ -82,6 +82,11 @@ func Unchanged(err error) bool {
 	return errors.As(err, &u)
 }
 
+// RefusedUnchanged marks err as a registration refused before anything was
+// written to the host, for a refusal that happens before Register runs, such
+// as a flag `register` does not know.
+func RefusedUnchanged(err error) error { return unchangedError{err} }
+
 // hostChanged is set by changingHost just before a registration first writes
 // to this host.
 var hostChanged bool

@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"strings"
 	"testing"
 
+	"github.com/easyssl-io/easyssl-agent/internal/flow"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -68,5 +70,19 @@ func TestRootPreflightAllowsRootAndNonOperationalCommands(t *testing.T) {
 				t.Fatalf("preflight = %v, want no error", err)
 			}
 		})
+	}
+}
+
+// A `register` refused before it reaches the registration wrote nothing, so it
+// must read as unchanged: the install script puts the replaced build back only
+// then.
+func TestRegisterRefusedFlagsAreUnchanged(t *testing.T) {
+	for _, args := range [][]string{{"--no-such-flag"}, {}} {
+		if err := cmdRegister(context.Background(), args); !flow.Unchanged(err) {
+			t.Errorf("register %v = %v, want an unchanged error", args, err)
+		}
+	}
+	if err := cmdRegister(context.Background(), []string{"--help"}); err != nil {
+		t.Errorf("register --help = %v, want nil", err)
 	}
 }
