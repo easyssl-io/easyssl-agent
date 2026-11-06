@@ -8,8 +8,8 @@
 // sites are the English catalog, and TestCatalog fails when the two disagree.
 //
 // What is not for a person does not come through here and does not change with
-// the language: `--json` output, the running service's logs, what is sent to
-// the Server and what is written to the host.
+// the language: the running service's logs, what is sent to the Server and
+// what is written to the host.
 package msg
 
 import (

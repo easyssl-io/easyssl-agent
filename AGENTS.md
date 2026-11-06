@@ -60,9 +60,10 @@ verify what it does. Flag any of the following.
   to update, so changes must tolerate a Server older or newer than this build.
 - **Reinstall reconciles, never duplicates.** One host runs one Agent, keyed by
   a stable instance ID, and every install step must be safe to interrupt.
-- **CLI contract.** Human output on stdout, machine output behind `--json`,
-  errors on stderr, non-zero exit on failure. `--json` codes are a stable
-  interface: adding one is fine, redefining one is not.
+- **CLI contract.** Output on stdout for a person, errors on stderr, non-zero
+  exit on failure, a declined prompt included. The CLI offers no
+  machine-readable output and promises scripts nothing beyond success or
+  failure, so its wording stays free to change.
 
 ## Messages
 
@@ -95,8 +96,7 @@ prompts, errors that reach stderr, usage and flag help.
   `Text` call in the module and fails on a message with no translation, a
   translation no message uses, one ID with two English texts, or placeholders
   that differ. The English must be a string literal for it to read.
-- **What is not for a person does not vary with the language**: `--json` output,
-  the service's logs (`run` switches to English once it has started), anything
+- **What is not for a person does not vary with the language**: the service's logs (`run` switches to English once it has started), anything
   sent to the Server, files written to the host, exit codes. A change that makes
   any of them depend on the language is a finding.
 - **Adding a language is a catalog**, `locales/<code>.json`, once

@@ -17,14 +17,14 @@ module; wire types are not duplicated here.
 easyssl-agent register --server <url> [--key <key>] [--name <name>] [--lang <code>]   register this host
 easyssl-agent register --server <url> --reactivation-token <token>    resume a deactivated Agent on this host
 easyssl-agent run                                                     the service loop (periodic check-in)
-easyssl-agent status [--json]                                         print local state and what the Server says
+easyssl-agent status                                                  print local state and what the Server says
 easyssl-agent uninstall [--yes]                                       deactivate and remove the Agent
 easyssl-agent language [<code>]                                       print or change the language the commands speak
 ```
 
-Human-readable output goes to stdout (JSON with `--json`); errors go to stderr.
-Both are written in the host's language (Language below); `--json` output is the
-same in every language.
+Output goes to stdout and errors to stderr, both written in the host's language
+(Language below). A failure exits non-zero, including a declined prompt. The CLI
+is for a person: it has no machine-readable output, and its text may change.
 This slice is root-only: every operational command refuses before reading a
 specific file or contacting the Server when run as another user, and names the
 corresponding `sudo easyssl-agent …` command. Top-level help and usage errors do
@@ -170,7 +170,7 @@ prompt accepts the language's own affirmative (`s`, `sí` in Spanish) and always
 `y`.
 
 Only what a command says to a person is translated. These are the same in every
-language: `--json` output, the service's logs and its status line, everything
+language: the service's logs and its status line, everything
 sent to the Server, the files written to the host, exit codes, and whatever a
 Plugin or another program printed. The flag package's own text under `--help`
 (default values, its parse errors) is in English too. The Server is never told
@@ -214,8 +214,7 @@ Asking is a plain read (`GET` on the Agent's own registration), not a check-in,
 so running `status` never refreshes the Agent's last-seen and cannot make a
 stopped Agent look alive in the web console. When the Server cannot be reached,
 the state is reported as unknown with the reason, and the local facts still
-print. `--json` reports a short stable code (`authorized`, `pending`,
-`not-registered`, `unknown`) instead of the sentence.
+print.
 
 ## Seeing what a Plugin was asked to do
 

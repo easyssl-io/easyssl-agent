@@ -25,6 +25,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
@@ -44,13 +46,10 @@ const InstallDir = "/var/lib/easyssl/plugins"
 // the host's disk.
 const maxArtifact = 128 << 20
 
-// discoverTimeout bounds one describe or discover execution. Both run on every
-// check-in and must be shorter than the check-in interval, or a hung Plugin (an
-// `nginx -t` stuck on a broken host) would delay the check-in and the Agent
-// would go Offline for a reason nothing names. describe reads nothing from the
-// host, so in practice only discover comes near it. A Plugin that exceeds it is
-// reported as present but unobserved this run.
-const discoverTimeout = 10 * time.Second
+// pipeWaitDelay is how long a Plugin's pipes may stay open after it exits or
+// is killed. A process it started in the background and that kept them would
+// otherwise hold the Agent's wait forever.
+const pipeWaitDelay = 5 * time.Second
 
 // validPluginID is the Plugin naming rule, matching what the Server accepts on
 // the report route. It is checked before the name reaches a file path, so a
@@ -148,35 +147,51 @@ func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (I
 		return Installed{}, ErrNoArtifact
 	}
 
-	path := filepath.Join(m.installDir, pluginID)
-	digest, err := m.fetchTo(ctx, artifact.URL, path)
+	// A catalog entry with no digest would turn off the only check below, so it
+	// is refused rather than trusted.
+	if artifact.Digest == "" {
+		return Installed{}, msg.Err.T("plugin.install.no_digest", "the catalog publishes no digest for {plugin}, so it was not installed", "plugin", pluginID)
+	}
+
+	// Everything is checked on a temporary file beside the installed one, which
+	// replaces it only once the checks pass: a download that fails them, such as
+	// one from a Server mid-upgrade, leaves the working build in place.
+	tmp, digest, err := m.download(ctx, artifact.URL)
 	if err != nil {
 		return Installed{}, err
 	}
-	// A mismatch means the download was not what the catalog offered, so it is
-	// refused. This is integrity, not authentication: it catches a truncated,
-	// stale or wrong-architecture artifact.
-	if artifact.Digest != "" && digest != artifact.Digest {
-		_ = os.Remove(path)
+	defer os.Remove(tmp) // a no-op once renamed
+	// A mismatch means the download was not what the catalog offered. This is
+	// integrity, not authentication: it catches a truncated, stale or
+	// wrong-architecture artifact.
+	if digest != artifact.Digest {
 		return Installed{}, DigestMismatchError{PluginID: pluginID, Want: artifact.Digest, Got: digest}
 	}
+	desc, err := m.describe(ctx, tmp, pluginID)
+	if err != nil {
+		return Installed{}, msg.Err.T("plugin.install.unusable_answer", "the Plugin's answer is not usable, so it was not installed: {err}", "err", err)
+	}
+	path := filepath.Join(m.installDir, pluginID)
+	if err := os.Rename(tmp, path); err != nil {
+		return Installed{}, err
+	}
+	return Installed{ID: pluginID, Version: desc.Version, Digest: digest, Path: path}, nil
+}
 
-	dctx, cancel := context.WithTimeout(ctx, discoverTimeout)
+// describe runs a Plugin's describe and applies every check an answer must
+// pass, the same for an install, an inventory and a Deployment: an answer, the
+// executable's own name, and the contract's rules.
+func (m *Manager) describe(ctx context.Context, path, pluginID string) (plugincontract.DescribeResponse, error) {
+	dctx, cancel := context.WithTimeout(ctx, plugincontract.AnswerTimeout)
 	defer cancel()
 	desc, err := m.runDescribe(dctx, path)
 	if err != nil {
-		_ = os.Remove(path)
-		return Installed{}, msg.Err.T("plugin.install.no_answer", "the Plugin did not answer `describe`, so it was not installed: {err}", "err", err)
+		return desc, err
 	}
 	if desc.Name != "" && desc.Name != pluginID {
-		_ = os.Remove(path)
-		return Installed{}, msg.Err.T("plugin.install.other_name", "the artifact for \"{plugin}\" calls itself \"{name}\"", "plugin", pluginID, "name", desc.Name)
+		return desc, msg.Err.T("plugin.describe.other_name", "the executable calls itself \"{name}\"", "name", desc.Name)
 	}
-	if err := plugincontract.ValidateDescribe(desc); err != nil {
-		_ = os.Remove(path)
-		return Installed{}, msg.Err.T("plugin.install.unusable_answer", "the Plugin's answer is not usable, so it was not installed: {err}", "err", err)
-	}
-	return Installed{ID: pluginID, Version: desc.Version, Digest: digest, Path: path}, nil
+	return desc, plugincontract.ValidateDescribe(desc)
 }
 
 // List is the installed set: every executable in the Plugin directory, with
@@ -218,26 +233,40 @@ func (m *Manager) Discover(ctx context.Context) ([]wire.PluginInventory, error) 
 	if err != nil {
 		return nil, err
 	}
-	out := make([]wire.PluginInventory, 0, len(installed))
-	for _, p := range installed {
-		entry := wire.PluginInventory{ID: p.ID, Digest: p.Digest}
-		desc, disc, op, err := m.observe(ctx, p)
-		if err != nil {
-			entry.Unobserved = true
-			// Written by this Agent rather than by the Plugin, and read on the
-			// Server by people of any language, so it carries every one.
-			entry.Warnings = []l10n.Text{msg.Text("plugin.inventory.unobserved", "`{op}` produced nothing usable this run: {err}", "op", op, "err", err)}
-			m.logger.Warn("plugin unobserved", "plugin", p.ID, "op", op, "err", err)
-		} else {
-			entry.Version, entry.Description = desc.Version, desc.Description
-			entry.Declarations, entry.DiscoveredTargets, entry.Warnings = desc.Settings, disc.DiscoveredTargets, disc.Warnings
-			if entry.Declarations == nil {
-				entry.Declarations = []plugincontract.SettingDeclaration{}
-			}
-		}
-		out = append(out, entry)
+	// Each Plugin is observed at once, so the pass takes as long as the slowest
+	// Plugin rather than the sum of all of them, and stays within the check-in
+	// interval however many are installed.
+	out := make([]wire.PluginInventory, len(installed))
+	var wg sync.WaitGroup
+	for i, p := range installed {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out[i] = m.inventoryEntry(ctx, p)
+		}()
 	}
+	wg.Wait()
 	return out, nil
+}
+
+// inventoryEntry is what the host inventory carries for one installed Plugin.
+func (m *Manager) inventoryEntry(ctx context.Context, p Installed) wire.PluginInventory {
+	entry := wire.PluginInventory{ID: p.ID, Digest: p.Digest}
+	desc, disc, op, err := m.observe(ctx, p)
+	if err != nil {
+		entry.Unobserved = true
+		// Written by this Agent rather than by the Plugin, and read on the
+		// Server by people of any language, so it carries every one.
+		entry.Warnings = []l10n.Text{msg.Text("plugin.inventory.unobserved", "`{op}` produced nothing usable this run: {err}", "op", op, "err", err)}
+		m.logger.Warn("plugin unobserved", "plugin", p.ID, "op", op, "err", err)
+	} else {
+		entry.Version, entry.Description = desc.Version, desc.Description
+		entry.Declarations, entry.DiscoveredTargets, entry.Warnings = desc.Settings, disc.DiscoveredTargets, disc.Warnings
+		if entry.Declarations == nil {
+			entry.Declarations = []plugincontract.SettingDeclaration{}
+		}
+	}
+	return entry
 }
 
 // observe runs one Plugin's describe and discover and checks both answers,
@@ -247,19 +276,11 @@ func (m *Manager) Discover(ctx context.Context) ([]wire.PluginInventory, error) 
 // another's findings.
 func (m *Manager) observe(ctx context.Context, p Installed) (plugincontract.DescribeResponse, plugincontract.DiscoverResponse, string, error) {
 	var disc plugincontract.DiscoverResponse
-	dctx, cancel := context.WithTimeout(ctx, discoverTimeout)
-	desc, err := m.runDescribe(dctx, p.Path)
-	cancel()
-	if err == nil && desc.Name != "" && desc.Name != p.ID {
-		err = msg.Err.T("plugin.describe.other_name", "the executable calls itself \"{name}\"", "name", desc.Name)
-	}
-	if err == nil {
-		err = plugincontract.ValidateDescribe(desc)
-	}
+	desc, err := m.describe(ctx, p.Path, p.ID)
 	if err != nil {
 		return desc, disc, plugincontract.OpDescribe, err
 	}
-	dctx, cancel = context.WithTimeout(ctx, discoverTimeout)
+	dctx, cancel := context.WithTimeout(ctx, plugincontract.AnswerTimeout)
 	disc, err = m.runDiscover(dctx, p.Path)
 	cancel()
 	if err == nil {
@@ -274,40 +295,40 @@ func (m *Manager) observe(ctx context.Context, p Installed) (plugincontract.Desc
 	return desc, disc, "", nil
 }
 
-func (m *Manager) fetchTo(ctx context.Context, url, path string) (string, error) {
+// download writes an artifact to a temporary executable in the Plugin
+// directory, whose name no Plugin can have, and returns its path and digest.
+// The caller renames it into place or removes it.
+func (m *Manager) download(ctx context.Context, url string) (path, digest string, err error) {
 	if err := os.MkdirAll(m.installDir, 0o755); err != nil {
-		return "", err
+		return "", "", err
 	}
 	body, err := m.catalog.Download(ctx, url)
 	if err != nil {
-		return "", msg.Err.T("plugin.install.download_failed", "downloading the Plugin: {err}", "err", err)
+		return "", "", msg.Err.T("plugin.install.download_failed", "downloading the Plugin: {err}", "err", err)
 	}
 	defer body.Close()
 
 	tmp, err := os.CreateTemp(m.installDir, ".download-*")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	tmpName := tmp.Name()
 	defer func() {
 		tmp.Close()
-		_ = os.Remove(tmpName) // no-op once renamed
+		if err != nil {
+			_ = os.Remove(tmp.Name())
+		}
 	}()
-
 	h := sha256.New()
-	if _, err := io.Copy(io.MultiWriter(tmp, h), io.LimitReader(body, maxArtifact)); err != nil {
-		return "", msg.Err.T("plugin.install.write_failed", "writing the Plugin to disk: {err}", "err", err)
+	if _, err = io.Copy(io.MultiWriter(tmp, h), io.LimitReader(body, maxArtifact)); err != nil {
+		return "", "", msg.Err.T("plugin.install.write_failed", "writing the Plugin to disk: {err}", "err", err)
 	}
-	if err := tmp.Chmod(0o755); err != nil {
-		return "", err
+	if err = tmp.Chmod(0o755); err != nil {
+		return "", "", err
 	}
-	if err := tmp.Close(); err != nil {
-		return "", err
+	if err = tmp.Close(); err != nil {
+		return "", "", err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
+	return tmp.Name(), hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // runByExec runs one of the Plugin's answering operations, describe or
@@ -322,6 +343,12 @@ func runByExec(ctx context.Context, path, op string, logger *slog.Logger, out an
 	// validPluginID, so it names a file this Agent just wrote, and op is one of
 	// the contract's constants.
 	cmd := exec.CommandContext(ctx, path, op)
+	// Its own process group, killed whole when the answer is late, so what the
+	// Plugin started (an `nginx -t`) does not outlive it; and a bounded wait for
+	// its pipes, so a child that keeps them open cannot hold this call.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = pipeWaitDelay
 	// Bounded like the install path's. A Plugin describing itself is the same
 	// arbitrary code, and one that flooded stderr would otherwise be limited only
 	// by this Agent's memory.
@@ -395,6 +422,12 @@ func (c CatalogResponse) find(id string) (CatalogPlugin, bool) {
 		}
 	}
 	return CatalogPlugin{}, false
+}
+
+// HasArtifact reports whether the entry offers a build for this platform.
+func (p CatalogPlugin) HasArtifact(goos, goarch string) bool {
+	_, ok := p.artifact(goos, goarch)
+	return ok
 }
 
 func (p CatalogPlugin) artifact(goos, goarch string) (CatalogArtifact, bool) {
@@ -495,13 +528,13 @@ func (m *Manager) Find(id string) (Installed, bool, error) {
 	if err != nil {
 		return Installed{}, false, err
 	}
-	inst := Installed{ID: id, Digest: digest, Path: path}
-	ctx, cancel := context.WithTimeout(context.Background(), discoverTimeout)
-	defer cancel()
-	if desc, err := m.runDescribe(ctx, path); err == nil {
-		inst.Version = desc.Version
+	// The same checks an inventory applies, so a Deployment records a version
+	// only from an answer that passed them.
+	desc, err := m.describe(context.Background(), path, id)
+	if err != nil {
+		return Installed{}, true, msg.Err.T("plugin.find.unusable_answer", "{plugin} did not answer `describe` usably: {err}", "plugin", id, "err", err)
 	}
-	return inst, true, nil
+	return Installed{ID: id, Digest: digest, Path: path, Version: desc.Version}, true, nil
 }
 
 // fileDigest is the SHA-256 of a file, lowercase hex, the same form the

@@ -14,11 +14,13 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-contract/l10n"
+	"github.com/easyssl-io/easyssl-contract/plugincontract"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -188,5 +190,29 @@ func TestOnlyDeploymentNotFoundDiscardsTheCommand(t *testing.T) {
 	bare := New(workAPI{&serverapi.APIError{Status: 404}}, plugins{}, "tok", logger)
 	if err := bare(context.Background(), cmd); err == nil {
 		t.Fatal("bare 404: handler = nil, want error (retry later)")
+	}
+}
+
+// A process the install command leaves in the background keeps the Plugin's
+// output open. The Deployment still ends when the Plugin exits, with its own
+// exit status, rather than when that process does.
+func TestABackgroundProcessDoesNotHoldTheDeployment(t *testing.T) {
+	if _, err := os.Stat("/bin/sh"); err != nil {
+		t.Skip("no /bin/sh")
+	}
+	orig := pipeWaitDelay
+	pipeWaitDelay = 200 * time.Millisecond
+	t.Cleanup(func() { pipeWaitDelay = orig })
+	plugin := filepath.Join(t.TempDir(), "plugin")
+	if err := os.WriteFile(plugin, []byte("#!/bin/sh\nsleep 30 &\necho installed\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	run, err := runPlugin(context.Background(), plugin, plugincontract.DeployRequest{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil || run.ExitStatus != 0 {
+		t.Fatalf("run = %+v, err %v; want exit 0 and no error", run, err)
+	}
+	if elapsed := time.Since(started); elapsed > 10*time.Second {
+		t.Fatalf("took %s, so the background process held the Deployment", elapsed)
 	}
 }

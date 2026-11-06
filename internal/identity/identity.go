@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/easyssl-io/easyssl-agent/internal/atomicfile"
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
 )
 
@@ -62,7 +63,7 @@ func SaveConfig(cfg Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(ConfigPath(), append(data, '\n'), 0o600)
+	return atomicfile.Write(ConfigPath(), append(data, '\n'), 0o600, 0o700)
 }
 
 func LoadConfig() (Config, error) {
@@ -79,7 +80,7 @@ func SaveToken(token string) error {
 	if err := os.MkdirAll(BaseDir, 0o700); err != nil {
 		return err
 	}
-	return os.WriteFile(TokenPath(), []byte(token), 0o600)
+	return atomicfile.Write(TokenPath(), []byte(token), 0o600, 0o700)
 }
 
 // RemoveAll deletes this Agent's config and token. An already-absent file is
