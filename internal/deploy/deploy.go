@@ -45,6 +45,10 @@ const runTimeout = 10 * time.Minute
 // keep buys nothing.
 const maxOutput = plugintrace.MaxPluginOutput
 
+// pipeWaitDelay is how long a Plugin's output pipes may stay open after it
+// exits, held by a process it started. A var only so a test can shorten it.
+var pipeWaitDelay = 5 * time.Second
+
 // hostLock serializes Plugin execution across this process. Two Deployments
 // landing together could otherwise write and reload the same service at once,
 // and the second could reload a half-written file. Queued Deployments wait here
@@ -255,6 +259,11 @@ func runPlugin(ctx context.Context, path string, req plugincontract.DeployReques
 	// command started. A script that backgrounds a process would otherwise
 	// outlive the timeout and hold nothing accountable.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// A process the install command left running in the background keeps the
+	// Plugin's output pipes open, and Wait would wait for it, holding the host's
+	// Deployment lock. Past this delay after the Plugin exits, the pipes are
+	// closed and the Plugin's own exit status stands.
+	cmd.WaitDelay = pipeWaitDelay
 
 	started := time.Now()
 	captured, code, runErr := runBounded(rctx, cmd)
@@ -336,6 +345,11 @@ func runBounded(ctx context.Context, cmd *exec.Cmd) (captured *plugintrace.Captu
 			"the Plugin did not finish within {timeout} and was killed", "timeout", runTimeout)
 	case waitErr := <-done:
 		code := cmd.ProcessState.ExitCode()
+		if errors.Is(waitErr, exec.ErrWaitDelay) {
+			// The Plugin exited and something it started still held its output;
+			// what that process prints later is not part of this Deployment.
+			waitErr = nil
+		}
 		if waitErr != nil {
 			// A Plugin that exits with a status has said why in its output, which
 			// the reader sees beside this sentence; Go's "exit status 1" alone
