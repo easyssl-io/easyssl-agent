@@ -18,11 +18,13 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
@@ -415,7 +417,19 @@ func (c HTTPCatalog) client() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return http.DefaultClient
+	return &http.Client{
+		Timeout: 10 * time.Minute,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 || !sameOrigin(via[0].URL, req.URL) {
+				return http.ErrUseLastResponse
+			}
+			return nil
+		},
+	}
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
 }
 
 func (c HTTPCatalog) Fetch(ctx context.Context) (CatalogResponse, error) {
@@ -435,8 +449,22 @@ func (c HTTPCatalog) Fetch(ctx context.Context) (CatalogResponse, error) {
 	return out, json.NewDecoder(res.Body).Decode(&out)
 }
 
-func (c HTTPCatalog) Download(ctx context.Context, url string) (io.ReadCloser, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+// Download fetches an artifact by the URL the catalog names, a path resolved
+// against BaseURL. A URL naming any other origin is refused, as is a redirect
+// to one: the Agent downloads code only from the Server it is registered to.
+func (c HTTPCatalog) Download(ctx context.Context, ref string) (io.ReadCloser, error) {
+	base, err := url.Parse(c.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	target, err := base.Parse(ref)
+	if err != nil {
+		return nil, err
+	}
+	if !sameOrigin(base, target) {
+		return nil, msg.Err.T("plugin.install.other_origin", "the catalog names {url}, which is not on the Server", "url", target.String())
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
 	if err != nil {
 		return nil, err
 	}

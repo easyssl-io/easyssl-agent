@@ -106,7 +106,7 @@ new one.
 The installer is served by the Server, so the usual one-liner is:
 
 ```
-curl -sSL <server-url>/install | sudo REGISTRATION_KEY=<key> bash
+curl -fsSL <server-url>/install | sudo REGISTRATION_KEY=<key> bash
 ```
 
 The prompts still work in that form: the script arrives on stdin, so the Agent
@@ -115,14 +115,14 @@ there is no terminal at all (cloud-init, CI), pass the name up front and it
 never prompts:
 
 ```
-curl -sSL <server-url>/install | sudo REGISTRATION_KEY=<key> AGENT_NAME=web-01 bash
+curl -fsSL <server-url>/install | sudo REGISTRATION_KEY=<key> AGENT_NAME=web-01 bash
 ```
 
 A deactivated Agent's page in the web console generates the reactivation form
 of the same command, with a single-use token that expires after a day:
 
 ```
-curl -sSL <server-url>/install | sudo REACTIVATION_TOKEN=<token> bash
+curl -fsSL <server-url>/install | sudo REACTIVATION_TOKEN=<token> bash
 ```
 
 ## Language

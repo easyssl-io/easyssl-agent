@@ -52,6 +52,7 @@
   "plugin.install.not_in_catalog": "el Marketplace del Servidor no ofrece este Plugin",
   "plugin.install.not_reported": "informado  aún no ({err}); el servicio informa en su próximo check-in",
   "plugin.install.other_name": "el artefacto de \"{plugin}\" se llama a sí mismo \"{name}\"",
+  "plugin.install.other_origin": "el catálogo nombra {url}, que no está en el Servidor",
   "plugin.install.reported": "informado  a {server}",
   "plugin.install.unusable_answer": "la respuesta del Plugin no es utilizable, así que no se instaló: {err}",
   "plugin.install.usage": "uso: easyssl-agent plugin install <name>... [--yes] [--json]",
