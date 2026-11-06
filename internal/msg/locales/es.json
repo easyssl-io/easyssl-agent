@@ -35,7 +35,6 @@
   "plugin.catalog.install_hint": "Instala uno con: easyssl-agent plugin install <name>",
   "plugin.catalog.publisher": "por {publisher}",
   "plugin.describe.contract": "el Plugin se compiló para la versión de contrato \"{got}\", que este Agente ({own}) no ejecuta",
-  "plugin.describe.other_name": "el ejecutable se llama a sí mismo \"{name}\"",
   "plugin.install.catalog_failed": "al leer el catálogo del Marketplace: {err}",
   "plugin.install.confirm": "¿Instalarlo y ejecutarlo con esos privilegios? [s/N] ",
   "plugin.install.declined": "No se instaló nada.",

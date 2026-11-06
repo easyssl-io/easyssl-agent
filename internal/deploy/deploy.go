@@ -99,7 +99,7 @@ func New(api API, plugins Plugins, token string, logger *slog.Logger) commands.H
 			return nil
 		}
 
-		res := run(ctx, plugins, work, logger)
+		res := run(ctx, plugins, work, logger.With("deployment", cmd.RefID))
 		if err := api.ReportDeploymentResult(ctx, token, cmd.RefID, res); err != nil {
 			var apiErr *serverapi.APIError
 			if errors.As(err, &apiErr) && apiErr.Code == wire.CodeDeploymentFinished {
@@ -200,19 +200,18 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	}()
 
 	req := plugincontract.DeployRequest{
-		ContractVersion: plugincontract.ContractVersion,
-		CertificatePem:  work.CertificatePem,
-		ChainPem:        work.ChainPem,
-		PrivateKeyPem:   keyPEM,
-		WorkDir:         workDir,
-		Settings:        work.Settings,
+		CertificatePem: work.CertificatePem,
+		ChainPem:       work.ChainPem,
+		PrivateKeyPem:  keyPEM,
+		WorkDir:        workDir,
+		Settings:       work.Settings,
 	}
 
 	hostLock.Lock()
 	defer hostLock.Unlock()
 
 	run, err := runPlugin(ctx, installed.Path, req, logger,
-		"deployment", work.ID, "certificate", work.CertificateID,
+		"certificate", work.CertificateID,
 		"plugin", installed.ID, "plugin_version", installed.Version)
 	result := wire.DeploymentResult{
 		OK:            succeeded(err, run),

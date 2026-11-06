@@ -104,7 +104,7 @@ func keyOf(t *testing.T, p string) string {
 }
 
 func work(domains ...string) wire.CSRWork {
-	return wire.CSRWork{CertificateID: certificateID, Domains: domains, KeyType: wire.KeyTypeECP256}
+	return wire.CSRWork{Domains: domains, KeyType: wire.KeyTypeECP256}
 }
 
 func command() wire.Command {
@@ -248,8 +248,8 @@ func TestTransportTroubleLeavesTheCommandPending(t *testing.T) {
 // Certificate at once; a retry would change nothing.
 func TestUnperformableWorkIsUnsupported(t *testing.T) {
 	cases := map[string]wire.CSRWork{
-		"unknown key type": {CertificateID: certificateID, Domains: []string{"a.example.test"}, KeyType: "ml-dsa-44"},
-		"no domains":       {CertificateID: certificateID, Domains: nil, KeyType: wire.KeyTypeECP256},
+		"unknown key type": {Domains: []string{"a.example.test"}, KeyType: "ml-dsa-44"},
+		"no domains":       {Domains: nil, KeyType: wire.KeyTypeECP256},
 	}
 	for name, w := range cases {
 		api := &fakeAPI{work: w}

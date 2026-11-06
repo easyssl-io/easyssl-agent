@@ -81,26 +81,26 @@ func New(api API, token string, logger *slog.Logger) commands.Handler {
 			return err
 		}
 
-		err = api.SubmitCSR(ctx, token, work.CertificateID, csrPEM)
+		err = api.SubmitCSR(ctx, token, cmd.RefID, csrPEM)
 		var apiErr *serverapi.APIError
 		switch {
 		case err == nil:
-			logger.Info("csr submitted", "certificate", work.CertificateID)
+			logger.Info("csr submitted", "certificate", cmd.RefID)
 			return nil
 		case errors.As(err, &apiErr) && apiErr.Code == wire.CodeCSRAlreadySubmitted:
 			// Success from an earlier run this Agent cannot recognize
 			// byte-wise; the work named the stored CSR's key, so this build
 			// was from the same key and there is nothing left to do.
-			logger.Info("csr already submitted", "certificate", work.CertificateID)
+			logger.Info("csr already submitted", "certificate", cmd.RefID)
 			return nil
 		case errors.As(err, &apiErr) && apiErr.Code == wire.CodeNotAwaitingCSR:
-			logger.Warn("certificate no longer awaiting a csr; discarding command", "certificate", work.CertificateID)
+			logger.Warn("certificate no longer awaiting a csr; discarding command", "certificate", cmd.RefID)
 			return nil
 		case errors.As(err, &apiErr) && apiErr.Code == wire.CodeCSRMismatch:
 			// The Server rejected what this Agent built and failed the certificate,
 			// naming this Agent. Retrying the same build cannot help, so the command is
 			// acked.
-			logger.Error("server rejected the csr", "certificate", work.CertificateID, "err", err)
+			logger.Error("server rejected the csr", "certificate", cmd.RefID, "err", err)
 			return nil
 		default:
 			return err // transport or Server trouble: leave pending, retry later

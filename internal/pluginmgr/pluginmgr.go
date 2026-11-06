@@ -213,9 +213,6 @@ func (m *Manager) describeRaw(ctx context.Context, path, pluginID string) (plugi
 	if !plugincontract.Compatible(desc.ContractVersion) {
 		return desc, nil, msg.Err.T("plugin.describe.contract", "the Plugin was built against contract version \"{got}\", which this Agent ({own}) does not run", "got", desc.ContractVersion, "own", plugincontract.ContractVersion)
 	}
-	if desc.Name != "" && desc.Name != pluginID {
-		return desc, nil, msg.Err.T("plugin.describe.other_name", "the executable calls itself \"{name}\"", "name", desc.Name)
-	}
 	if err := plugincontract.ValidateDescribe(desc); err != nil {
 		return desc, nil, err
 	}
