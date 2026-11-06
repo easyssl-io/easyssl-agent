@@ -94,7 +94,7 @@
   "register.name.prompt": "Nombre del Agente [{proposed}]: ",
   "register.name.prompt_empty": "Nombre del Agente: ",
   "register.name.prompt_with_host": "Nombre del Agente (host {host}) [{proposed}]: ",
-  "register.no_agent_id": "el registro falló: el Servidor no envió un ID de Agente (¿es más antiguo que este Agente?)",
+  "register.no_agent_id": "el registro falló: el Servidor no envió un ID de Agente",
   "register.no_plugin": "No hay ningún Plugin instalado en este host, y el Agente encuentra y actualiza Certificados solo a través de uno.\n  verlos:         sudo easyssl-agent plugin catalog\n  instalar uno:   sudo easyssl-agent plugin install <nombre>",
   "register.not_root": "register debe ejecutarse como root: usa sudo, o ejecútalo desde una shell de root",
   "register.plugins.confirm": "¿Instalarlos ahora? [s/N]: ",
