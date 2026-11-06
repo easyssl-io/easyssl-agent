@@ -26,6 +26,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/easyssl-io/easyssl-contract/catalog"
+
 	"github.com/easyssl-io/easyssl-agent/internal/commands"
 	"github.com/easyssl-io/easyssl-agent/internal/csr"
 	"github.com/easyssl-io/easyssl-agent/internal/deploy"
@@ -701,15 +703,15 @@ func cmdPluginCatalog(ctx context.Context, args []string) error {
 	if err != nil {
 		return stateError("plugin catalog", err)
 	}
-	catalog, err := pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL}.Fetch(ctx)
+	offered, err := pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL}.Fetch(ctx)
 	if err != nil {
 		return err
 	}
 	// Only what this host could install: an entry with no build for its platform
 	// would fail at install with nothing to show for it.
-	var entries []pluginmgr.CatalogPlugin
-	for _, e := range catalog.Plugins {
-		if e.HasArtifact(runtime.GOOS, runtime.GOARCH) {
+	var entries []catalog.Plugin
+	for _, e := range offered.Plugins {
+		if pluginmgr.HasArtifact(e, runtime.GOOS, runtime.GOARCH) {
 			entries = append(entries, e)
 		}
 	}
