@@ -372,18 +372,42 @@ type StreamWriter struct {
 	cap     *Capture
 	stream  string
 	partial []byte
+	// skipping is set once the line being written has outgrown the bound: the
+	// rest of it is counted as dropped, not held, so a Plugin that never writes
+	// a newline cannot grow this Agent's memory.
+	skipping bool
 }
 
 func (w *StreamWriter) Write(p []byte) (int, error) {
-	w.partial = append(w.partial, p...)
-	for {
-		i := bytes.IndexByte(w.partial, '\n')
-		if i < 0 {
-			return len(p), nil
+	n := len(p)
+	for len(p) > 0 {
+		seg := p
+		i := bytes.IndexByte(p, '\n')
+		if i >= 0 {
+			seg = p[:i]
 		}
-		w.cap.append(w.stream, w.partial[:i])
-		w.partial = w.partial[i+1:]
+		if w.skipping {
+			w.cap.drop(w.stream, len(seg))
+		} else {
+			w.partial = append(w.partial, seg...)
+			if w.cap.Max > 0 && len(w.partial) > w.cap.Max {
+				w.cap.drop(w.stream, len(w.partial))
+				w.partial, w.skipping = nil, true
+			}
+		}
+		if i < 0 {
+			break
+		}
+		if w.skipping {
+			w.cap.drop(w.stream, 1)
+			w.skipping = false
+		} else {
+			w.cap.append(w.stream, w.partial)
+			w.partial = w.partial[:0]
+		}
+		p = p[i+1:]
 	}
+	return n, nil
 }
 
 // Flush records a trailing line that never got its newline, which is what a
@@ -391,6 +415,17 @@ func (w *StreamWriter) Write(p []byte) (int, error) {
 func (w *StreamWriter) Flush() {
 	if len(w.partial) > 0 {
 		w.cap.append(w.stream, w.partial)
-		w.partial = nil
 	}
+	w.partial, w.skipping = nil, false
+}
+
+// drop counts n bytes of a stream as produced and not kept. Like append, it
+// ends what is kept of that stream, so the record stays a clean prefix.
+func (c *Capture) drop(stream string, n int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.dropped == nil {
+		c.dropped, c.kept = map[string]int{}, map[string]int{}
+	}
+	c.dropped[stream] += n
 }
