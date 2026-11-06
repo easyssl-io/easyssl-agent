@@ -41,6 +41,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/easyssl-io/easyssl-agent/internal/atomicfile"
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-contract/wire"
@@ -119,7 +120,7 @@ func Generate(keyType string) (string, crypto.Signer, error) {
 	// Durable before it is returned: the caller builds a CSR from it next,
 	// and a CSR the Server has for a key a power loss took is a certificate
 	// this host can never install.
-	if err := writeFile(keysDir(), fp+".key", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})); err != nil {
+	if err := atomicfile.Write(filepath.Join(keysDir(), fp+".key"), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), fileMode, dirMode); err != nil {
 		return "", nil, err
 	}
 	logger().Info("private key generated", "key", fp)
@@ -286,84 +287,6 @@ func fingerprint(pub crypto.PublicKey) (string, error) {
 	}
 	sum := sha256.Sum256(der)
 	return hex.EncodeToString(sum[:]), nil
-}
-
-// writeFile puts data at dir/name so that a reader sees either nothing or a
-// complete file, and so that a crash cannot lose what a CSR was built from.
-//
-// The temporary file is created inside the destination directory at its final
-// permissions, because adjusting them afterwards would leave a window in which
-// the file is readable by others. It is opened with O_EXCL under a random name,
-// so it cannot collide with or reuse anything already there. The rename makes
-// the write atomic, and the two syncs make it survive a power loss.
-func writeFile(dir, name string, data []byte) error {
-	if err := mkdirAllSynced(dir); err != nil {
-		return err
-	}
-	suffix := make([]byte, 8)
-	if _, err := rand.Read(suffix); err != nil {
-		return err
-	}
-	tmp := filepath.Join(dir, ".tmp-"+hex.EncodeToString(suffix))
-	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fileMode)
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp) // a no-op once the rename below has succeeded
-
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, filepath.Join(dir, name)); err != nil {
-		return err
-	}
-	return syncDir(dir)
-}
-
-// mkdirAllSynced creates dir, and makes every directory it had to create
-// durable by syncing the parent that now holds that entry.
-//
-// Syncing a directory makes the entries inside it durable, not the directory
-// itself, so creating <base>/keys and syncing only <base>/keys leaves the
-// "keys" entry in <base> unflushed. A power loss in that window, which is only
-// the first write after an install, can take the whole directory while the
-// record naming a key inside it survives.
-//
-// A directory that already exists needs nothing: its entry was made durable
-// when it was created, or it predates this Agent.
-func mkdirAllSynced(dir string) error {
-	if _, err := os.Stat(dir); err == nil {
-		return nil
-	}
-	parent := filepath.Dir(dir)
-	if parent != dir {
-		if err := mkdirAllSynced(parent); err != nil {
-			return err
-		}
-	}
-	if err := os.Mkdir(dir, dirMode); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
-	}
-	return syncDir(parent)
-}
-
-// syncDir flushes a directory entry, so the renamed file is still there after a
-// power loss rather than only its contents having been written.
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
 }
 
 // validateKeyID accepts a key fingerprint: 64 lowercase hex characters.
