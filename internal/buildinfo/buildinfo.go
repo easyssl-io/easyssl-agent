@@ -2,6 +2,8 @@
 // to the Server carries in User-Agent and the installer prints.
 package buildinfo
 
-// Version is this Agent build's version. It stays at 0.0.1 until the first
-// release.
-const Version = "0.0.1"
+// Version is set from the Agent's release tag, `vX.Y.Z`, with `-ldflags -X`
+// when a release is built. Every other build reports the version the Agent
+// keeps until its first release. A variable rather than a constant, since `-X`
+// can set only a variable.
+var Version = "0.0.1"

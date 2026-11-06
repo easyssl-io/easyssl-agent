@@ -14,8 +14,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/easyssl-io/easyssl-contract/catalog"
 	"github.com/easyssl-io/easyssl-contract/l10n"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
+	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
 // The tests use a fake Marketplace and a fake describe and discover, so no
@@ -31,14 +33,14 @@ func trueDigest() string {
 
 func newMarketplace(t *testing.T, publishDigest string) *httptest.Server {
 	t.Helper()
-	return newMarketplaceOf(t, publishDigest, PartyFirst)
+	return newMarketplaceOf(t, publishDigest, catalog.PartyFirst)
 }
 
 func newMarketplaceOf(t *testing.T, publishDigest, party string) *httptest.Server {
 	t.Helper()
 	var srv *httptest.Server
 	mux := http.NewServeMux()
-	mux.HandleFunc("/marketplace/catalog", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc(wire.APIPrefix+catalog.RouteCatalog, func(w http.ResponseWriter, _ *http.Request) {
 		digest := publishDigest
 		switch digest {
 		case "":
@@ -46,15 +48,15 @@ func newMarketplaceOf(t *testing.T, publishDigest, party string) *httptest.Serve
 		case "none":
 			digest = ""
 		}
-		_ = json.NewEncoder(w).Encode(CatalogResponse{Plugins: []CatalogPlugin{{
+		_ = json.NewEncoder(w).Encode(catalog.Response{Plugins: []catalog.Plugin{{
 			ID: "generic-cli", Version: "9.9.9-catalog-says", Party: party,
-			Artifacts: []CatalogArtifact{{
+			Artifacts: []catalog.Artifact{{
 				OS: "linux", Arch: "amd64", SHA256: digest,
-				URL: srv.URL + "/download/plugins/generic-cli/linux/amd64",
+				URL: wire.APIPrefix + catalog.PluginArtifactPath("generic-cli", "linux", "amd64"),
 			}},
 		}}})
 	})
-	mux.HandleFunc("/download/plugins/generic-cli/linux/amd64", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc(wire.APIPrefix+catalog.PluginArtifactPath("generic-cli", "linux", "amd64"), func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(artifactBody))
 	})
 	srv = httptest.NewServer(mux)
@@ -353,7 +355,7 @@ func TestRunByExecRefusesAnOversizedAnswer(t *testing.T) {
 func TestDownloadStaysOnTheServer(t *testing.T) {
 	srv := newMarketplace(t, "")
 	c := HTTPCatalog{BaseURL: srv.URL}
-	body, err := c.Download(context.Background(), "/download/plugins/generic-cli/linux/amd64")
+	body, err := c.Download(context.Background(), wire.APIPrefix+catalog.PluginArtifactPath("generic-cli", "linux", "amd64"))
 	if err != nil {
 		t.Fatalf("a path on the Server: %v", err)
 	}

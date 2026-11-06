@@ -32,6 +32,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
+	"github.com/easyssl-io/easyssl-contract/catalog"
 	"github.com/easyssl-io/easyssl-contract/l10n"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
 	"github.com/easyssl-io/easyssl-contract/wire"
@@ -71,7 +72,7 @@ type Installed struct {
 // Catalog is the Marketplace read. Separate from Reporter because the catalog
 // needs no token: it is the same bytes for everyone.
 type Catalog interface {
-	Fetch(ctx context.Context) (CatalogResponse, error)
+	Fetch(ctx context.Context) (catalog.Response, error)
 	Download(ctx context.Context, url string) (io.ReadCloser, error)
 }
 
@@ -104,9 +105,6 @@ func New(catalog Catalog, logger *slog.Logger) *Manager {
 		},
 	}
 }
-
-// PartyFirst is the catalog's party for a Plugin easySSL publishes itself.
-const PartyFirst = "first"
 
 var ErrNotInCatalog = msg.Err.T("plugin.install.not_in_catalog", "the Server's Marketplace does not offer this Plugin")
 
@@ -141,17 +139,17 @@ func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (I
 	if err != nil {
 		return Installed{}, msg.Err.T("plugin.install.catalog_failed", "reading the Marketplace catalog: {err}", "err", err)
 	}
-	entry, ok := cat.find(pluginID)
+	entry, ok := findPlugin(cat, pluginID)
 	if !ok {
 		return Installed{}, ErrNotInCatalog
 	}
 	// Only first-party Plugins are installed: a third-party one would need a
 	// signature this Agent cannot check yet, so it is refused rather than run
 	// as root on the strength of a catalog entry alone.
-	if entry.Party != PartyFirst {
+	if entry.Party != catalog.PartyFirst {
 		return Installed{}, msg.Err.T("plugin.install.not_first_party", "{plugin} is not a first-party Plugin, and this Agent installs only those", "plugin", pluginID)
 	}
-	artifact, ok := entry.artifact(goos, goarch)
+	artifact, ok := artifactFor(entry, goos, goarch)
 	if !ok {
 		return Installed{}, ErrNoArtifact
 	}
@@ -421,55 +419,28 @@ func runByExec(ctx context.Context, path, op string, logger *slog.Logger) ([]byt
 	return stdout, nil
 }
 
-// CatalogArtifact and CatalogPlugin mirror what the Server publishes. They live
-// here rather than in the wire package because the Marketplace is a
-// Server-to-anyone surface, not part of the Agent↔Server protocol: a browser
-// reads the same JSON.
-type CatalogArtifact struct {
-	OS   string `json:"os"`
-	Arch string `json:"arch"`
-	// SHA256 is the SHA-256 of the artifact's bytes, lowercase hex.
-	SHA256 string `json:"sha256"`
-	URL    string `json:"url"`
-}
-
-type CatalogPlugin struct {
-	ID          string            `json:"id"`
-	Version     string            `json:"version"`
-	Description l10n.Text         `json:"description"`
-	Party       string            `json:"party"`
-	Publisher   string            `json:"publisher"`
-	SourceURL   string            `json:"sourceUrl"`
-	Platforms   []string          `json:"platforms"`
-	Artifacts   []CatalogArtifact `json:"artifacts"`
-}
-
-type CatalogResponse struct {
-	Plugins []CatalogPlugin `json:"plugins"`
-}
-
-func (c CatalogResponse) find(id string) (CatalogPlugin, bool) {
+func findPlugin(c catalog.Response, id string) (catalog.Plugin, bool) {
 	for _, p := range c.Plugins {
 		if p.ID == id {
 			return p, true
 		}
 	}
-	return CatalogPlugin{}, false
+	return catalog.Plugin{}, false
 }
 
 // HasArtifact reports whether the entry offers a build for this platform.
-func (p CatalogPlugin) HasArtifact(goos, goarch string) bool {
-	_, ok := p.artifact(goos, goarch)
+func HasArtifact(p catalog.Plugin, goos, goarch string) bool {
+	_, ok := artifactFor(p, goos, goarch)
 	return ok
 }
 
-func (p CatalogPlugin) artifact(goos, goarch string) (CatalogArtifact, bool) {
+func artifactFor(p catalog.Plugin, goos, goarch string) (catalog.Artifact, bool) {
 	for _, a := range p.Artifacts {
 		if a.OS == goos && a.Arch == goarch {
 			return a, true
 		}
 	}
-	return CatalogArtifact{}, false
+	return catalog.Artifact{}, false
 }
 
 // HTTPCatalog reads the Marketplace over HTTP. No token: the catalog and the
@@ -498,9 +469,9 @@ func sameOrigin(a, b *url.URL) bool {
 	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
 }
 
-func (c HTTPCatalog) Fetch(ctx context.Context) (CatalogResponse, error) {
-	var out CatalogResponse
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/marketplace/catalog", nil)
+func (c HTTPCatalog) Fetch(ctx context.Context) (catalog.Response, error) {
+	var out catalog.Response
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+wire.APIPrefix+catalog.RouteCatalog, nil)
 	if err != nil {
 		return out, err
 	}
