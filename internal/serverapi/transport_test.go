@@ -189,3 +189,19 @@ func TestARedirectWithinTheSameSchemeIsFollowed(t *testing.T) {
 		t.Errorf("status = %q, want %q", out.Status, wire.StatusActive)
 	}
 }
+
+// Two spellings of one Server are one Server, so a reinstall from either is
+// not refused as coming from another.
+func TestNormalizeURL(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://Server.Example.com/":     "https://server.example.com",
+		"https://server.example.com:443":  "https://server.example.com",
+		"HTTPS://server.example.com:8443": "https://server.example.com:8443",
+		"http://127.0.0.1:80/":            "http://127.0.0.1",
+		"https://[::1]:443":               "https://[::1]",
+	} {
+		if got := NormalizeURL(in); got != want {
+			t.Errorf("NormalizeURL(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
