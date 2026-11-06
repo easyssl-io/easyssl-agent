@@ -271,7 +271,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	fmt.Println(msg.T("reinstall.service_updated", "✓ {service} updated", "service", serviceName()))
 	defer startServiceOnExit()
 
-	if resp.Status == wire.StatusActive {
+	if resp.Status == wire.AgentStatusActive {
 		fmt.Println()
 		fmt.Println(msg.T("reinstall.active", "✓ {name} is authorized and ACTIVE.", "name", resp.DisplayName))
 		return nil
@@ -333,7 +333,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	fmt.Println(msg.T("register.service_installed", "✓ service installed: {service}", "service", serviceName()))
 	defer startServiceOnExit()
 
-	if resp.Status == wire.StatusActive {
+	if resp.Status == wire.AgentStatusActive {
 		fmt.Println()
 		fmt.Println(msg.T("register.reactivated", "✓ Reactivated as {name} ({id}), ACTIVE in {organization}.",
 			"name", resp.DisplayName, "id", resp.AgentID, "organization", cfg.Organization()))
@@ -814,7 +814,7 @@ func waitForAuthorization(ctx context.Context, api *serverapi.Client, token stri
 	}
 	for {
 		resp, err := api.RegistrationStatus(ctx, token)
-		if err == nil && resp.Status == wire.StatusActive {
+		if err == nil && resp.Status == wire.AgentStatusActive {
 			return resp.OrganizationName, resp.OrganizationID, nil
 		}
 		if err != nil && isUnknownToken(err) {

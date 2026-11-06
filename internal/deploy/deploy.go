@@ -93,9 +93,9 @@ func New(api API, plugins Plugins, token string, logger *slog.Logger) commands.H
 		// Already finished, which is what a re-delivered command looks like. Acked
 		// without running: installing again would be a second Deployment nobody asked
 		// for.
-		if work.State != wire.DeploymentStatePending {
+		if work.Status != wire.DeploymentStatusPending {
 			logger.Info("deployment already finished; acking without running",
-				"deployment", cmd.RefID, "state", work.State)
+				"deployment", cmd.RefID, "status", work.Status)
 			return nil
 		}
 

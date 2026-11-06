@@ -79,7 +79,7 @@ func start(t *testing.T, states ...string) (*serverapi.Client, *registrationFake
 
 func TestWaitForAuthorizationReadsTheRegistrationAndNeverChecksIn(t *testing.T) {
 	t.Run("returns the Organization once the Agent is active", func(t *testing.T) {
-		api, fake := start(t, wire.StatusActive)
+		api, fake := start(t, wire.AgentStatusActive)
 		ctx, cancel := context.WithTimeout(context.Background(), waitBudget)
 		defer cancel()
 
@@ -96,7 +96,7 @@ func TestWaitForAuthorizationReadsTheRegistrationAndNeverChecksIn(t *testing.T) 
 	})
 
 	t.Run("keeps asking while pending, and never checks in", func(t *testing.T) {
-		api, fake := start(t, wire.StatusPending, wire.StatusActive)
+		api, fake := start(t, wire.AgentStatusPending, wire.AgentStatusActive)
 		ctx, cancel := context.WithTimeout(context.Background(), waitBudget)
 		defer cancel()
 

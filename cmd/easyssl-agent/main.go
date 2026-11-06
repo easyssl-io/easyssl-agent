@@ -334,7 +334,7 @@ func cmdRun(ctx context.Context, args []string) error {
 					logger.Info("host inventory reported", "plugins", len(inv.Plugins), "keys", len(inv.Keys))
 				}
 			}
-			if resp.Status == wire.StatusActive {
+			if resp.Status == wire.AgentStatusActive {
 				// Only now: every push-channel route refuses an Agent still awaiting
 				// authorization, as the check-in does, so subscribing earlier would loop on
 				// 401s.
@@ -550,9 +550,9 @@ func serverState(cfg identity.Config, token string, tokenErr error) (detail stri
 	}
 	resp, err := api.RegistrationStatus(ctx, token)
 	switch {
-	case err == nil && resp.Status == wire.StatusActive:
+	case err == nil && resp.Status == wire.AgentStatusActive:
 		return msg.T("status.state.authorized", "authorized"), resp
-	case err == nil && resp.Status == wire.StatusPending:
+	case err == nil && resp.Status == wire.AgentStatusPending:
 		return msg.T("status.state.pending", "pending authorization"), resp
 	case err == nil:
 		return resp.Status, resp
