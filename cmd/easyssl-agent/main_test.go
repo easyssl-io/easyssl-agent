@@ -11,12 +11,12 @@ import (
 
 func TestPluginListLineShowsFullSHA256(t *testing.T) {
 	digest := strings.Repeat("ab", 32)
-	got := pluginListLine(wire.PluginInventory{ID: "generic-cli", Describe: []byte(`{"version":"0.0.1"}`), Digest: digest})
+	got := pluginListLine(wire.PluginInventory{ID: "generic-cli", Describe: []byte(`{"version":"0.0.1"}`), SHA256: digest})
 	want := "generic-cli      v0.0.1      sha256:" + digest
 	if got != want {
 		t.Fatalf("plugin list line = %q, want %q", got, want)
 	}
-	unobserved := pluginListLine(wire.PluginInventory{ID: "generic-cli", Digest: digest, Unobserved: true})
+	unobserved := pluginListLine(wire.PluginInventory{ID: "generic-cli", SHA256: digest, Unobserved: true})
 	if !strings.Contains(unobserved, "did not answer discover") || !strings.Contains(unobserved, digest) {
 		t.Fatalf("unobserved line = %q", unobserved)
 	}

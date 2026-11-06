@@ -759,9 +759,9 @@ func cmdPluginList(args []string) error {
 func pluginListLine(p wire.PluginInventory) string {
 	if p.Unobserved {
 		return msg.T("plugin.list.unobserved", "{id} {version} sha256:{digest}  (did not answer discover)",
-			"id", fmt.Sprintf("%-16s", p.ID), "version", fmt.Sprintf("%-11s", "?"), "digest", p.Digest)
+			"id", fmt.Sprintf("%-16s", p.ID), "version", fmt.Sprintf("%-11s", "?"), "digest", p.SHA256)
 	}
 	var desc plugincontract.DescribeResponse
 	_ = json.Unmarshal(p.Describe, &desc) // checked already by Discover
-	return fmt.Sprintf("%-16s v%-10s sha256:%s", p.ID, desc.Version, p.Digest)
+	return fmt.Sprintf("%-16s v%-10s sha256:%s", p.ID, desc.Version, p.SHA256)
 }

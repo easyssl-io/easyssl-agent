@@ -104,6 +104,9 @@ func New(catalog Catalog, logger *slog.Logger) *Manager {
 	}
 }
 
+// PartyFirst is the catalog's party for a Plugin easySSL publishes itself.
+const PartyFirst = "first"
+
 var ErrNotInCatalog = msg.Err.T("plugin.install.not_in_catalog", "the Server's Marketplace does not offer this Plugin")
 
 // ErrNoArtifact: the Plugin is offered but not for this host's platform.
@@ -141,6 +144,12 @@ func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (I
 	if !ok {
 		return Installed{}, ErrNotInCatalog
 	}
+	// Only first-party Plugins are installed: a third-party one would need a
+	// signature this Agent cannot check yet, so it is refused rather than run
+	// as root on the strength of a catalog entry alone.
+	if entry.Party != PartyFirst {
+		return Installed{}, msg.Err.T("plugin.install.not_first_party", "{plugin} is not a first-party Plugin, and this Agent installs only those", "plugin", pluginID)
+	}
 	artifact, ok := entry.artifact(goos, goarch)
 	if !ok {
 		return Installed{}, ErrNoArtifact
@@ -148,7 +157,7 @@ func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (I
 
 	// A catalog entry with no digest would turn off the only check below, so it
 	// is refused rather than trusted.
-	if artifact.Digest == "" {
+	if artifact.SHA256 == "" {
 		return Installed{}, msg.Err.T("plugin.install.no_digest", "the catalog publishes no digest for {plugin}, so it was not installed", "plugin", pluginID)
 	}
 
@@ -163,8 +172,8 @@ func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (I
 	// A mismatch means the download was not what the catalog offered. This is
 	// integrity, not authentication: it catches a truncated, stale or
 	// wrong-architecture artifact.
-	if digest != artifact.Digest {
-		return Installed{}, DigestMismatchError{PluginID: pluginID, Want: artifact.Digest, Got: digest}
+	if digest != artifact.SHA256 {
+		return Installed{}, DigestMismatchError{PluginID: pluginID, Want: artifact.SHA256, Got: digest}
 	}
 	desc, err := m.describe(ctx, tmp, pluginID)
 	if err != nil {
@@ -271,7 +280,7 @@ func (m *Manager) Discover(ctx context.Context) ([]wire.PluginInventory, error) 
 
 // inventoryEntry is what the host inventory carries for one installed Plugin.
 func (m *Manager) inventoryEntry(ctx context.Context, p Installed) wire.PluginInventory {
-	entry := wire.PluginInventory{ID: p.ID, Digest: p.Digest}
+	entry := wire.PluginInventory{ID: p.ID, SHA256: p.Digest}
 	desc, disc, op, err := m.observe(ctx, p)
 	if err != nil {
 		entry.Unobserved = true
@@ -303,7 +312,7 @@ func (m *Manager) observe(ctx context.Context, p Installed) (describe, discover 
 		if jerr := json.Unmarshal(discover, &disc); jerr != nil {
 			err = msg.Err.T("plugin.op.not_json", "the Plugin's `{op}` output is not JSON: {err}", "op", plugincontract.OpDiscover, "err", jerr)
 		} else {
-			err = plugincontract.ValidateDiscover(desc.Settings, disc)
+			err = plugincontract.ValidateDiscover(desc.Declarations, disc)
 		}
 	}
 	if err != nil {
@@ -416,9 +425,10 @@ func runByExec(ctx context.Context, path, op string, logger *slog.Logger) ([]byt
 // Server-to-anyone surface, not part of the Agent↔Server protocol: a browser
 // reads the same JSON.
 type CatalogArtifact struct {
-	OS     string `json:"os"`
-	Arch   string `json:"arch"`
-	Digest string `json:"digest"`
+	OS   string `json:"os"`
+	Arch string `json:"arch"`
+	// SHA256 is the SHA-256 of the artifact's bytes, lowercase hex.
+	SHA256 string `json:"sha256"`
 	URL    string `json:"url"`
 }
 
