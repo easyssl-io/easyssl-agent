@@ -49,6 +49,7 @@
   "plugin.install.http_status": "el Servidor respondió {status} al pedir el artefacto",
   "plugin.install.invalid_name": "\"{plugin}\" no es un nombre de Plugin válido",
   "plugin.install.no_artifact": "el Marketplace no tiene una compilación de este Plugin para la plataforma de este host",
+  "plugin.install.not_first_party": "{plugin} no es un Plugin propio de easySSL, y este Agente instala solo esos",
   "plugin.install.not_in_catalog": "el Marketplace del Servidor no ofrece este Plugin",
   "plugin.install.no_digest": "el catálogo no publica un digest para {plugin}, así que no se instaló",
   "plugin.install.not_reported": "informado  aún no ({err}); el servicio informa en su próximo check-in",

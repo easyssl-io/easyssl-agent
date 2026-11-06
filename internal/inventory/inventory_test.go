@@ -36,9 +36,9 @@ func TestInventoryFingerprintIsOrderAndClockIndependent(t *testing.T) {
 	}
 
 	withPlugins := b
-	withPlugins.Plugins = []wire.PluginInventory{{ID: "nginx", Digest: "d1"}, {ID: "generic-cli", Digest: "d2"}}
+	withPlugins.Plugins = []wire.PluginInventory{{ID: "nginx", SHA256: "d1"}, {ID: "generic-cli", SHA256: "d2"}}
 	reordered := b
-	reordered.Plugins = []wire.PluginInventory{{ID: "generic-cli", Digest: "d2"}, {ID: "nginx", Digest: "d1"}}
+	reordered.Plugins = []wire.PluginInventory{{ID: "generic-cli", SHA256: "d2"}, {ID: "nginx", SHA256: "d1"}}
 	fp1, _ := Fingerprint(withPlugins)
 	fp2, _ := Fingerprint(reordered)
 	if fp1 != fp2 || fp1 == fb {

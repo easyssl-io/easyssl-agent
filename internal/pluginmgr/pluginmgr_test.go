@@ -31,6 +31,11 @@ func trueDigest() string {
 
 func newMarketplace(t *testing.T, publishDigest string) *httptest.Server {
 	t.Helper()
+	return newMarketplaceOf(t, publishDigest, PartyFirst)
+}
+
+func newMarketplaceOf(t *testing.T, publishDigest, party string) *httptest.Server {
+	t.Helper()
 	var srv *httptest.Server
 	mux := http.NewServeMux()
 	mux.HandleFunc("/marketplace/catalog", func(w http.ResponseWriter, _ *http.Request) {
@@ -42,9 +47,9 @@ func newMarketplace(t *testing.T, publishDigest string) *httptest.Server {
 			digest = ""
 		}
 		_ = json.NewEncoder(w).Encode(CatalogResponse{Plugins: []CatalogPlugin{{
-			ID: "generic-cli", Version: "9.9.9-catalog-says", Party: "first",
+			ID: "generic-cli", Version: "9.9.9-catalog-says", Party: party,
 			Artifacts: []CatalogArtifact{{
-				OS: "linux", Arch: "amd64", Digest: digest,
+				OS: "linux", Arch: "amd64", SHA256: digest,
 				URL: srv.URL + "/download/plugins/generic-cli/linux/amd64",
 			}},
 		}}})
@@ -82,7 +87,7 @@ func answer() plugincontract.DescribeResponse {
 		Name:            "generic-cli",
 		Version:         "0.0.1",
 		Description:     l10n.Text{"en": "Installs by running a command you write.", "es": "Instala ejecutando un comando que tú escribes."},
-		Settings: []plugincontract.SettingDeclaration{{
+		Declarations: []plugincontract.SettingDeclaration{{
 			Key: "install", Label: l10n.Text{"en": "Install command"}, Type: plugincontract.SettingTypeCommand,
 			Default: "echo hi", Required: true,
 		}},
@@ -139,7 +144,7 @@ func TestListAndDiscoverReadTheDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Both answers as the Plugin printed them, in one entry.
-	if len(inv) != 1 || inv[0].Unobserved || inv[0].Digest != trueDigest() || len(inv[0].Warnings) != 0 ||
+	if len(inv) != 1 || inv[0].Unobserved || inv[0].SHA256 != trueDigest() || len(inv[0].Warnings) != 0 ||
 		string(inv[0].Describe) != string(mustJSON(answer())) || string(inv[0].Discover) != string(mustJSON(found())) {
 		t.Fatalf("Discover = %+v", inv)
 	}
@@ -220,7 +225,7 @@ func TestListAndDiscoverReadTheDirectory(t *testing.T) {
 		defer restore()
 		m.runDiscover = func(context.Context, string) ([]byte, error) {
 			d := found()
-			d.DiscoveredTargets = []plugincontract.DiscoveredTarget{{PluginSettings: map[string]string{"bogus": "x"}}}
+			d.DiscoveredTargets = []plugincontract.DiscoveredTarget{{Settings: map[string]string{"bogus": "x"}}}
 			return mustJSON(d), nil
 		}
 		unobserved(t, plugincontract.OpDiscover)
@@ -318,7 +323,9 @@ func TestRefusesWhatTheCatalogDoesNotOffer(t *testing.T) {
 
 func TestInstallRefusesAnUnusableAnswer(t *testing.T) {
 	d := answer()
-	d.Settings = append(d.Settings, plugincontract.SettingDeclaration{Key: "a", Summary: true}, plugincontract.SettingDeclaration{Key: "b", Summary: true})
+	d.Declarations = append(d.Declarations,
+		plugincontract.SettingDeclaration{Key: "a", Type: plugincontract.SettingTypeText, Label: l10n.Text{"en": "A"}, Summary: true},
+		plugincontract.SettingDeclaration{Key: "b", Type: plugincontract.SettingTypeText, Label: l10n.Text{"en": "B"}, Summary: true})
 	m := newManager(t, newMarketplace(t, ""), d, nil)
 	if _, err := m.Install(context.Background(), "generic-cli", "linux", "amd64"); err == nil {
 		t.Fatal("two summary settings were accepted")
@@ -413,4 +420,16 @@ func mustJSON(v any) []byte {
 		panic(err)
 	}
 	return b
+}
+
+// A third-party Plugin would need a signature this Agent cannot check, so a
+// catalog entry naming one installs nothing.
+func TestAThirdPartyPluginInstallsNothing(t *testing.T) {
+	m := newManager(t, newMarketplaceOf(t, "", "third"), answer(), nil)
+	if _, err := m.Install(context.Background(), "generic-cli", "linux", "amd64"); err == nil {
+		t.Fatal("a third-party Plugin was installed")
+	}
+	if entries, _ := os.ReadDir(m.installDir); len(entries) != 0 {
+		t.Fatalf("left %d files behind", len(entries))
+	}
 }
