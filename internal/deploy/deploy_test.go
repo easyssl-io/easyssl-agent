@@ -216,3 +216,24 @@ func TestABackgroundProcessDoesNotHoldTheDeployment(t *testing.T) {
 		t.Fatalf("took %s, so the background process held the Deployment", elapsed)
 	}
 }
+
+type unusablePlugin struct{}
+
+func (unusablePlugin) Find(string) (pluginmgr.Installed, bool, error) {
+	return pluginmgr.Installed{}, true, errors.New("generic-cli did not answer `describe` usably")
+}
+
+// A Plugin that is on the host but fails describe is named, with the command
+// that replaces it, since reinstalling is the fix and the Server cannot know it.
+func TestAnUnusablePluginNamesTheReinstall(t *testing.T) {
+	res := run(context.Background(), unusablePlugin{}, wire.DeploymentWork{PluginID: "generic-cli"}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if res.OK {
+		t.Fatal("a Deployment with an unusable Plugin succeeded")
+	}
+	got := res.AgentMessage["en"]
+	for _, want := range []string{"cannot be used", "did not answer `describe` usably", "easyssl-agent plugin install generic-cli"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("message %q lacks %q", got, want)
+		}
+	}
+}
