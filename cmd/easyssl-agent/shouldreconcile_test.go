@@ -7,20 +7,16 @@ import (
 )
 
 // Skipping the reconcile fetch is safe only when the Server said there is
-// nothing. The case that matters most is a Server that reports no count at all:
-// the Agent must still fetch.
+// nothing.
 func TestShouldReconcile(t *testing.T) {
-	n := func(i int) *int { return &i }
-
 	for _, tc := range []struct {
 		name string
 		resp wire.CheckinResponse
 		want bool
 	}{
-		{"nothing outstanding: skip", wire.CheckinResponse{PendingCommands: n(0)}, false},
-		{"one outstanding: fetch", wire.CheckinResponse{PendingCommands: n(1)}, true},
-		{"a backlog: fetch", wire.CheckinResponse{PendingCommands: n(7)}, true},
-		{"a Server that does not report the count: fetch", wire.CheckinResponse{}, true},
+		{"nothing outstanding: skip", wire.CheckinResponse{PendingCommands: 0}, false},
+		{"one outstanding: fetch", wire.CheckinResponse{PendingCommands: 1}, true},
+		{"a backlog: fetch", wire.CheckinResponse{PendingCommands: 7}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := shouldReconcile(tc.resp); got != tc.want {

@@ -33,6 +33,13 @@ func Collect(ctx context.Context, plugins *pluginmgr.Manager) (wire.Inventory, e
 	if err != nil {
 		return wire.Inventory{}, err
 	}
+	// Lists are always sent, empty rather than null.
+	if discovered == nil {
+		discovered = []wire.PluginInventory{}
+	}
+	if keys == nil {
+		keys = []wire.KeyInfo{}
+	}
 	inv := wire.Inventory{Diagnostics: hostinfo.Collect(), Plugins: discovered, Keys: keys}
 	if inv.Fingerprint, err = Fingerprint(inv); err != nil {
 		return wire.Inventory{}, err

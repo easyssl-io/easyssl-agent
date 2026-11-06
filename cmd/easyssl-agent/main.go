@@ -334,7 +334,7 @@ func cmdRun(ctx context.Context, args []string) error {
 					logger.Info("host inventory reported", "plugins", len(inv.Plugins), "keys", len(inv.Keys))
 				}
 			}
-			if resp.Status == wire.StatusActive {
+			if resp.Status == wire.AgentStatusActive {
 				// Only now: every push-channel route refuses an Agent still awaiting
 				// authorization, as the check-in does, so subscribing earlier would loop on
 				// 401s.
@@ -394,20 +394,16 @@ func agentLogger() *slog.Logger {
 }
 
 // shouldReconcile decides whether a check-in has to be followed by the
-// reconcile fetch. Only a reported zero skips it: the Server has nothing
+// reconcile fetch. A zero skips it: the Server has nothing
 // outstanding for this host, which on a mostly idle fleet saves one request
 // per Agent per cadence.
-//
-// nil is not zero. It is an older Server that does not report the count, and
-// reading it as zero would make this Agent stop fetching commands from that
-// Server and never notice.
 //
 // The count may be stale, because a command can be created right after it was
 // taken. That costs at most one cadence: the event stream nudges, and the next
 // check-in counts again. A stale count delays work rather than inventing or
 // losing it.
 func shouldReconcile(resp wire.CheckinResponse) bool {
-	return resp.PendingCommands == nil || *resp.PendingCommands > 0
+	return resp.PendingCommands > 0
 }
 
 // streamCommands keeps the event stream open for as long as the service runs,
@@ -550,9 +546,9 @@ func serverState(cfg identity.Config, token string, tokenErr error) (detail stri
 	}
 	resp, err := api.RegistrationStatus(ctx, token)
 	switch {
-	case err == nil && resp.Status == wire.StatusActive:
+	case err == nil && resp.Status == wire.AgentStatusActive:
 		return msg.T("status.state.authorized", "authorized"), resp
-	case err == nil && resp.Status == wire.StatusPending:
+	case err == nil && resp.Status == wire.AgentStatusPending:
 		return msg.T("status.state.pending", "pending authorization"), resp
 	case err == nil:
 		return resp.Status, resp

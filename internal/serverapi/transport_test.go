@@ -185,8 +185,8 @@ func TestARedirectWithinTheSameSchemeIsFollowed(t *testing.T) {
 	if err := c.do(context.Background(), http.MethodGet, wire.RouteAgentMe, "esat_secret", nil, &out); err != nil {
 		t.Fatalf("do: %v", err)
 	}
-	if out.Status != wire.StatusActive {
-		t.Errorf("status = %q, want %q", out.Status, wire.StatusActive)
+	if out.Status != wire.AgentStatusActive {
+		t.Errorf("status = %q, want %q", out.Status, wire.AgentStatusActive)
 	}
 }
 

@@ -86,7 +86,6 @@ func newManager(t *testing.T, srv *httptest.Server, desc plugincontract.Describe
 func answer() plugincontract.DescribeResponse {
 	return plugincontract.DescribeResponse{
 		ContractVersion: plugincontract.ContractVersion,
-		Name:            "generic-cli",
 		Version:         "0.0.1",
 		Description:     l10n.Text{"en": "Installs by running a command you write.", "es": "Instala ejecutando un comando que tú escribes."},
 		Declarations: []plugincontract.SettingDeclaration{{
@@ -298,15 +297,6 @@ func TestDescribeFailureInstallsNothing(t *testing.T) {
 	}
 	if installed, _ := m.List(); len(installed) != 0 {
 		t.Fatalf("something was installed: %+v", installed)
-	}
-}
-
-func TestWrongNameInstallsNothing(t *testing.T) {
-	d := answer()
-	d.Name = "something-else"
-	m := newManager(t, newMarketplace(t, ""), d, nil)
-	if _, err := m.Install(context.Background(), "generic-cli", "linux", "amd64"); err == nil {
-		t.Fatal("installed an artifact that calls itself another Plugin")
 	}
 }
 

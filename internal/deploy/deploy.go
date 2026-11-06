@@ -93,13 +93,13 @@ func New(api API, plugins Plugins, token string, logger *slog.Logger) commands.H
 		// Already finished, which is what a re-delivered command looks like. Acked
 		// without running: installing again would be a second Deployment nobody asked
 		// for.
-		if work.State != wire.DeploymentStatePending {
+		if work.Status != wire.DeploymentStatusPending {
 			logger.Info("deployment already finished; acking without running",
-				"deployment", cmd.RefID, "state", work.State)
+				"deployment", cmd.RefID, "status", work.Status)
 			return nil
 		}
 
-		res := run(ctx, plugins, work, logger)
+		res := run(ctx, plugins, work, logger.With("deployment", cmd.RefID))
 		if err := api.ReportDeploymentResult(ctx, token, cmd.RefID, res); err != nil {
 			var apiErr *serverapi.APIError
 			if errors.As(err, &apiErr) && apiErr.Code == wire.CodeDeploymentFinished {
@@ -200,19 +200,18 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	}()
 
 	req := plugincontract.DeployRequest{
-		ContractVersion: plugincontract.ContractVersion,
-		CertificatePem:  work.CertificatePem,
-		ChainPem:        work.ChainPem,
-		PrivateKeyPem:   keyPEM,
-		WorkDir:         workDir,
-		Settings:        work.Settings,
+		CertificatePem: work.CertificatePem,
+		ChainPem:       work.ChainPem,
+		PrivateKeyPem:  keyPEM,
+		WorkDir:        workDir,
+		Settings:       work.Settings,
 	}
 
 	hostLock.Lock()
 	defer hostLock.Unlock()
 
 	run, err := runPlugin(ctx, installed.Path, req, logger,
-		"deployment", work.ID, "certificate", work.CertificateID,
+		"certificate", work.CertificateID,
 		"plugin", installed.ID, "plugin_version", installed.Version)
 	result := wire.DeploymentResult{
 		OK:            succeeded(err, run),
@@ -302,7 +301,7 @@ func runPlugin(ctx context.Context, path string, req plugincontract.DeployReques
 func chunks(c *plugintrace.Capture) []wire.OutputChunk {
 	recorded := c.Chunks()
 	if len(recorded) == 0 {
-		return nil
+		return []wire.OutputChunk{}
 	}
 	out := make([]wire.OutputChunk, 0, len(recorded))
 	// One redactor per stream, carried across that stream's chunks: a key the

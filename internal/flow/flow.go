@@ -271,7 +271,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 	fmt.Println(msg.T("reinstall.service_updated", "✓ {service} updated", "service", serviceName()))
 	defer startServiceOnExit()
 
-	if resp.Status == wire.StatusActive {
+	if resp.Status == wire.AgentStatusActive {
 		fmt.Println()
 		fmt.Println(msg.T("reinstall.active", "✓ {name} is authorized and ACTIVE.", "name", resp.DisplayName))
 		return nil
@@ -333,7 +333,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 	fmt.Println(msg.T("register.service_installed", "✓ service installed: {service}", "service", serviceName()))
 	defer startServiceOnExit()
 
-	if resp.Status == wire.StatusActive {
+	if resp.Status == wire.AgentStatusActive {
 		fmt.Println()
 		fmt.Println(msg.T("register.reactivated", "✓ Reactivated as {name} ({id}), ACTIVE in {organization}.",
 			"name", resp.DisplayName, "id", resp.AgentID, "organization", cfg.Organization()))
@@ -481,9 +481,9 @@ func noPluginHint(list func() ([]pluginmgr.Installed, error), getenv func(string
 	return msg.T("register.no_plugin", "No Plugin is installed on this host, and the Agent finds and updates Certificates only through one.\n  see them:    sudo easyssl-agent plugin catalog\n  install one: sudo easyssl-agent plugin install <name>")
 }
 
-// rememberOrganization records a name learned after the config was written:
-// registration answers before the Agent is authorized, and an older Server
-// sends nothing at all. Best effort, since the name is only ever a message.
+// rememberOrganization records a name learned after the config was written,
+// since registration answers before the Agent is authorized. Best effort, since
+// the name is only ever a message.
 func rememberOrganization(organization, organizationID string) {
 	cfg, err := identity.LoadConfig()
 	if err != nil || (cfg.OrganizationName == organization && cfg.OrganizationID == organizationID) {
@@ -803,7 +803,7 @@ func register(ctx context.Context, api *serverapi.Client, key, reactivation, nam
 		return wire.RegistrationResponse{}, msg.Err.T("register.failed", "registration failed: {err}", "err", err)
 	}
 	if resp.AgentID == "" {
-		return wire.RegistrationResponse{}, msg.Err.T("register.no_agent_id", "registration failed: did not receive an Agent ID from the Server (is it older than this Agent?)")
+		return wire.RegistrationResponse{}, msg.Err.T("register.no_agent_id", "registration failed: did not receive an Agent ID from the Server")
 	}
 	return resp, nil
 }
@@ -814,7 +814,7 @@ func waitForAuthorization(ctx context.Context, api *serverapi.Client, token stri
 	}
 	for {
 		resp, err := api.RegistrationStatus(ctx, token)
-		if err == nil && resp.Status == wire.StatusActive {
+		if err == nil && resp.Status == wire.AgentStatusActive {
 			return resp.OrganizationName, resp.OrganizationID, nil
 		}
 		if err != nil && isUnknownToken(err) {
