@@ -22,6 +22,7 @@ package service
 
 import (
 	"fmt"
+	"github.com/easyssl-io/easyssl-contract/wire"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,7 +33,7 @@ import (
 
 // BinaryPath is where the installer places the Agent binary, which uninstall
 // removes last.
-const BinaryPath = "/usr/local/bin/easyssl-agent"
+const BinaryPath = wire.AgentBinaryPath
 
 const (
 	name    = "easyssl-agent"

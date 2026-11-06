@@ -49,7 +49,7 @@ import (
 
 // baseDir is where the keystore lives. A variable rather than a constant only so
 // tests can point it at a temporary directory; nothing else reassigns it.
-var baseDir = identity.BaseDir
+var baseDir = identity.StateDir
 
 // dirMode and fileMode are the whole of the at-rest protection, so they are
 // named once here and passed explicitly wherever something is created. Nothing

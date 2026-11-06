@@ -14,7 +14,7 @@ module; wire types are not duplicated here.
 ## Commands
 
 ```
-easyssl-agent register --server <url> [--key <key>] [--name <name>] [--lang <code>]   register this host
+easyssl-agent register --server <url> [--registration-key <key>] [--agent-name <name>] [--lang <code>]   register this host
 easyssl-agent register --server <url> --reactivation-token <token>    resume a deactivated Agent on this host
 easyssl-agent run                                                     the service loop (periodic check-in)
 easyssl-agent status                                                  print local state and what the Server says
@@ -59,18 +59,19 @@ A host runs a single Agent. `register` runs an interactive line-based session.
 It settles the language first (Language below), so everything after it is read
 in the language chosen, and then:
 
-1. Resolves the credential: the Organization registration key from `--key` or
-   `REGISTRATION_KEY`, or a reactivation token from `--reactivation-token` or
-   `REACTIVATION_TOKEN`. When neither is set it prompts once, and either may
+1. Resolves the credential: the Organization registration key from `--registration-key` or
+   `EASYSSL_REGISTRATION_KEY`, or a reactivation token from `--reactivation-token` or
+   `EASYSSL_REACTIVATION_TOKEN`. When neither is set it prompts once, and either may
    be pasted: a token starts with `esrt_`, a key with `esrk_`.
-2. With a registration key, resolves the Agent's name: `--name` or
-   `AGENT_NAME` if given, otherwise the host's hostname offered as an editable
+2. With a registration key, resolves the Agent's name: `--agent-name` or
+   `EASYSSL_AGENT_NAME` if given, otherwise the host's hostname offered as an editable
    default at the prompt. A reactivation token names an Agent that already has
    a name, so nothing is asked.
 3. Captures best-effort host diagnostics (hostname, OS, host type) and submits
    the registration. The Server names Agents: it mints the public id
    (`agnt-…`) and returns it with a one-time bearer token. The host persists
-   the token and the Server URL, root-only (`0600`) under `/etc/easyssl/`, and
+   the Server URL in `/etc/easyssl/config.json` and the token in
+   `/var/lib/easyssl/agent.token`, both root-only (`0600`), and
    neither the id nor the name: both are the Server's to say, and any
    authenticated call answers them. The Server keeps only the token's hash.
 4. Installs and starts the service, which runs `run` to check in
@@ -106,7 +107,7 @@ new one.
 The installer is served by the Server, so the usual one-liner is:
 
 ```
-curl -fsSL <server-url>/install | sudo REGISTRATION_KEY=<key> bash
+curl -fsSL <server-url>/install | sudo EASYSSL_REGISTRATION_KEY=<key> bash
 ```
 
 The prompts still work in that form: the script arrives on stdin, so the Agent
@@ -115,14 +116,14 @@ there is no terminal at all (cloud-init, CI), pass the name up front and it
 never prompts:
 
 ```
-curl -fsSL <server-url>/install | sudo REGISTRATION_KEY=<key> AGENT_NAME=web-01 bash
+curl -fsSL <server-url>/install | sudo EASYSSL_REGISTRATION_KEY=<key> EASYSSL_AGENT_NAME=web-01 bash
 ```
 
 A deactivated Agent's page in the web console generates the reactivation form
 of the same command, with a single-use token that expires after a day:
 
 ```
-curl -fsSL <server-url>/install | sudo REACTIVATION_TOKEN=<token> bash
+curl -fsSL <server-url>/install | sudo EASYSSL_REACTIVATION_TOKEN=<token> bash
 ```
 
 ## Language
@@ -277,7 +278,7 @@ anywhere. The Server receives only a certificate signing request, so it has no
 key to store and none to lose.
 
 ```text
-/etc/easyssl/keys/<fingerprint>.key    the key, PKCS#8 PEM, ECDSA P-256
+/var/lib/easyssl/keys/<fingerprint>.key    the key, PKCS#8 PEM, ECDSA P-256
 ```
 
 A key is named by the SHA-256 of its own public key, so the directory can be
@@ -289,7 +290,7 @@ link. The directory is `0700`, the files are `0600`, and everything is owned by
 root. Nothing about the format is specific to easySSL:
 
 ```bash
-sudo openssl pkey -in /etc/easyssl/keys/<fingerprint>.key -noout -text
+sudo openssl pkey -in /var/lib/easyssl/keys/<fingerprint>.key -noout -text
 ```
 
 **What this protects against, and what it does not.** The keys are stored
@@ -312,8 +313,8 @@ Server the token is done with, which **deactivates** the Agent rather than
 removing it: the token stops working, and the Agent's Targets, key records and
 history stay in the web console, where a reactivation command can bring the
 same Agent back on this host or another. Then, whether or not the Server could
-be reached, it stops and removes the service, deletes the config and token
-from `/etc/easyssl/`, and deletes the binary. It asks for confirmation,
+be reached, it stops and removes the service, deletes `/etc/easyssl/config.json`
+and `/var/lib/easyssl/agent.token`, and deletes the binary. It asks for confirmation,
 refusing to run unattended unless `--yes` is passed, and is idempotent on a
 host with nothing or only remnants installed.
 
@@ -331,7 +332,7 @@ says where they are.
 
 - **Plugins.** The executables under `/var/lib/easyssl/plugins/` are listed and
   the directory is deleted on a `y`.
-- **Private keys.** The keystore under `/etc/easyssl/keys/` is the Agent's only
+- **Private keys.** The keystore under `/var/lib/easyssl/keys/` is the Agent's only
   copy of them, and nothing recovers a deleted key: a Certificate whose key is
   gone cannot be deployed or renewed from the host again, and reactivating the
   Agent on another host needs the files copied there first. So the prompt says

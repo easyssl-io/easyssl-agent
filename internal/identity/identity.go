@@ -1,5 +1,7 @@
 // Package identity manages the Agent's on-disk identity and state. A host runs
-// a single Agent, whose config and bearer token live directly under BaseDir.
+// a single Agent: its configuration is the one file under ConfigDir, and
+// everything else it keeps (its bearer token, its keystore and its Plugins) is
+// state under StateDir.
 package identity
 
 import (
@@ -13,8 +15,15 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
 )
 
-// BaseDir holds the single Agent's config and token on this host.
-const BaseDir = "/etc/easyssl"
+// ConfigDir holds config.json and nothing else: what an administrator might
+// read or edit, as /etc is for. StateDir holds what the Agent itself creates
+// and keeps, the token and every private key among it, as /var/lib is for.
+// Fixed before the first release because moving the keys later would mean an
+// update migrating the only copy of each.
+const (
+	ConfigDir = "/etc/easyssl"
+	StateDir  = "/var/lib/easyssl"
+)
 
 // Config is what the host keeps of its registration, beside the token: which
 // Server to talk to, and which Organization it joined, the latter only so an
@@ -51,12 +60,12 @@ func (c Config) Organization() string {
 	}
 }
 
-func ConfigPath() string { return filepath.Join(BaseDir, "config.json") }
-func TokenPath() string  { return filepath.Join(BaseDir, "agent.token") }
+func ConfigPath() string { return filepath.Join(ConfigDir, "config.json") }
+func TokenPath() string  { return filepath.Join(StateDir, "agent.token") }
 
-// SaveConfig writes the config (0600) under a 0700 BaseDir.
+// SaveConfig writes the config (0600) under a 0700 ConfigDir.
 func SaveConfig(cfg Config) error {
-	if err := os.MkdirAll(BaseDir, 0o700); err != nil {
+	if err := os.MkdirAll(ConfigDir, 0o700); err != nil {
 		return err
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
@@ -75,9 +84,10 @@ func LoadConfig() (Config, error) {
 	return cfg, json.Unmarshal(data, &cfg)
 }
 
-// SaveToken writes the bearer token (0600); the plaintext lives only here.
+// SaveToken writes the bearer token (0600) under a 0700 StateDir; the
+// plaintext lives only here.
 func SaveToken(token string) error {
-	if err := os.MkdirAll(BaseDir, 0o700); err != nil {
+	if err := os.MkdirAll(StateDir, 0o700); err != nil {
 		return err
 	}
 	return atomicfile.Write(TokenPath(), []byte(token), 0o600, 0o700)
@@ -86,8 +96,8 @@ func SaveToken(token string) error {
 // RemoveAll deletes this Agent's config and token. An already-absent file is
 // not an error.
 //
-// It deliberately does not remove BaseDir itself, because the keystore lives
-// under it and is the Agent's only copy of every private key it generated.
+// It deliberately does not remove StateDir, because the keystore lives under
+// it and is the Agent's only copy of every private key it generated.
 // Uninstalling is too ordinary a command to destroy that, so the keys are left
 // behind and the caller says so.
 func RemoveAll() error {

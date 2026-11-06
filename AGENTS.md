@@ -19,7 +19,7 @@ checkout that has `easyssl-contract` beside it, and read `replacement directory
 ../contract does not exist` as an environment problem rather than a defect in
 the change under review.
 
-`register`, `run` and `uninstall` drive the host's init system, `/etc/easyssl/`
+`register`, `run` and `uninstall` drive the host's init system, `/etc/easyssl/`, `/var/lib/easyssl/`
 and the network, so they are exercised on a real Linux host or a container
 running an init system; `internal/service`'s tests cover each init system's
 files and commands against a fake root.
@@ -51,7 +51,7 @@ verify what it does. Flag any of the following.
   client deliberately, the shared 30-second timeout being one that would sever a
   stream meant to stay open.
 - **No private key material reaches the Server**, sent or logged. P0.
-- **Secrets stay root-only**, `0600` under `/etc/easyssl/`, never printed.
+- **Secrets stay root-only**, `0600` under `/var/lib/easyssl/`, never printed.
 - **Local state is not proof.** A stored token means one was issued once, not
   that this Agent is still registered or authorized; that comes from the Server.
   A status read must not count as a check-in, or a stopped Agent can be made to

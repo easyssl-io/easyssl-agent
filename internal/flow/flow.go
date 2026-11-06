@@ -51,9 +51,9 @@ func CheckinBody(inventoryFingerprint string) wire.CheckinRequest {
 // anything empty is prompted for when there is a terminal.
 type Options struct {
 	ServerURL         string // required
-	RegistrationKey   string // from --key or REGISTRATION_KEY; prompted if empty and interactive
-	ReactivationToken string // from --reactivation-token or REACTIVATION_TOKEN; wins over the key
-	Name              string // from --name or AGENT_NAME; else the hostname, editable at the prompt
+	RegistrationKey   string // from --registration-key or EASYSSL_REGISTRATION_KEY; prompted if empty and interactive
+	ReactivationToken string // from --reactivation-token or EASYSSL_REACTIVATION_TOKEN; wins over the key
+	Name              string // from --agent-name or EASYSSL_AGENT_NAME; else the hostname, editable at the prompt
 	Language          string // from --lang, which decides without asking; else the language step's answer
 }
 
@@ -277,7 +277,7 @@ func reinstall(ctx context.Context, t *terminal, opts Options, cfg identity.Conf
 		return nil
 	}
 	return awaitAuthorization(ctx, api, resp.DisplayName, token, resp.NextPollSeconds,
-		marketplaceURL(cfg.ServerURL, ""))
+		"")
 }
 
 // freshRegister registers a host that has no live Agent. With a registration
@@ -343,7 +343,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 		return nil
 	}
 	return awaitAuthorization(ctx, api, name, resp.AgentToken, resp.NextPollSeconds,
-		marketplaceURL(opts.ServerURL, resp.MarketplaceURL))
+		resp.MarketplaceURL)
 }
 
 // offerRequiredPlugins installs, after confirmation, the Plugins the resumed
@@ -496,14 +496,13 @@ func rememberOrganization(organization, organizationID string) {
 	_ = identity.SaveConfig(cfg)
 }
 
-func marketplaceURL(serverURL, fromServer string) string {
-	if fromServer != "" {
-		return fromServer
-	}
-	return strings.TrimRight(serverURL, "/") + "/plugins/marketplace"
-}
-
 func authorizationInstructions(marketplaceURL string) string {
+	// The Server names its web console's Marketplace when it registers a host;
+	// a reinstall has no such answer and says only what to approve, rather than
+	// guessing a route of the web console.
+	if marketplaceURL == "" {
+		return msg.T("register.awaiting_authorization_only", "Waiting for authorization from the web console (approve it at your web console › Agents)...")
+	}
 	return msg.T("register.awaiting_authorization", "Visit the Plugin marketplace: {url}\n\nWaiting for authorization from the web console (approve it at your web console › Agents)...", "url", marketplaceURL)
 }
 
@@ -550,7 +549,7 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 		deactivateOnServer(ctx, cfg, token)
 	}
 
-	hadUnit, hadState, hadBinary := service.Installed(), exists(identity.BaseDir), exists(service.BinaryPath)
+	hadUnit, hadState, hadBinary := service.Installed(), exists(identity.ConfigPath()) || exists(identity.TokenPath()), exists(service.BinaryPath)
 
 	if err := service.Uninstall(); err != nil && !errors.Is(err, service.ErrUnsupportedInit) {
 		return msg.Err.T("uninstall.remove_service", "removing the service: {err}", "err", err)
@@ -560,10 +559,10 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 	}
 
 	if err := identity.RemoveAll(); err != nil {
-		return msg.Err.T("uninstall.remove_state", "removing {path}: {err}", "path", identity.BaseDir, "err", err)
+		return msg.Err.T("uninstall.remove_state", "removing the config and the token: {err}", "err", err)
 	}
 	if hadState {
-		fmt.Println(msg.T("uninstall.state_removed", "✓ config and token deleted from {path}", "path", identity.BaseDir))
+		fmt.Println(msg.T("uninstall.state_removed", "✓ {config} and {token} deleted", "config", identity.ConfigPath(), "token", identity.TokenPath()))
 	}
 
 	if err := os.Remove(service.BinaryPath); err != nil && !os.IsNotExist(err) {
@@ -722,7 +721,7 @@ func resolveCredential(t *terminal, opts Options) (key, reactivation string, err
 		return opts.RegistrationKey, "", nil
 	}
 	if t == nil {
-		return "", "", msg.Err.T("register.key.missing", "no registration key: set the REGISTRATION_KEY environment variable or pass --key (or REACTIVATION_TOKEN / --reactivation-token to resume a deactivated Agent)")
+		return "", "", msg.Err.T("register.key.missing", "no registration key: set the EASYSSL_REGISTRATION_KEY environment variable or pass --registration-key (or EASYSSL_REACTIVATION_TOKEN / --reactivation-token to resume a deactivated Agent)")
 	}
 	v := t.prompt(msg.T("register.key.prompt", "Paste your registration key (or a reactivation token): "))
 	switch {
@@ -752,7 +751,7 @@ func confirmName(t *terminal, fromFlag, proposed, hostname string) (string, erro
 	}
 	if t == nil {
 		if proposed == "" {
-			return "", msg.Err.T("register.name.no_hostname", "this host reports no hostname to name the Agent after: pass --name or set AGENT_NAME")
+			return "", msg.Err.T("register.name.no_hostname", "this host reports no hostname to name the Agent after: pass --agent-name or set EASYSSL_AGENT_NAME")
 		}
 		return proposed, nil
 	}
