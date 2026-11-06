@@ -35,8 +35,11 @@ func newMarketplace(t *testing.T, publishDigest string) *httptest.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/marketplace/catalog", func(w http.ResponseWriter, _ *http.Request) {
 		digest := publishDigest
-		if digest == "" {
+		switch digest {
+		case "":
 			digest = trueDigest()
+		case "none":
+			digest = ""
 		}
 		_ = json.NewEncoder(w).Encode(CatalogResponse{Plugins: []CatalogPlugin{{
 			ID: "generic-cli", Version: "9.9.9-catalog-says", Party: "first",
@@ -310,5 +313,56 @@ func TestRunByExecRefusesAnOversizedAnswer(t *testing.T) {
 	if err := runByExec(context.Background(), script, plugincontract.OpDiscover, slog.New(slog.DiscardHandler), &out); err == nil ||
 		!strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("err = %v, want the answer refused as too large", err)
+	}
+}
+
+// A failed upgrade leaves the build that was working: the download is checked
+// beside it and replaces it only once every check passes.
+func TestAFailedUpgradeKeepsTheInstalledPlugin(t *testing.T) {
+	m := newManager(t, newMarketplace(t, strings.Repeat("0", 64)), answer(), nil)
+	if err := os.MkdirAll(m.installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(m.installDir, "generic-cli")
+	if err := os.WriteFile(path, []byte("working build"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Install(context.Background(), "generic-cli", "linux", "amd64"); err == nil {
+		t.Fatal("an upgrade whose digest does not match was installed")
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != "working build" {
+		t.Fatalf("the installed Plugin is now %q (%v), want the working build kept", got, err)
+	}
+	if installed, _ := m.List(); len(installed) != 1 {
+		t.Fatalf("List = %+v, want only the working build, no temporary file", installed)
+	}
+}
+
+// A catalog entry without a digest would skip the only check, so it is refused.
+func TestAMissingDigestInstallsNothing(t *testing.T) {
+	m := newManager(t, newMarketplace(t, "none"), answer(), nil)
+	if _, err := m.Install(context.Background(), "generic-cli", "linux", "amd64"); err == nil {
+		t.Fatal("installed a Plugin the catalog published no digest for")
+	}
+	if entries, _ := os.ReadDir(m.installDir); len(entries) != 0 {
+		t.Fatalf("left %d files behind", len(entries))
+	}
+}
+
+// At deploy time the describe answer passes the same checks an inventory
+// applies, so a Deployment never records a version from an answer that failed
+// them.
+func TestFindAppliesTheDescribeChecks(t *testing.T) {
+	d := answer()
+	d.Version = ""
+	m := newManager(t, nil, d, nil)
+	if err := os.MkdirAll(m.installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.installDir, "generic-cli"), []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := m.Find("generic-cli"); !found || err == nil {
+		t.Fatalf("Find = found %v, err %v; want found with an error", found, err)
 	}
 }

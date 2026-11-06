@@ -502,8 +502,9 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 		defer t.close()
 	}
 	if !assumeYes && !confirmUninstall(t, installed, cfg.Organization()) {
-		fmt.Println(msg.T("uninstall.aborted", "Aborted; nothing was changed."))
-		return nil
+		// An error, so a script that reached the prompt does not read an
+		// uninstall that never happened as done.
+		return msg.Err.T("uninstall.aborted", "Aborted; nothing was changed.")
 	}
 
 	// Deactivate first, while the token still exists on disk.

@@ -11,7 +11,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -473,7 +472,6 @@ func stateError(cmd string, err error) error {
 
 func cmdStatus(args []string) error {
 	fs := newFlagSet("status")
-	asJSON := fs.Bool("json", false, msg.T("status.flag.json", "print JSON"))
 	_ = fs.Parse(args)
 
 	cfg, err := identity.LoadConfig()
@@ -486,24 +484,8 @@ func cmdStatus(args []string) error {
 	// Agent without telling the host, so a stored token proves only that one was
 	// issued once. This is a GET, not a check-in, so status never refreshes
 	// last-seen and cannot make a stopped Agent look alive in the web console.
-	stateCode, stateDetail, reg := serverState(cfg, token, tokenErr)
+	stateDetail, reg := serverState(cfg, token, tokenErr)
 	serviceName, _, _ := service.Describe()
-
-	if *asJSON {
-		out := map[string]any{
-			"agentId":        reg.AgentID,
-			"displayName":    reg.DisplayName,
-			"serverUrl":      cfg.ServerURL,
-			"organization":   cfg.OrganizationName,
-			"organizationId": cfg.OrganizationID,
-			"serviceName":    serviceName,
-			"serviceState":   service.State(),
-			"tokenPresent":   tokenErr == nil,
-			// Short code for machines; the printed line spells it out.
-			"serverState": stateCode,
-		}
-		return json.NewEncoder(os.Stdout).Encode(out)
-	}
 
 	line := func(label, value string) { fmt.Printf("%-12s %s\n", label, value) }
 	// The id and name are the Server's to say, so they are printed only when
@@ -538,28 +520,28 @@ func cmdStatus(args []string) error {
 // wire calls an authorized Agent "active", which next to a stopped systemd unit
 // reads as if the Agent were running, so this says "Authorized" as the web
 // console does.
-func serverState(cfg identity.Config, token string, tokenErr error) (code, detail string, reg wire.RegistrationStatus) {
+func serverState(cfg identity.Config, token string, tokenErr error) (detail string, reg wire.RegistrationStatus) {
 	if tokenErr != nil {
-		return "not-registered", msg.T("status.state.no_token", "not registered (no local token)"), reg
+		return msg.T("status.state.no_token", "not registered (no local token)"), reg
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	api, err := serverapi.New(cfg.ServerURL)
 	if err != nil {
-		return "unknown", msg.T("status.state.bad_url", "unknown ({err})", "err", err), reg
+		return msg.T("status.state.bad_url", "unknown ({err})", "err", err), reg
 	}
 	resp, err := api.RegistrationStatus(ctx, token)
 	switch {
 	case err == nil && resp.Status == wire.StatusActive:
-		return "authorized", msg.T("status.state.authorized", "authorized"), resp
+		return msg.T("status.state.authorized", "authorized"), resp
 	case err == nil && resp.Status == wire.StatusPending:
-		return "pending", msg.T("status.state.pending", "pending authorization"), resp
+		return msg.T("status.state.pending", "pending authorization"), resp
 	case err == nil:
-		return resp.Status, resp.Status, resp
+		return resp.Status, resp
 	case isUnknownToken(err):
-		return "not-registered", msg.T("status.state.token_rejected", "not registered (the Server rejected this token; the Agent was deactivated or removed there)"), reg
+		return msg.T("status.state.token_rejected", "not registered (the Server rejected this token; the Agent was deactivated or removed there)"), reg
 	default:
-		return "unknown", msg.T("status.state.unreachable", "unknown (could not reach {server}: {err})", "server", cfg.ServerURL, "err", err), reg
+		return msg.T("status.state.unreachable", "unknown (could not reach {server}: {err})", "server", cfg.ServerURL, "err", err), reg
 	}
 }
 
@@ -588,11 +570,10 @@ func cmdPlugin(ctx context.Context, args []string) error {
 
 func cmdPluginInstall(ctx context.Context, args []string) error {
 	fs := newFlagSet("plugin install")
-	asJSON := fs.Bool("json", false, msg.T("plugin.install.flag.json", "print JSON"))
 	yes := fs.Bool("yes", false, msg.T("plugin.install.flag.yes", "install without the confirmation prompt"))
 	_ = fs.Parse(args)
 	if fs.NArg() == 0 {
-		return msg.Err.T("plugin.install.usage", "usage: easyssl-agent plugin install <name>... [--yes] [--json]")
+		return msg.Err.T("plugin.install.usage", "usage: easyssl-agent plugin install <name>... [--yes]")
 	}
 	names := fs.Args()
 
@@ -608,9 +589,9 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 	// Said before anything is installed, because this is when the authorization is
 	// given and it grants more than it looks like: a Plugin runs with this Agent's
 	// privileges, root wherever the Agent is a system service, with no boundary
-	// between the two past the digest check. Skipped for --json, a machine's call,
-	// and for --yes, the person saying they know.
-	if !*asJSON && !*yes {
+	// between the two past the digest check. Skipped for --yes, the person saying
+	// they know.
+	if !*yes {
 		// One line per paragraph, wrapped by the terminal. A fixed width is a guess
 		// about a window this program cannot see: on a narrower one every line folds
 		// again a few words from its end.
@@ -624,8 +605,9 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 				"not what it can do.\n",
 			"plugins", strings.Join(names, ", ")))
 		if !confirm(msg.T("plugin.install.confirm", "Install and run it with those privileges? [y/N] ")) {
-			fmt.Fprintln(os.Stderr, msg.T("plugin.install.declined", "Nothing installed."))
-			return nil
+			// An error, so a script that reached the prompt without --yes does not
+			// read "nothing installed" as success.
+			return msg.Err.T("plugin.install.declined", "Nothing installed.")
 		}
 	}
 
@@ -664,12 +646,6 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 	if reportErr != nil {
 		reported = msg.T("plugin.install.not_reported", "reported   not yet ({err}); the service reports on its next check-in", "err", reportErr)
 	}
-	if *asJSON {
-		if err := json.NewEncoder(os.Stdout).Encode(out); err != nil {
-			return err
-		}
-		return installErr
-	}
 	printInstalled(out, reported)
 	return installErr
 }
@@ -703,7 +679,6 @@ func confirm(question string) bool {
 // can be found and installed without knowing its name in advance.
 func cmdPluginCatalog(ctx context.Context, args []string) error {
 	fs := newFlagSet("plugin catalog")
-	asJSON := fs.Bool("json", false, msg.T("plugin.catalog.flag.json", "print JSON"))
 	_ = fs.Parse(args)
 
 	cfg, err := identity.LoadConfig()
@@ -714,9 +689,13 @@ func cmdPluginCatalog(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	entries := catalog.Plugins
-	if *asJSON {
-		return json.NewEncoder(os.Stdout).Encode(entries)
+	// Only what this host could install: an entry with no build for its platform
+	// would fail at install with nothing to show for it.
+	var entries []pluginmgr.CatalogPlugin
+	for _, e := range catalog.Plugins {
+		if e.HasArtifact(runtime.GOOS, runtime.GOARCH) {
+			entries = append(entries, e)
+		}
 	}
 	if len(entries) == 0 {
 		fmt.Println(msg.T("plugin.catalog.empty", "The Marketplace offers no Plugins for this host's platform."))
@@ -743,7 +722,6 @@ func cmdPluginCatalog(ctx context.Context, args []string) error {
 
 func cmdPluginList(args []string) error {
 	fs := newFlagSet("plugin list")
-	asJSON := fs.Bool("json", false, msg.T("plugin.list.flag.json", "print JSON"))
 	_ = fs.Parse(args)
 
 	// What the host inventory would carry now: the executables on disk and
@@ -751,9 +729,6 @@ func cmdPluginList(args []string) error {
 	installed, err := pluginmgr.New(nil, nil).Discover(context.Background())
 	if err != nil {
 		return err
-	}
-	if *asJSON {
-		return json.NewEncoder(os.Stdout).Encode(installed)
 	}
 	if len(installed) == 0 {
 		fmt.Println(msg.T("plugin.list.empty", "No Plugins installed. Install one with: easyssl-agent plugin install generic-cli"))
