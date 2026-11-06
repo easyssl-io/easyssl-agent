@@ -110,7 +110,7 @@ func TestARedirectMayNotChangeTheScheme(t *testing.T) {
 		// under test, and it is set exactly as New sets it.
 		http: &http.Client{Transport: from.Client().Transport, CheckRedirect: noSchemeChange},
 	}
-	err := c.do(context.Background(), http.MethodGet, wire.RouteRegistration, "esat_secret", nil, new(wire.RegistrationStatus))
+	err := c.do(context.Background(), http.MethodGet, wire.RouteAgentMe, "esat_secret", nil, new(wire.RegistrationStatus))
 	if err == nil {
 		t.Fatal("the client followed a redirect that downgraded the scheme")
 	}
@@ -173,7 +173,7 @@ func TestARedirectWithinTheSameSchemeIsFollowed(t *testing.T) {
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
-	mux.HandleFunc(wire.RouteRegistration, func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc(wire.APIPrefix+wire.RouteAgentMe, func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, srv.URL+"/moved", http.StatusFound)
 	})
 
@@ -182,7 +182,7 @@ func TestARedirectWithinTheSameSchemeIsFollowed(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	var out wire.RegistrationStatus
-	if err := c.do(context.Background(), http.MethodGet, wire.RouteRegistration, "esat_secret", nil, &out); err != nil {
+	if err := c.do(context.Background(), http.MethodGet, wire.RouteAgentMe, "esat_secret", nil, &out); err != nil {
 		t.Fatalf("do: %v", err)
 	}
 	if out.Status != wire.StatusActive {

@@ -1,0 +1,58 @@
+package inventory
+
+import (
+	"testing"
+	"time"
+
+	"github.com/easyssl-io/easyssl-contract/wire"
+)
+
+func TestInventoryFingerprintIsOrderAndClockIndependent(t *testing.T) {
+	at := time.Date(2026, 9, 5, 23, 45, 49, 0, time.UTC)
+	a := wire.Inventory{
+		Diagnostics: wire.Diagnostics{Hostname: "h", OS: "Debian 13", HostType: "vm"},
+		Keys: []wire.KeyInfo{
+			{Fingerprint: "bb", Algorithm: "ec_p256", CreatedAt: at},
+			{Fingerprint: "aa", Algorithm: "ec_p256", CreatedAt: at.In(time.FixedZone("x", 3600)).Add(300 * time.Millisecond)},
+		},
+	}
+	b := wire.Inventory{
+		Diagnostics: a.Diagnostics,
+		Keys: []wire.KeyInfo{
+			{Fingerprint: "aa", Algorithm: "ec_p256", CreatedAt: at},
+			{Fingerprint: "bb", Algorithm: "ec_p256", CreatedAt: at},
+		},
+	}
+	fa, err := Fingerprint(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fb, _ := Fingerprint(b)
+	if fa != fb {
+		t.Fatalf("key order and sub-second clock changed the fingerprint: %s vs %s", fa, fb)
+	}
+	if len(fa) != 64 {
+		t.Fatalf("fingerprint = %q, want 64 hex characters", fa)
+	}
+
+	withPlugins := b
+	withPlugins.Plugins = []wire.PluginInventory{{ID: "nginx", Digest: "d1"}, {ID: "generic-cli", Digest: "d2"}}
+	reordered := b
+	reordered.Plugins = []wire.PluginInventory{{ID: "generic-cli", Digest: "d2"}, {ID: "nginx", Digest: "d1"}}
+	fp1, _ := Fingerprint(withPlugins)
+	fp2, _ := Fingerprint(reordered)
+	if fp1 != fp2 || fp1 == fb {
+		t.Fatalf("plugin order changed the fingerprint, or plugins did not: %s %s %s", fp1, fp2, fb)
+	}
+
+	c := b
+	c.Diagnostics.Hostname = "renamed"
+	if fc, _ := Fingerprint(c); fc == fb {
+		t.Fatal("a changed hostname did not change the fingerprint")
+	}
+	empty, _ := Fingerprint(wire.Inventory{Diagnostics: a.Diagnostics})
+	emptySlice, _ := Fingerprint(wire.Inventory{Diagnostics: a.Diagnostics, Keys: []wire.KeyInfo{}})
+	if empty != emptySlice {
+		t.Fatal("nil and empty key lists hash differently")
+	}
+}

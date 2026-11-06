@@ -11,6 +11,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -39,6 +40,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-agent/internal/service"
 	"github.com/easyssl-io/easyssl-contract/l10n"
+	"github.com/easyssl-io/easyssl-contract/plugincontract"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -286,11 +288,9 @@ func cmdRun(ctx context.Context, args []string) error {
 		// that could not be read leaves the fingerprint empty, so the Server keeps
 		// its last document rather than one with a hole.
 		inv, invErr := inventory.Collect(ctx, plugins)
-		fingerprint := ""
+		fingerprint := inv.Fingerprint
 		if invErr != nil {
 			logger.Warn("host inventory not computed this check-in", "err", invErr)
-		} else if fingerprint, invErr = wire.InventoryFingerprint(inv); invErr != nil {
-			logger.Warn("host inventory not fingerprinted", "err", invErr)
 			fingerprint = ""
 		}
 		resp, err := api.Checkin(ctx, token, flow.CheckinBody(fingerprint))
@@ -761,5 +761,7 @@ func pluginListLine(p wire.PluginInventory) string {
 		return msg.T("plugin.list.unobserved", "{id} {version} sha256:{digest}  (did not answer discover)",
 			"id", fmt.Sprintf("%-16s", p.ID), "version", fmt.Sprintf("%-11s", "?"), "digest", p.Digest)
 	}
-	return fmt.Sprintf("%-16s v%-10s sha256:%s", p.ID, p.Version, p.Digest)
+	var desc plugincontract.DescribeResponse
+	_ = json.Unmarshal(p.Describe, &desc) // checked already by Discover
+	return fmt.Sprintf("%-16s v%-10s sha256:%s", p.ID, desc.Version, p.Digest)
 }

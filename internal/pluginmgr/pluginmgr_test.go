@@ -64,11 +64,14 @@ func newManager(t *testing.T, srv *httptest.Server, desc plugincontract.Describe
 		m.catalog = HTTPCatalog{BaseURL: srv.URL}
 	}
 	m.installDir = filepath.Join(t.TempDir(), "plugins")
-	m.runDescribe = func(_ context.Context, _ string) (plugincontract.DescribeResponse, error) {
-		return desc, descErr
+	m.runDescribe = func(_ context.Context, _ string) ([]byte, error) {
+		if descErr != nil {
+			return nil, descErr
+		}
+		return mustJSON(desc), nil
 	}
-	m.runDiscover = func(_ context.Context, _ string) (plugincontract.DiscoverResponse, error) {
-		return found(), nil
+	m.runDiscover = func(_ context.Context, _ string) ([]byte, error) {
+		return mustJSON(found()), nil
 	}
 	return m
 }
@@ -135,9 +138,9 @@ func TestListAndDiscoverReadTheDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// describe's identity and declarations, discover's findings, in one entry.
-	if len(inv) != 1 || inv[0].Unobserved || inv[0].Version != "0.0.1" || len(inv[0].Declarations) != 1 ||
-		inv[0].Digest != trueDigest() || len(inv[0].Warnings) != 1 || inv[0].Warnings[0]["en"] != "a warning" {
+	// Both answers as the Plugin printed them, in one entry.
+	if len(inv) != 1 || inv[0].Unobserved || inv[0].Digest != trueDigest() || len(inv[0].Warnings) != 0 ||
+		string(inv[0].Describe) != string(mustJSON(answer())) || string(inv[0].Discover) != string(mustJSON(found())) {
 		t.Fatalf("Discover = %+v", inv)
 	}
 
@@ -151,7 +154,7 @@ func TestListAndDiscoverReadTheDirectory(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(inv) != 1 || !inv[0].Unobserved || inv[0].Version != "" || inv[0].Declarations != nil || len(inv[0].Warnings) != 1 {
+		if len(inv) != 1 || !inv[0].Unobserved || inv[0].Describe != nil || inv[0].Discover != nil || len(inv[0].Warnings) != 1 {
 			t.Fatalf("Discover after failure = %+v", inv)
 		}
 		warning := inv[0].Warnings[0]
@@ -168,34 +171,57 @@ func TestListAndDiscoverReadTheDirectory(t *testing.T) {
 		}
 	}
 	restore := func() {
-		m.runDescribe = func(context.Context, string) (plugincontract.DescribeResponse, error) { return answer(), nil }
-		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) { return found(), nil }
+		m.runDescribe = func(context.Context, string) ([]byte, error) { return mustJSON(answer()), nil }
+		m.runDiscover = func(context.Context, string) ([]byte, error) { return mustJSON(found()), nil }
 	}
 
 	t.Run("a Plugin that fails describe is present but unobserved", func(t *testing.T) {
 		defer restore()
-		m.runDescribe = func(context.Context, string) (plugincontract.DescribeResponse, error) {
-			return plugincontract.DescribeResponse{}, errors.New("exit status 1")
+		m.runDescribe = func(context.Context, string) ([]byte, error) {
+			return nil, errors.New("exit status 1")
 		}
 		unobserved(t, plugincontract.OpDescribe)
 	})
 
 	t.Run("a Plugin that fails discover is present but unobserved", func(t *testing.T) {
 		defer restore()
-		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) {
-			return plugincontract.DiscoverResponse{}, errors.New("exit status 1")
+		m.runDiscover = func(context.Context, string) ([]byte, error) {
+			return nil, errors.New("exit status 1")
 		}
 		unobserved(t, plugincontract.OpDiscover)
+	})
+
+	// A field this Agent does not know reaches the Server, since the answer is
+	// forwarded as printed, not re-encoded through the Agent's own structs.
+	t.Run("an answer is forwarded with fields this Agent does not know", func(t *testing.T) {
+		defer restore()
+		withNew := []byte(`{"contractVersion":"` + plugincontract.ContractVersion + `","discoveredTargets":[],"warnings":[],"aFieldFromTheFuture":{"x":1}}`)
+		m.runDiscover = func(context.Context, string) ([]byte, error) { return withNew, nil }
+		inv, err := m.Discover(context.Background())
+		if err != nil || len(inv) != 1 || inv[0].Unobserved || string(inv[0].Discover) != string(withNew) {
+			t.Fatalf("Discover = %+v, %v; want the answer as printed", inv, err)
+		}
+	})
+
+	// A Plugin built against another breaking version is refused by name.
+	t.Run("a Plugin built against another breaking contract version is unobserved", func(t *testing.T) {
+		defer restore()
+		m.runDescribe = func(context.Context, string) ([]byte, error) {
+			d := answer()
+			d.ContractVersion = "99.0.0"
+			return mustJSON(d), nil
+		}
+		unobserved(t, plugincontract.OpDescribe)
 	})
 
 	// A finding that names a setting the same build never declared is checked
 	// against describe's declarations.
 	t.Run("a discover answer that does not fit describe's declarations is unobserved", func(t *testing.T) {
 		defer restore()
-		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) {
+		m.runDiscover = func(context.Context, string) ([]byte, error) {
 			d := found()
 			d.DiscoveredTargets = []plugincontract.DiscoveredTarget{{PluginSettings: map[string]string{"bogus": "x"}}}
-			return d, nil
+			return mustJSON(d), nil
 		}
 		unobserved(t, plugincontract.OpDiscover)
 	})
@@ -208,17 +234,17 @@ func TestListAndDiscoverReadTheDirectory(t *testing.T) {
 			restore()
 			_ = os.WriteFile(path, []byte(artifactBody), 0o755)
 		}()
-		m.runDiscover = func(context.Context, string) (plugincontract.DiscoverResponse, error) {
+		m.runDiscover = func(context.Context, string) ([]byte, error) {
 			if err := os.WriteFile(path, []byte("#!/bin/false\nanother build\n"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			return found(), nil
+			return mustJSON(found()), nil
 		}
 		unobserved(t, plugincontract.OpDiscover)
 	})
 
 	t.Run("Find reports the executable and the version it answers", func(t *testing.T) {
-		m.runDescribe = func(context.Context, string) (plugincontract.DescribeResponse, error) { return answer(), nil }
+		m.runDescribe = func(context.Context, string) ([]byte, error) { return mustJSON(answer()), nil }
 		inst, found, err := m.Find("generic-cli")
 		if err != nil || !found || inst.Version != "0.0.1" || inst.Path != filepath.Join(m.installDir, "generic-cli") {
 			t.Fatalf("Find = %+v %v %v", inst, found, err)
@@ -236,7 +262,7 @@ func TestReinstallReplacesTheExecutable(t *testing.T) {
 	}
 	upgraded := answer()
 	upgraded.Version = "0.0.2"
-	m.runDescribe = func(context.Context, string) (plugincontract.DescribeResponse, error) { return upgraded, nil }
+	m.runDescribe = func(context.Context, string) ([]byte, error) { return mustJSON(upgraded), nil }
 	inst, err := m.Install(context.Background(), "generic-cli", "linux", "amd64")
 	if err != nil || inst.Version != "0.0.2" {
 		t.Fatalf("reinstall = %+v, %v", inst, err)
@@ -309,8 +335,7 @@ func TestRunByExecRefusesAnOversizedAnswer(t *testing.T) {
 	if err := os.WriteFile(script, []byte("#!/bin/sh\nhead -c 600000 /dev/zero | tr '\\\\0' x\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	var out plugincontract.DiscoverResponse
-	if err := runByExec(context.Background(), script, plugincontract.OpDiscover, slog.New(slog.DiscardHandler), &out); err == nil ||
+	if _, err := runByExec(context.Background(), script, plugincontract.OpDiscover, slog.New(slog.DiscardHandler)); err == nil ||
 		!strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("err = %v, want the answer refused as too large", err)
 	}
@@ -380,4 +405,12 @@ func TestFindAppliesTheDescribeChecks(t *testing.T) {
 	if _, found, err := m.Find("generic-cli"); !found || err == nil {
 		t.Fatalf("Find = found %v, err %v; want found with an error", found, err)
 	}
+}
+
+func mustJSON(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	return b
 }

@@ -37,7 +37,7 @@ func (f *registrationFake) handler() http.Handler {
 		f.paths = append(f.paths, r.URL.Path)
 		f.mu.Unlock()
 
-		if r.URL.Path != wire.RouteRegistration {
+		if r.URL.Path != wire.APIPrefix+wire.RouteAgentMe {
 			// A route this wait should never reach. Answering it plausibly
 			// would hide the mistake, so it is refused and the assertions on
 			// the recorded paths report it.
@@ -90,8 +90,8 @@ func TestWaitForAuthorizationReadsTheRegistrationAndNeverChecksIn(t *testing.T) 
 		if name != "Acme" || id != "org-abc" {
 			t.Fatalf("got Organization %q/%q, want Acme/org-abc", name, id)
 		}
-		if got := fake.recorded(); len(got) != 1 || got[0] != wire.RouteRegistration {
-			t.Fatalf("asked for %v, want exactly one %s", got, wire.RouteRegistration)
+		if got := fake.recorded(); len(got) != 1 || got[0] != wire.APIPrefix+wire.RouteAgentMe {
+			t.Fatalf("asked for %v, want exactly one %s", got, wire.APIPrefix+wire.RouteAgentMe)
 		}
 	})
 
@@ -105,9 +105,9 @@ func TestWaitForAuthorizationReadsTheRegistrationAndNeverChecksIn(t *testing.T) 
 		}
 		got := fake.recorded()
 		for _, p := range got {
-			if p != wire.RouteRegistration {
+			if p != wire.APIPrefix+wire.RouteAgentMe {
 				t.Fatalf("the wait asked for %s; it must only read %s: %v",
-					p, wire.RouteRegistration, got)
+					p, wire.APIPrefix+wire.RouteAgentMe, got)
 			}
 		}
 		if len(got) != 2 {
