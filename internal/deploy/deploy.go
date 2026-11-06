@@ -301,7 +301,7 @@ func runPlugin(ctx context.Context, path string, req plugincontract.DeployReques
 func chunks(c *plugintrace.Capture) []wire.OutputChunk {
 	recorded := c.Chunks()
 	if len(recorded) == 0 {
-		return nil
+		return []wire.OutputChunk{}
 	}
 	out := make([]wire.OutputChunk, 0, len(recorded))
 	// One redactor per stream, carried across that stream's chunks: a key the

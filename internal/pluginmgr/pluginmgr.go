@@ -276,7 +276,7 @@ func (m *Manager) Discover(ctx context.Context) ([]wire.PluginInventory, error) 
 
 // inventoryEntry is what the host inventory carries for one installed Plugin.
 func (m *Manager) inventoryEntry(ctx context.Context, p Installed) wire.PluginInventory {
-	entry := wire.PluginInventory{ID: p.ID, SHA256: p.Digest}
+	entry := wire.PluginInventory{ID: p.ID, SHA256: p.Digest, Warnings: []l10n.Text{}}
 	desc, disc, op, err := m.observe(ctx, p)
 	if err != nil {
 		entry.Unobserved = true
