@@ -21,10 +21,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
+	"github.com/easyssl-io/easyssl-agent/internal/buildinfo"
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
@@ -71,6 +71,8 @@ func (e *APIError) Error() string {
 		return msg.T("server.refused.agent_not_active", "the Server has not authorized this Agent yet; an administrator authorizes it in the web console")
 	case wire.CodeInvalidRegistrationKey:
 		return msg.T("server.refused.registration_key", "the Server did not accept the registration key")
+	case wire.CodeContractUnsupported:
+		return msg.T("server.refused.contract_unsupported", "the Server does not speak this Agent's contract version {version}: update the Agent, or the Server if it is the older one", "version", wire.ContractVersion)
 	case wire.CodeInvalidReactivationToken:
 		return msg.T("server.refused.reactivation_token", "the Server did not accept the reactivation token: it is unknown, expired or already used")
 	}
@@ -84,13 +86,13 @@ func (e *APIError) Error() string {
 // the one-time bearer token.
 func (c *Client) Register(ctx context.Context, req wire.RegistrationRequest) (wire.RegistrationResponse, error) {
 	var out wire.RegistrationResponse
-	err := c.do(ctx, http.MethodPost, wire.RouteRegistrations, "", req, &out)
+	err := c.do(ctx, http.MethodPost, wire.RouteAgentRegistrations, "", req, &out)
 	return out, err
 }
 
 func (c *Client) Checkin(ctx context.Context, token string, req wire.CheckinRequest) (wire.CheckinResponse, error) {
 	var out wire.CheckinResponse
-	err := c.do(ctx, http.MethodPost, wire.RouteCheckin, token, req, &out)
+	err := c.do(ctx, http.MethodPost, wire.RouteAgentCheckin, token, req, &out)
 	return out, err
 }
 
@@ -99,7 +101,7 @@ func (c *Client) Checkin(ctx context.Context, token string, req wire.CheckinRequ
 // last-seen.
 func (c *Client) RegistrationStatus(ctx context.Context, token string) (wire.RegistrationStatus, error) {
 	var out wire.RegistrationStatus
-	err := c.do(ctx, http.MethodGet, wire.RouteRegistration, token, nil, &out)
+	err := c.do(ctx, http.MethodGet, wire.RouteAgentMe, token, nil, &out)
 	return out, err
 }
 
@@ -112,11 +114,12 @@ func (c *Client) ReportInventory(ctx context.Context, token string, inv wire.Inv
 // Unregister deactivates this Agent on the Server, so an uninstalled host is no
 // longer expected there without the operator also acting there.
 func (c *Client) Unregister(ctx context.Context, token string) error {
-	return c.do(ctx, http.MethodDelete, wire.RouteRegistration, token, nil, nil)
+	return c.do(ctx, http.MethodDelete, wire.RouteAgentMe, token, nil, nil)
 }
 
-// do is the single request path: marshal body, set the bearer token if given,
-// and decode either the success body or a wire.ErrorResponse.
+// do is the single request path: marshal body, set the bearer token if given
+// and the versions, and decode either the success body or a
+// wire.ErrorResponse. path is a wire route after wire.APIPrefix.
 func (c *Client) do(ctx context.Context, method, path, token string, body, out any) error {
 	var buf io.Reader
 	if body != nil {
@@ -126,7 +129,7 @@ func (c *Client) do(ctx context.Context, method, path, token string, body, out a
 		}
 		buf = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, buf)
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+wire.APIPrefix+path, buf)
 	if err != nil {
 		return err
 	}
@@ -136,6 +139,7 @@ func (c *Client) do(ctx context.Context, method, path, token string, body, out a
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
+	setVersions(req)
 
 	res, err := c.http.Do(req)
 	if err != nil {
@@ -151,6 +155,13 @@ func (c *Client) do(ctx context.Context, method, path, token string, body, out a
 	}
 
 	return decodeAPIError(res)
+}
+
+// setVersions puts this build's versions on a request, as wire says every
+// Agent request carries them.
+func setVersions(req *http.Request) {
+	req.Header.Set("User-Agent", wire.UserAgentPrefix+buildinfo.Version)
+	req.Header.Set(wire.HeaderContractVersion, wire.ContractVersion)
 }
 
 // decodeAPIError turns a non-2xx response into an APIError, keeping the wire
@@ -170,7 +181,7 @@ func decodeAPIError(res *http.Response) error {
 // so this runs on every poll whether or not a stream is open.
 func (c *Client) PendingCommands(ctx context.Context, token string) ([]wire.Command, error) {
 	var out wire.CommandsResponse
-	if err := c.do(ctx, http.MethodGet, wire.RouteCommands+"?status=pending", token, nil, &out); err != nil {
+	if err := c.do(ctx, http.MethodGet, wire.RouteAgentCommands, token, nil, &out); err != nil {
 		return nil, err
 	}
 	return out.Commands, nil
@@ -183,8 +194,7 @@ func (c *Client) PendingCommands(ctx context.Context, token string) ([]wire.Comm
 // refers to. A repeat is expected: an Agent that recorded an outcome and then
 // died is handed the command again and acks a second time.
 func (c *Client) AckCommand(ctx context.Context, token, commandID, status string) error {
-	path := wire.RouteCommands + "/" + url.PathEscape(commandID) + "/ack"
-	return c.do(ctx, http.MethodPost, path, token, wire.AckRequest{Status: status}, nil)
+	return c.do(ctx, http.MethodPost, wire.Path(wire.RouteAgentCommandAck, commandID), token, wire.AckRequest{Status: status}, nil)
 }
 
 // SubscribeCommands opens the long-lived event stream and calls onCommand every
@@ -202,12 +212,13 @@ func (c *Client) AckCommand(ctx context.Context, token, commandID, status string
 // grammar this needs is two field names, and everything shipped to a host that
 // handles someone's private keys has to earn its place.
 func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect func(), onCommand func()) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+wire.RouteEvents, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+wire.APIPrefix+wire.RouteAgentEvents, nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("Authorization", "Bearer "+token)
+	setVersions(req)
 
 	// No timeout: the stream is meant to stay open, and the shared 30s client
 	// would sever it. The redirect policy still applies, because this request
@@ -255,8 +266,7 @@ func (c *Client) SubscribeCommands(ctx context.Context, token string, onConnect 
 // certificate would.
 func (c *Client) CSRWork(ctx context.Context, token, certificateID string) (wire.CSRWork, error) {
 	var out wire.CSRWork
-	path := "/api/v1/agent/certificates/" + url.PathEscape(certificateID)
-	if err := c.do(ctx, http.MethodGet, path, token, nil, &out); err != nil {
+	if err := c.do(ctx, http.MethodGet, wire.Path(wire.RouteAgentCertificate, certificateID), token, nil, &out); err != nil {
 		return wire.CSRWork{}, err
 	}
 	return out, nil
@@ -267,8 +277,7 @@ func (c *Client) CSRWork(ctx context.Context, token, certificateID string) (wire
 // (csr_already_submitted, not_awaiting_csr, csr_mismatch) come back as
 // *APIError with those codes.
 func (c *Client) SubmitCSR(ctx context.Context, token, certificateID, csrPEM string) error {
-	path := "/api/v1/agent/certificates/" + url.PathEscape(certificateID) + "/csr"
-	return c.do(ctx, http.MethodPost, path, token, wire.CSRSubmission{CSR: csrPEM}, nil)
+	return c.do(ctx, http.MethodPost, wire.Path(wire.RouteAgentCertificateCSR, certificateID), token, wire.CSRSubmission{CSR: csrPEM}, nil)
 }
 
 // DeploymentWork reads what a deploy command refers to: the certificate, the
@@ -276,12 +285,12 @@ func (c *Client) SubmitCSR(ctx context.Context, token, certificateID, csrPEM str
 // this host, and that is why only this Agent can carry the Deployment out.
 func (c *Client) DeploymentWork(ctx context.Context, token, deploymentID string) (wire.DeploymentWork, error) {
 	var out wire.DeploymentWork
-	err := c.do(ctx, http.MethodGet, "/api/v1/agent/deployments/"+deploymentID, token, nil, &out)
+	err := c.do(ctx, http.MethodGet, wire.Path(wire.RouteAgentDeployment, deploymentID), token, nil, &out)
 	return out, err
 }
 
 // ReportDeploymentResult sends the terminal outcome. Write-once on the Server:
 // a second report answers deployment_finished, which the Agent treats as done.
 func (c *Client) ReportDeploymentResult(ctx context.Context, token, deploymentID string, res wire.DeploymentResult) error {
-	return c.do(ctx, http.MethodPost, "/api/v1/agent/deployments/"+deploymentID+"/result", token, res, nil)
+	return c.do(ctx, http.MethodPost, wire.Path(wire.RouteAgentDeploymentResult, deploymentID), token, res, nil)
 }

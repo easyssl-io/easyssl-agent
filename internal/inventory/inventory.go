@@ -6,6 +6,11 @@ package inventory
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"sort"
+	"time"
 
 	"github.com/easyssl-io/easyssl-agent/internal/hostinfo"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
@@ -28,5 +33,33 @@ func Collect(ctx context.Context, plugins *pluginmgr.Manager) (wire.Inventory, e
 	if err != nil {
 		return wire.Inventory{}, err
 	}
-	return wire.Inventory{Diagnostics: hostinfo.Collect(), Plugins: discovered, Keys: keys}, nil
+	inv := wire.Inventory{Diagnostics: hostinfo.Collect(), Plugins: discovered, Keys: keys}
+	if inv.Fingerprint, err = Fingerprint(inv); err != nil {
+		return wire.Inventory{}, err
+	}
+	return inv, nil
+}
+
+// Fingerprint is this Agent's hash of an inventory, ignoring its Fingerprint
+// field. The Server stores it as sent and compares the next check-in's
+// against it, so all it has to be is stable for one host: keys sorted by
+// fingerprint and Plugins by id, and key times in UTC to the second, so a
+// document that has not changed hashes the same on every check-in and is not
+// sent again.
+func Fingerprint(inv wire.Inventory) (string, error) {
+	keys := make([]wire.KeyInfo, len(inv.Keys))
+	copy(keys, inv.Keys)
+	sort.Slice(keys, func(i, j int) bool { return keys[i].Fingerprint < keys[j].Fingerprint })
+	for i := range keys {
+		keys[i].CreatedAt = keys[i].CreatedAt.UTC().Truncate(time.Second)
+	}
+	plugins := make([]wire.PluginInventory, len(inv.Plugins))
+	copy(plugins, inv.Plugins)
+	sort.Slice(plugins, func(i, j int) bool { return plugins[i].ID < plugins[j].ID })
+	raw, err := json.Marshal(wire.Inventory{Diagnostics: inv.Diagnostics, Plugins: plugins, Keys: keys})
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:]), nil
 }

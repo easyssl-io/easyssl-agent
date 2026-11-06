@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/easyssl-io/easyssl-agent/internal/buildinfo"
 	"github.com/easyssl-io/easyssl-agent/internal/hostinfo"
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-agent/internal/inventory"
@@ -35,20 +36,15 @@ import (
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-// Version is the Agent version reported to the Server.
-const Version = "0.0.1"
-
-// CheckinBody is what this host says about itself on every poll. It is a
-// function because its two callers, the installer and the long-running service,
-// must report the same thing: a field filled in by only one of them would leave
-// the Server's record correct or stale depending on which process checked in
-// last, and nothing would report that.
+// CheckinBody is what this host says about itself on every poll, beside the
+// versions every request carries. It is a function because its two callers,
+// the installer and the long-running service, must report the same thing.
 //
 // inventoryFingerprint is the service's, over the host inventory it computed
 // for this check-in. The installer passes none, and the Server then asks the
 // service on its next check-in.
 func CheckinBody(inventoryFingerprint string) wire.CheckinRequest {
-	return wire.CheckinRequest{AgentVersion: Version, ProtocolVersion: wire.ProtocolVersion, InventoryFingerprint: inventoryFingerprint}
+	return wire.CheckinRequest{InventoryFingerprint: inventoryFingerprint}
 }
 
 // Options is what the register command resolved from its flags and environment;
@@ -138,7 +134,7 @@ func Register(ctx context.Context, opts Options) (err error) {
 		return err
 	}
 
-	fmt.Println(msg.T("register.banner", "easySSL Agent installer · v{version}", "version", Version))
+	fmt.Println(msg.T("register.banner", "easySSL Agent installer · v{version}", "version", buildinfo.Version))
 	fmt.Println(msg.T("register.start", "Registering this host to an easySSL Organization..."))
 	fmt.Println()
 
@@ -794,8 +790,6 @@ func register(ctx context.Context, api *serverapi.Client, key, reactivation, nam
 		RegistrationKey:   key,
 		ReactivationToken: reactivation,
 		ProposedName:      name,
-		AgentVersion:      Version,
-		ProtocolVersion:   wire.ProtocolVersion,
 		Diagnostics:       diag,
 	})
 	if err != nil {

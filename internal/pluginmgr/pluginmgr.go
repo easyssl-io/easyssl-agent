@@ -80,10 +80,11 @@ type Manager struct {
 	// somewhere it may write.
 	installDir string
 	logger     *slog.Logger
-	// runDescribe and runDiscover execute a Plugin's two answering operations.
-	// Fields so a test can exercise the flow without a real binary.
-	runDescribe func(ctx context.Context, path string) (plugincontract.DescribeResponse, error)
-	runDiscover func(ctx context.Context, path string) (plugincontract.DiscoverResponse, error)
+	// runDescribe and runDiscover execute a Plugin's two answering operations
+	// and return its answer as printed. Fields so a test can exercise the flow
+	// without a real binary.
+	runDescribe func(ctx context.Context, path string) ([]byte, error)
+	runDiscover func(ctx context.Context, path string) ([]byte, error)
 }
 
 // New builds a Manager over the host's real Plugin directory. catalog may be
@@ -94,13 +95,11 @@ func New(catalog Catalog, logger *slog.Logger) *Manager {
 	}
 	return &Manager{
 		catalog: catalog, installDir: InstallDir, logger: logger,
-		runDescribe: func(ctx context.Context, path string) (plugincontract.DescribeResponse, error) {
-			var out plugincontract.DescribeResponse
-			return out, runByExec(ctx, path, plugincontract.OpDescribe, logger, &out)
+		runDescribe: func(ctx context.Context, path string) ([]byte, error) {
+			return runByExec(ctx, path, plugincontract.OpDescribe, logger)
 		},
-		runDiscover: func(ctx context.Context, path string) (plugincontract.DiscoverResponse, error) {
-			var out plugincontract.DiscoverResponse
-			return out, runByExec(ctx, path, plugincontract.OpDiscover, logger, &out)
+		runDiscover: func(ctx context.Context, path string) ([]byte, error) {
+			return runByExec(ctx, path, plugincontract.OpDiscover, logger)
 		},
 	}
 }
@@ -182,16 +181,37 @@ func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (I
 // pass, the same for an install, an inventory and a Deployment: an answer, the
 // executable's own name, and the contract's rules.
 func (m *Manager) describe(ctx context.Context, path, pluginID string) (plugincontract.DescribeResponse, error) {
+	desc, _, err := m.describeRaw(ctx, path, pluginID)
+	return desc, err
+}
+
+// describeRaw is describe returning the answer as printed too, which the host
+// inventory forwards: the decoded copy is checked, the bytes are sent, so a
+// field a newer Plugin adds reaches the Server through this Agent.
+func (m *Manager) describeRaw(ctx context.Context, path, pluginID string) (plugincontract.DescribeResponse, []byte, error) {
+	var desc plugincontract.DescribeResponse
 	dctx, cancel := context.WithTimeout(ctx, plugincontract.AnswerTimeout)
 	defer cancel()
-	desc, err := m.runDescribe(dctx, path)
+	raw, err := m.runDescribe(dctx, path)
 	if err != nil {
-		return desc, err
+		return desc, nil, err
+	}
+	if err := json.Unmarshal(raw, &desc); err != nil {
+		return desc, nil, msg.Err.T("plugin.op.not_json", "the Plugin's `{op}` output is not JSON: {err}", "op", plugincontract.OpDescribe, "err", err)
+	}
+	// A Plugin built against another breaking version of the contract may
+	// expect a request this Agent does not send, or answer one it cannot read,
+	// so it is refused by name rather than run.
+	if !plugincontract.Compatible(desc.ContractVersion) {
+		return desc, nil, msg.Err.T("plugin.describe.contract", "the Plugin was built against contract version \"{got}\", which this Agent ({own}) does not run", "got", desc.ContractVersion, "own", plugincontract.ContractVersion)
 	}
 	if desc.Name != "" && desc.Name != pluginID {
-		return desc, msg.Err.T("plugin.describe.other_name", "the executable calls itself \"{name}\"", "name", desc.Name)
+		return desc, nil, msg.Err.T("plugin.describe.other_name", "the executable calls itself \"{name}\"", "name", desc.Name)
 	}
-	return desc, plugincontract.ValidateDescribe(desc)
+	if err := plugincontract.ValidateDescribe(desc); err != nil {
+		return desc, nil, err
+	}
+	return desc, raw, nil
 }
 
 // List is the installed set: every executable in the Plugin directory, with
@@ -260,39 +280,39 @@ func (m *Manager) inventoryEntry(ctx context.Context, p Installed) wire.PluginIn
 		entry.Warnings = []l10n.Text{msg.Text("plugin.inventory.unobserved", "`{op}` produced nothing usable this run: {err}", "op", op, "err", err)}
 		m.logger.Warn("plugin unobserved", "plugin", p.ID, "op", op, "err", err)
 	} else {
-		entry.Version, entry.Description = desc.Version, desc.Description
-		entry.Declarations, entry.DiscoveredTargets, entry.Warnings = desc.Settings, disc.DiscoveredTargets, disc.Warnings
-		if entry.Declarations == nil {
-			entry.Declarations = []plugincontract.SettingDeclaration{}
-		}
+		entry.Describe, entry.Discover = desc, disc
 	}
 	return entry
 }
 
-// observe runs one Plugin's describe and discover and checks both answers,
-// returning the operation that failed alongside the error. The two run as
-// separate processes, so the executable is hashed again afterwards: a binary
-// replaced between them would otherwise report one build's declarations with
-// another's findings.
-func (m *Manager) observe(ctx context.Context, p Installed) (plugincontract.DescribeResponse, plugincontract.DiscoverResponse, string, error) {
-	var disc plugincontract.DiscoverResponse
-	desc, err := m.describe(ctx, p.Path, p.ID)
+// observe runs one Plugin's describe and discover, checks decoded copies of
+// both answers and returns them as printed, with the operation that failed
+// alongside the error. The two run as separate processes, so the executable is
+// hashed again afterwards: a binary replaced between them would otherwise
+// report one build's declarations with another's findings.
+func (m *Manager) observe(ctx context.Context, p Installed) (describe, discover []byte, failedOp string, err error) {
+	desc, describe, err := m.describeRaw(ctx, p.Path, p.ID)
 	if err != nil {
-		return desc, disc, plugincontract.OpDescribe, err
+		return nil, nil, plugincontract.OpDescribe, err
 	}
 	dctx, cancel := context.WithTimeout(ctx, plugincontract.AnswerTimeout)
-	disc, err = m.runDiscover(dctx, p.Path)
+	discover, err = m.runDiscover(dctx, p.Path)
 	cancel()
 	if err == nil {
-		err = plugincontract.ValidateDiscover(desc.Settings, disc)
+		var disc plugincontract.DiscoverResponse
+		if jerr := json.Unmarshal(discover, &disc); jerr != nil {
+			err = msg.Err.T("plugin.op.not_json", "the Plugin's `{op}` output is not JSON: {err}", "op", plugincontract.OpDiscover, "err", jerr)
+		} else {
+			err = plugincontract.ValidateDiscover(desc.Settings, disc)
+		}
 	}
 	if err != nil {
-		return desc, disc, plugincontract.OpDiscover, err
+		return nil, nil, plugincontract.OpDiscover, err
 	}
 	if now, err := fileDigest(p.Path); err != nil || now != p.Digest {
-		return desc, disc, plugincontract.OpDiscover, msg.Err.T("plugin.inventory.changed", "the executable changed while it was being read")
+		return nil, nil, plugincontract.OpDiscover, msg.Err.T("plugin.inventory.changed", "the executable changed while it was being read")
 	}
-	return desc, disc, "", nil
+	return describe, discover, "", nil
 }
 
 // download writes an artifact to a temporary executable in the Plugin
@@ -338,7 +358,7 @@ func (m *Manager) download(ctx context.Context, url string) (path, digest string
 // Recorded through plugintrace: what a build declares about itself is where a
 // Plugin under development most often disagrees with what it meant to declare,
 // and nothing else on the host shows the answer it gave.
-func runByExec(ctx context.Context, path, op string, logger *slog.Logger, out any) error {
+func runByExec(ctx context.Context, path, op string, logger *slog.Logger) ([]byte, error) {
 	// #nosec G204 -- path is InstallDir joined with a name matched against
 	// validPluginID, so it names a file this Agent just wrote, and op is one of
 	// the contract's constants.
@@ -376,17 +396,19 @@ func runByExec(ctx context.Context, path, op string, logger *slog.Logger, out an
 	})
 	if err != nil {
 		if diag := cap.Text(plugintrace.StreamStderr); diag != "" {
-			return fmt.Errorf("%w: %s", err, diag)
+			return nil, fmt.Errorf("%w: %s", err, diag)
 		}
-		return err
+		return nil, err
 	}
 	if answer.over {
-		return msg.Err.T("plugin.op.too_large", "the `{op}` answer exceeds {bytes} bytes", "op", op, "bytes", plugintrace.MaxPluginOutput)
+		return nil, msg.Err.T("plugin.op.too_large", "the `{op}` answer exceeds {bytes} bytes", "op", op, "bytes", plugintrace.MaxPluginOutput)
 	}
-	if err := json.Unmarshal(stdout, out); err != nil {
-		return msg.Err.T("plugin.op.not_json", "the Plugin's `{op}` output is not JSON: {err}", "op", op, "err", err)
+	// Checked here so every caller holds JSON, which the inventory forwards
+	// as it is.
+	if !json.Valid(stdout) {
+		return nil, msg.Err.T("plugin.op.not_json", "the Plugin's `{op}` output is not JSON: {err}", "op", op, "err", "invalid JSON")
 	}
-	return nil
+	return stdout, nil
 }
 
 // CatalogArtifact and CatalogPlugin mirror what the Server publishes. They live
