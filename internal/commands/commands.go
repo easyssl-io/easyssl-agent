@@ -7,16 +7,24 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-// Handler performs one kind of command. It returns an error only for something
-// that stopped it from finishing; work that ran and failed is reported on the
-// resource the command refers to, not here.
+// Handler performs one kind of command. Work that ran and failed is reported on
+// the resource the command refers to and returns nil, which acks the command.
+// An error means something stopped it from finishing that may clear, so the
+// command is left for the next fetch; ErrUnsupported means the work asks for
+// something this Agent cannot do, which no retry changes.
 type Handler func(ctx context.Context, cmd wire.Command) error
+
+// ErrUnsupported is what a Handler returns, possibly wrapped, for work this
+// Agent cannot do, such as a key type it does not know. The command is acked
+// unsupported, which ends the referenced work on the Server naming this Agent.
+var ErrUnsupported = errors.New("the command asks for something this Agent cannot do")
 
 // Fetcher is the subset of the Server API this needs, so a test can drive the
 // loop without a Server.
@@ -80,16 +88,21 @@ func (r *Runner) runOne(ctx context.Context, cmd wire.Command) {
 		return
 	}
 
-	if err := handler(ctx, cmd); err != nil {
-		if ctx.Err() != nil {
-			return // shutting down: leave it outstanding, it will be handed back
-		}
-		// The attempt ended in a failure that belongs to the referenced resource.
-		// This Agent is finished with the command, so it is acked rather than retried
-		// forever.
-		r.logger.Error("command failed", "command", cmd.ID, "type", cmd.Type, "err", err)
+	err := handler(ctx, cmd)
+	switch {
+	case err == nil:
+		r.ack(ctx, cmd, wire.CommandStatusAcked)
+	case errors.Is(err, ErrUnsupported):
+		r.logger.Error("command asks for something this Agent cannot do", "command", cmd.ID, "type", cmd.Type, "err", err)
+		r.ack(ctx, cmd, wire.CommandStatusUnsupported)
+	case ctx.Err() != nil:
+		// Shutting down: left outstanding, it will be handed back.
+	default:
+		// Left outstanding, so the next fetch runs it again. A reason that never
+		// clears ends with the command's expiry, which fails the referenced work
+		// naming this Agent; acking here would end it with nothing recorded.
+		r.logger.Warn("command not finished; it will be retried", "command", cmd.ID, "type", cmd.Type, "err", err)
 	}
-	r.ack(ctx, cmd, wire.CommandStatusAcked)
 }
 
 func (r *Runner) ack(ctx context.Context, cmd wire.Command, status string) {

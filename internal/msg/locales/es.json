@@ -142,6 +142,7 @@
   "server.refused.other": "el Servidor respondió {status} ({code}): {message}",
   "server.refused.reactivation_token": "el Servidor no aceptó el token de reactivación: es desconocido, está vencido o ya fue usado",
   "server.refused.registration_key": "el Servidor no aceptó la clave de registro",
+  "server.refused.agent_not_active": "el Servidor aún no autorizó a este Agente; un administrador lo autoriza en la consola web",
   "server.refused.unknown_token": "el Servidor no acepta el token de este host: el Agente fue desactivado o eliminado, o su registro fue rechazado",
   "service.not_root": "se debe ejecutar como root para gestionar el servicio del Agente",
   "service.remove_failed": "al eliminar {path}: {err}",

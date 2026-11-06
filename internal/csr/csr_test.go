@@ -20,6 +20,7 @@ import (
 
 	"github.com/easyssl-io/easyssl-contract/wire"
 
+	"github.com/easyssl-io/easyssl-agent/internal/commands"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 )
@@ -213,13 +214,22 @@ func TestTerminalRefusalsAreAcked(t *testing.T) {
 }
 
 func TestUnknownWorkIsDiscarded(t *testing.T) {
-	api := &fakeAPI{workErr: &serverapi.APIError{Status: 404, Code: "not_found"}}
+	api := &fakeAPI{workErr: &serverapi.APIError{Status: 404, Code: wire.CodeCertificateNotFound}}
 	h := newHandler(t, api)
 	if err := h(context.Background(), command()); err != nil {
 		t.Fatalf("handler = %v, want nil (stale instruction)", err)
 	}
 	if len(api.submitted) != 0 {
 		t.Fatal("submitted a CSR for work that does not exist")
+	}
+}
+
+// A 404 without the contract's code is a proxy or a route the Server lacks,
+// not an answer about the Certificate, so the command stays for a retry.
+func TestOtherNotFoundLeavesTheCommandPending(t *testing.T) {
+	api := &fakeAPI{workErr: &serverapi.APIError{Status: 404}}
+	if err := newHandler(t, api)(context.Background(), command()); err == nil {
+		t.Fatal("bare 404: handler = nil, want error (retry later)")
 	}
 }
 
@@ -234,17 +244,17 @@ func TestTransportTroubleLeavesTheCommandPending(t *testing.T) {
 	}
 }
 
-// Work this Agent cannot perform is acked, not retried: nothing changes on a
-// retry, and the command's expiry is what reports the certificate stuck.
-func TestUnperformableWorkIsAckedWithoutSubmitting(t *testing.T) {
+// Work this Agent cannot perform is reported unsupported, which fails the
+// Certificate at once; a retry would change nothing.
+func TestUnperformableWorkIsUnsupported(t *testing.T) {
 	cases := map[string]wire.CSRWork{
 		"unknown key type": {CertificateID: certificateID, Domains: []string{"a.example.test"}, KeyType: "ml-dsa-44"},
 		"no domains":       {CertificateID: certificateID, Domains: nil, KeyType: wire.KeyTypeECP256},
 	}
 	for name, w := range cases {
 		api := &fakeAPI{work: w}
-		if err := newHandler(t, api)(context.Background(), command()); err != nil {
-			t.Fatalf("%s: handler = %v, want nil", name, err)
+		if err := newHandler(t, api)(context.Background(), command()); !errors.Is(err, commands.ErrUnsupported) {
+			t.Fatalf("%s: handler = %v, want commands.ErrUnsupported", name, err)
 		}
 		if len(api.submitted) != 0 {
 			t.Fatalf("%s: submitted a CSR, want none", name)

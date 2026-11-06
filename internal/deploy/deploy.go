@@ -78,9 +78,9 @@ func New(api API, plugins Plugins, token string, logger *slog.Logger) commands.H
 		work, err := api.DeploymentWork(ctx, token, cmd.RefID)
 		if err != nil {
 			var apiErr *serverapi.APIError
-			if errors.As(err, &apiErr) && apiErr.Status == 404 {
+			if errors.As(err, &apiErr) && apiErr.Code == wire.CodeDeploymentNotFound {
 				// Not this Agent's, or gone. No retry changes that: a stale
-				// instruction, discarded and acked.
+				// instruction, discarded and acked. Any other 404 is retried.
 				logger.Warn("deployment not found; discarding command", "deployment", cmd.RefID)
 				return nil
 			}

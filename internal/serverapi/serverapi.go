@@ -51,7 +51,7 @@ func New(baseURL string) (*Client, error) {
 }
 
 // APIError is a non-2xx Server response. Code is the wire error code (e.g.
-// wire.CodeAgentIDTaken) when the body carried one, so callers can branch on
+// wire.CodeCSRMismatch) when the body carried one, so callers can branch on
 // it rather than parsing prose.
 type APIError struct {
 	Status  int
@@ -67,6 +67,8 @@ func (e *APIError) Error() string {
 	switch e.Code {
 	case wire.CodeUnknownToken:
 		return msg.T("server.refused.unknown_token", "the Server does not accept this host's token: the Agent was deactivated or removed, or its registration was rejected")
+	case wire.CodeAgentNotActive:
+		return msg.T("server.refused.agent_not_active", "the Server has not authorized this Agent yet; an administrator authorizes it in the web console")
 	case wire.CodeInvalidRegistrationKey:
 		return msg.T("server.refused.registration_key", "the Server did not accept the registration key")
 	case wire.CodeInvalidReactivationToken:
