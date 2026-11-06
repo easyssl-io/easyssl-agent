@@ -128,6 +128,13 @@ func New(api API, plugins Plugins, token string, logger *slog.Logger) commands.H
 func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger *slog.Logger) wire.DeploymentResult {
 	installed, found, err := plugins.Find(work.PluginID)
 	switch {
+	case err != nil && found:
+		// On the host but unusable, which reinstalling replaces; the Server
+		// cannot know that either.
+		return failed("", msg.Text("deploy.plugin_unusable",
+			"the {plugin} Plugin on this host cannot be used: {err}\n"+
+				"Reinstall it there and deploy again:\n    easyssl-agent plugin install {plugin}",
+			"plugin", work.PluginID, "err", err))
 	case err != nil:
 		return failed("", msg.Text("deploy.plugin_record_unreadable",
 			"could not read this host's Plugin record: {err}", "err", err))
