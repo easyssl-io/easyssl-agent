@@ -20,23 +20,6 @@ import (
 // is for. Both halves are needed: a base URL is checked once, and a redirect
 // can change the scheme afterwards.
 
-// CheckBaseURL rejects a Server base URL this Agent must not talk to.
-//
-// It is called by New, so no path can build a Client around a URL that was
-// never checked, a hand-edited configuration included. At registration the
-// check happens before the Server issues a token, so a mistyped --server fails
-// while there is still nothing to leak.
-//
-// http is allowed to a loopback host and nowhere else. A developer running a
-// Server on their own machine has no certificate for it and no attacker on the
-// path, so requiring https there would only teach people to want a way around
-// it. Restricting it to loopback means a real host can never be reached this
-// way, so the exception cannot be widened by a typo or by copying a working
-// command from a laptop to a server.
-//
-// The name "localhost" is accepted alongside the literal addresses: RFC 6761
-// reserves it for this, and resolving it elsewhere takes an edit to /etc/hosts
-// or the resolver, both of which need the root this Agent already runs as.
 // NormalizeURL is a Server URL in one spelling: scheme and host in lower case,
 // no default port and no trailing slash, so two spellings of one Server compare
 // equal. A URL that does not parse is returned as given.
@@ -57,6 +40,23 @@ func NormalizeURL(raw string) string {
 	return u.String()
 }
 
+// CheckBaseURL rejects a Server base URL this Agent must not talk to.
+//
+// It is called by New, so no path can build a Client around a URL that was
+// never checked, a hand-edited configuration included. At registration the
+// check happens before the Server issues a token, so a mistyped --server fails
+// while there is still nothing to leak.
+//
+// http is allowed to a loopback host and nowhere else. A developer running a
+// Server on their own machine has no certificate for it and no attacker on the
+// path, so requiring https there would only teach people to want a way around
+// it. Restricting it to loopback means a real host can never be reached this
+// way, so the exception cannot be widened by a typo or by copying a working
+// command from a laptop to a server.
+//
+// The name "localhost" is accepted alongside the literal addresses: RFC 6761
+// reserves it for this, and resolving it elsewhere takes an edit to /etc/hosts
+// or the resolver, both of which need the root this Agent already runs as.
 func CheckBaseURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
