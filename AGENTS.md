@@ -26,8 +26,8 @@ files and commands against a fake root.
 
 ## Code Review Rules
 
-Everything here runs on a customer's machine, and is open source so they can
-verify what it does. Flag any of the following.
+Everything here runs on a customer's machine, and its source is published so
+they can verify what it does. Flag any of the following.
 
 - **Standard library first.** A new third-party dependency is a finding unless
   the change says why the standard library cannot do the job. The binary also
