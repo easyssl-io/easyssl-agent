@@ -162,18 +162,18 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 	// The key is the one the Server named, never one this host picks: the
 	// link between a certificate and its key is the Server's record, and a
 	// host holds only keys named by their own fingerprint.
-	if work.KeyFingerprint == "" {
+	if work.KeySPKISHA256 == "" {
 		return failed(installed.Version, msg.Text("deploy.no_key_named",
 			"the Server named no private key for {certificate}, so nothing could install it. "+
 				"The Server is older than this Agent.", "certificate", work.CertificateID))
 	}
-	key, err := loadKey(work.KeyFingerprint)
+	key, err := loadKey(work.KeySPKISHA256)
 	if err != nil {
 		if errors.Is(err, keystore.ErrNoKey) {
 			return failed(installed.Version, msg.Text("deploy.no_key",
 				"this host holds no private key {fingerprint} for {certificate}, so it cannot install it. "+
 					"A Certificate is installable only by an Agent holding its key.",
-				"fingerprint", work.KeyFingerprint, "certificate", work.CertificateID))
+				"fingerprint", work.KeySPKISHA256, "certificate", work.CertificateID))
 		}
 		return failed(installed.Version, msg.Text("deploy.key_unreadable",
 			"reading the private key: {err}", "err", err))

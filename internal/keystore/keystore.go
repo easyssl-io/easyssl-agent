@@ -230,7 +230,7 @@ func List() ([]wire.KeyInfo, error) {
 		}
 		// Never modified after creation (a key is written once), so the
 		// modification time is the creation time on every filesystem.
-		keys = append(keys, wire.KeyInfo{Fingerprint: fp, KeyType: wire.KeyTypeOf(key.Public()), CreatedAt: info.ModTime().UTC()})
+		keys = append(keys, wire.KeyInfo{SPKISHA256: fp, KeyType: wire.KeyTypeOf(key.Public()), CreatedAt: info.ModTime().UTC()})
 	}
 	return keys, nil
 }

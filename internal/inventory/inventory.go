@@ -56,7 +56,7 @@ func Collect(ctx context.Context, plugins *pluginmgr.Manager) (wire.Inventory, e
 func Fingerprint(inv wire.Inventory) (string, error) {
 	keys := make([]wire.KeyInfo, len(inv.Keys))
 	copy(keys, inv.Keys)
-	sort.Slice(keys, func(i, j int) bool { return keys[i].Fingerprint < keys[j].Fingerprint })
+	sort.Slice(keys, func(i, j int) bool { return keys[i].SPKISHA256 < keys[j].SPKISHA256 })
 	for i := range keys {
 		keys[i].CreatedAt = keys[i].CreatedAt.UTC().Truncate(time.Second)
 	}

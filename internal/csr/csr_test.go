@@ -159,7 +159,7 @@ func TestReRunUsesTheNamedKey(t *testing.T) {
 	if err := h(context.Background(), command()); err != nil {
 		t.Fatal(err)
 	}
-	api.work.KeyFingerprint = keyOf(t, api.submitted[0])
+	api.work.KeySPKISHA256 = keyOf(t, api.submitted[0])
 	api.submitErr = &serverapi.APIError{Status: 409, Code: wire.CodeCSRAlreadySubmitted}
 	if err := h(context.Background(), command()); err != nil {
 		t.Fatalf("re-run = %v, want nil (already submitted is success)", err)
@@ -193,7 +193,7 @@ func TestUnnamedKeyIsFreshEachRun(t *testing.T) {
 // Agent rather than the Server receiving a CSR from a key it did not ask for.
 func TestNamedKeyAbsentBuildsNothing(t *testing.T) {
 	api := &fakeAPI{work: work("app.example.test")}
-	api.work.KeyFingerprint = strings.Repeat("0", 64)
+	api.work.KeySPKISHA256 = strings.Repeat("0", 64)
 	h := newHandler(t, api)
 	if err := h(context.Background(), command()); !errors.Is(err, keystore.ErrNoKey) {
 		t.Fatalf("handler = %v, want ErrNoKey (left pending)", err)

@@ -95,7 +95,7 @@ func TestAFailedRunIsReportedInEveryLanguage(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	res := run(context.Background(), plugins{installed: pluginmgr.Installed{ID: "generic-cli", Path: path}},
-		wire.DeploymentWork{PluginID: "generic-cli", KeyFingerprint: "00"}, logger)
+		wire.DeploymentWork{PluginID: "generic-cli", KeySPKISHA256: "00"}, logger)
 	if res.OK || res.PluginRun == nil || res.PluginRun.ExitStatus != 3 {
 		t.Fatalf("result = %+v, want a run that exited 3", res)
 	}
@@ -120,7 +120,7 @@ func TestARunEndedBySignalQuotesTheError(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	res := run(context.Background(), plugins{installed: pluginmgr.Installed{ID: "generic-cli", Path: path}},
-		wire.DeploymentWork{PluginID: "generic-cli", KeyFingerprint: "00"}, logger)
+		wire.DeploymentWork{PluginID: "generic-cli", KeySPKISHA256: "00"}, logger)
 	if res.OK || res.PluginRun == nil || res.PluginRun.ExitStatus != -1 {
 		t.Fatalf("result = %+v, want a run with no status", res)
 	}
