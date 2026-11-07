@@ -1,12 +1,16 @@
 # easyssl-agent
 
-The open-source easySSL Agent: a single, auditable Go binary that registers a
+The easySSL Agent: a single, auditable Go binary that registers a
 host with an easySSL Server, polls for certificate configuration, deploys
 certificates through on-demand plugins, and reports inventory and health.
 
-Everything that runs on the Agent side is open source, so it can be
-independently inspected and audited. Connections are only ever initiated from
-the Agent to the Server, so the Agent can run inside an isolated network zone.
+Everything that runs on the Agent side has its source published, so it can be
+independently inspected and audited. The Agent is under FSL-1.1-ALv2
+(`LICENSE.md`): you may patch it for your own hosts without sharing the
+patches, but not ship it in a competing product.
+
+Connections are only ever initiated from the Agent to the Server, so the Agent
+can run inside an isolated network zone.
 
 The shared Agent-to-Server contract lives in the separate `easyssl-contract`
 module; wire types are not duplicated here.
