@@ -338,7 +338,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 		fmt.Println(msg.T("register.reactivated", "✓ Reactivated as {name} ({id}), ACTIVE in {organization}.",
 			"name", resp.DisplayName, "id", resp.AgentID, "organization", cfg.Organization()))
 		fmt.Println(msg.T("register.reactivated.manage", "  manage:  {command}", "command", statusHint()))
-		offerRequiredPlugins(ctx, t, api, resp.AgentToken, opts.ServerURL, resp.RequiredPlugins)
+		offerRequiredPlugins(ctx, t, api, resp.AgentToken, resp.RequiredPlugins)
 		printNoPluginHint()
 		return nil
 	}
@@ -352,7 +352,7 @@ func freshRegister(ctx context.Context, t *terminal, opts Options) error {
 // back fails for want of an executable. Non-interactive runs are told what to
 // install and left to it: a Plugin runs as root, and that consent is not
 // inferred from an environment variable.
-func offerRequiredPlugins(ctx context.Context, t *terminal, api *serverapi.Client, token, serverURL string, required []string) {
+func offerRequiredPlugins(ctx context.Context, t *terminal, api *serverapi.Client, token string, required []string) {
 	if len(required) == 0 {
 		return
 	}
