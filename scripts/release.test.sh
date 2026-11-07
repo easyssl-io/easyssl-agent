@@ -2,13 +2,15 @@
 # Tests scripts/release.sh in a throwaway clone of this repository, so nothing
 # here is ever tagged: a release keeps a loadable copy of every pinned example,
 # and refuses a repeated tag and a dirty tree. The clone sits beside the
-# contract this checkout builds against, as go.mod expects.
+# contract this checkout builds against, as go.mod expects. It takes no tags,
+# and the test uses versions 0.901.x, which no real release reaches, so it
+# passes whatever this repository has released.
 set -eu
 cd "$(dirname "$0")/.."
 contract=$(cd ../contract && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-git clone -q . "$work/agent"
+git clone -q --no-tags . "$work/agent"
 ln -s "$contract" "$work/contract"
 mkdir -p "$work/agent/scripts" && cp scripts/release.sh "$work/agent/scripts/release.sh"
 cd "$work/agent"
@@ -24,11 +26,11 @@ expect() { # expect STATUS DESCRIPTION COMMAND...
   if "$@" >"$work/out" 2>&1; then got=0; else got=1; fi
   if [ "$got" != "$want" ]; then echo "FAIL: $what (exit $got)"; cat "$work/out"; fail=1; fi
 }
-expect 0 "a release" scripts/release.sh 0.1.0
-[ "$(git tag --points-at HEAD)" = v0.1.0 ] || { echo "FAIL: v0.1.0 is not on the release commit"; fail=1; }
-[ -f internal/identity/testdata/v0.1.0/config.json ] || { echo "FAIL: no copy of the config examples"; fail=1; }
-expect 1 "a version already tagged" scripts/release.sh 0.1.0
-expect 0 "a second release, loading the first's copies" scripts/release.sh 0.1.1
+expect 0 "a release" scripts/release.sh 0.901.0
+[ "$(git tag --points-at HEAD)" = v0.901.0 ] || { echo "FAIL: v0.901.0 is not on the release commit"; fail=1; }
+[ -f internal/identity/testdata/v0.901.0/config.json ] || { echo "FAIL: no copy of the config examples"; fail=1; }
+expect 1 "a version already tagged" scripts/release.sh 0.901.0
+expect 0 "a second release, loading the first's copies" scripts/release.sh 0.901.1
 echo x >> README.md
-expect 1 "a working tree with changes" scripts/release.sh 0.1.2
+expect 1 "a working tree with changes" scripts/release.sh 0.901.2
 exit "$fail"
