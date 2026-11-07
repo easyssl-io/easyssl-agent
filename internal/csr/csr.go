@@ -110,8 +110,8 @@ func New(api API, token string, logger *slog.Logger) commands.Handler {
 
 // keyFor returns the key the work names, or a fresh one when it names none.
 func keyFor(work wire.CSRWork) (crypto.Signer, error) {
-	if work.KeyFingerprint != "" {
-		return loadKey(work.KeyFingerprint)
+	if work.KeySPKISHA256 != "" {
+		return loadKey(work.KeySPKISHA256)
 	}
 	_, key, err := generateKey(work.KeyType)
 	return key, err

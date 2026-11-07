@@ -197,7 +197,7 @@ func Count() (int, error) {
 }
 
 // List reports every key this host holds, by its public half, for the host
-// inventory: fingerprint, algorithm and when the file was created. Never the
+// inventory: fingerprint, key type and when the file was created. Never the
 // key. A file that does not parse or whose content does not match its name is
 // logged and left out, since the inventory is what the Server offers for reuse.
 // A directory that cannot be read at all is an error, so the caller sends no
@@ -230,7 +230,7 @@ func List() ([]wire.KeyInfo, error) {
 		}
 		// Never modified after creation (a key is written once), so the
 		// modification time is the creation time on every filesystem.
-		keys = append(keys, wire.KeyInfo{Fingerprint: fp, Algorithm: wire.KeyTypeOf(key.Public()), CreatedAt: info.ModTime().UTC()})
+		keys = append(keys, wire.KeyInfo{SPKISHA256: fp, KeyType: wire.KeyTypeOf(key.Public()), CreatedAt: info.ModTime().UTC()})
 	}
 	return keys, nil
 }
