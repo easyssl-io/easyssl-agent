@@ -1,0 +1,12 @@
+#!/sbin/openrc-run
+description="easySSL Agent"
+command=/usr/local/bin/easyssl-agent
+command_args=run
+supervisor=supervise-daemon
+respawn_delay=10
+output_log=/var/log/easyssl-agent.log
+error_log=/var/log/easyssl-agent.log
+
+depend() {
+	use net
+}
