@@ -13,7 +13,10 @@ ln -s "$contract" "$work/contract"
 mkdir -p "$work/agent/scripts" && cp scripts/release.sh "$work/agent/scripts/release.sh"
 cd "$work/agent"
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com
-git add scripts/release.sh && git commit -q -m "the script under test"
+# The script as it is in this checkout, committed only when it differs from
+# the clone's, so the clone's tree is clean either way.
+git add scripts/release.sh
+git diff --cached --quiet || git commit -q -m "the script under test"
 
 fail=0
 expect() { # expect STATUS DESCRIPTION COMMAND...
