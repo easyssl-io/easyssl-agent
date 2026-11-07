@@ -3,15 +3,6 @@
 // future audit mode record every request, so new Server calls go here rather
 // than into ad-hoc HTTP code. Standard library only, so the Agent stays small
 // and auditable.
-//
-// It is not yet every call. pluginmgr.HTTPCatalog fetches the Marketplace
-// catalog and downloads Plugin artifacts without coming through here, from
-// three call sites. Both of its construction sites in cmd/easyssl-agent leave
-// the HTTP field unset, so those requests run on http.DefaultClient with no
-// timeout, would go unrecorded, and miss the transport policy in transport.go
-// that requires TLS and refuses a redirect that drops it. They carry no bearer
-// token, so the downgrade matters less there, and a Plugin artifact is checked
-// against the catalog's digest afterwards.
 package serverapi
 
 import (
@@ -21,17 +12,22 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/easyssl-io/easyssl-agent/internal/buildinfo"
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
+	"github.com/easyssl-io/easyssl-contract/catalog"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
 type Client struct {
 	baseURL string
 	http    *http.Client
+	// downloads carries Plugin artifacts, which take longer than an API call
+	// and must never leave the Server's origin.
+	downloads *http.Client
 }
 
 // New builds a Client for the given Server base URL (e.g. https://server:8080),
@@ -46,6 +42,18 @@ func New(baseURL string) (*Client, error) {
 		http: &http.Client{
 			Timeout:       30 * time.Second,
 			CheckRedirect: noSchemeChange,
+		},
+		downloads: &http.Client{
+			Timeout: 10 * time.Minute,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				if err := noSchemeChange(req, via); err != nil {
+					return err
+				}
+				if !sameOrigin(via[0].URL, req.URL) {
+					return http.ErrUseLastResponse
+				}
+				return nil
+			},
 		},
 	}, nil
 }
@@ -293,4 +301,60 @@ func (c *Client) DeploymentWork(ctx context.Context, token, deploymentID string)
 // a second report answers deployment_finished, which the Agent treats as done.
 func (c *Client) ReportDeploymentResult(ctx context.Context, token, deploymentID string, res wire.DeploymentResult) error {
 	return c.do(ctx, http.MethodPost, wire.Path(wire.RouteAgentDeploymentResult, deploymentID), token, res, nil)
+}
+
+// Catalog reads the Marketplace catalog. It carries no token: the catalog is
+// public, read before a host has one.
+func (c *Client) Catalog(ctx context.Context) (catalog.Response, error) {
+	var out catalog.Response
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+wire.APIPrefix+catalog.RouteCatalog, nil)
+	if err != nil {
+		return out, err
+	}
+	setVersions(req)
+	res, err := c.http.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		return out, msg.Err.T("plugin.catalog.http_status", "the Server answered {status} for the catalog", "status", res.Status)
+	}
+	return out, json.NewDecoder(res.Body).Decode(&out)
+}
+
+// Download fetches a Plugin artifact by the URL the catalog names, a path
+// resolved against the Server. A URL naming any other origin is refused, as is
+// a redirect to one: the Agent downloads code only from the Server it is
+// registered to.
+func (c *Client) Download(ctx context.Context, ref string) (io.ReadCloser, error) {
+	base, err := url.Parse(c.baseURL)
+	if err != nil {
+		return nil, err
+	}
+	target, err := base.Parse(ref)
+	if err != nil {
+		return nil, err
+	}
+	if !sameOrigin(base, target) {
+		return nil, msg.Err.T("plugin.install.other_origin", "the catalog names {url}, which is not on the Server", "url", target.String())
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+	setVersions(req)
+	res, err := c.downloads.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode != http.StatusOK {
+		res.Body.Close()
+		return nil, msg.Err.T("plugin.install.http_status", "the Server answered {status} for the artifact", "status", res.Status)
+	}
+	return res.Body, nil
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
 }

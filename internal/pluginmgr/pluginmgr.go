@@ -17,14 +17,11 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -72,7 +69,7 @@ type Installed struct {
 // Catalog is the Marketplace read. Separate from Reporter because the catalog
 // needs no token: it is the same bytes for everyone.
 type Catalog interface {
-	Fetch(ctx context.Context) (catalog.Response, error)
+	Catalog(ctx context.Context) (catalog.Response, error)
 	Download(ctx context.Context, url string) (io.ReadCloser, error)
 }
 
@@ -135,7 +132,7 @@ func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (I
 	if !validPluginID.MatchString(pluginID) {
 		return Installed{}, msg.Err.T("plugin.install.invalid_name", "\"{plugin}\" is not a valid Plugin name", "plugin", pluginID)
 	}
-	cat, err := m.catalog.Fetch(ctx)
+	cat, err := m.catalog.Catalog(ctx)
 	if err != nil {
 		return Installed{}, msg.Err.T("plugin.install.catalog_failed", "reading the Marketplace catalog: {err}", "err", err)
 	}
@@ -438,79 +435,6 @@ func artifactFor(p catalog.Plugin, goos, goarch string) (catalog.Artifact, bool)
 		}
 	}
 	return catalog.Artifact{}, false
-}
-
-// HTTPCatalog reads the Marketplace over HTTP. No token: the catalog and the
-// artifacts are public.
-type HTTPCatalog struct {
-	BaseURL string
-	HTTP    *http.Client
-}
-
-func (c HTTPCatalog) client() *http.Client {
-	if c.HTTP != nil {
-		return c.HTTP
-	}
-	return &http.Client{
-		Timeout: 10 * time.Minute,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 || !sameOrigin(via[0].URL, req.URL) {
-				return http.ErrUseLastResponse
-			}
-			return nil
-		},
-	}
-}
-
-func sameOrigin(a, b *url.URL) bool {
-	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
-}
-
-func (c HTTPCatalog) Fetch(ctx context.Context) (catalog.Response, error) {
-	var out catalog.Response
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+wire.APIPrefix+catalog.RouteCatalog, nil)
-	if err != nil {
-		return out, err
-	}
-	res, err := c.client().Do(req)
-	if err != nil {
-		return out, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return out, msg.Err.T("plugin.catalog.http_status", "the Server answered {status} for the catalog", "status", res.Status)
-	}
-	return out, json.NewDecoder(res.Body).Decode(&out)
-}
-
-// Download fetches an artifact by the URL the catalog names, a path resolved
-// against BaseURL. A URL naming any other origin is refused, as is a redirect
-// to one: the Agent downloads code only from the Server it is registered to.
-func (c HTTPCatalog) Download(ctx context.Context, ref string) (io.ReadCloser, error) {
-	base, err := url.Parse(c.BaseURL)
-	if err != nil {
-		return nil, err
-	}
-	target, err := base.Parse(ref)
-	if err != nil {
-		return nil, err
-	}
-	if !sameOrigin(base, target) {
-		return nil, msg.Err.T("plugin.install.other_origin", "the catalog names {url}, which is not on the Server", "url", target.String())
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	res, err := c.client().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	if res.StatusCode != http.StatusOK {
-		res.Body.Close()
-		return nil, msg.Err.T("plugin.install.http_status", "the Server answered {status} for the artifact", "status", res.Status)
-	}
-	return res.Body, nil
 }
 
 // Find reports whether a Plugin executable is on this host, with the digest

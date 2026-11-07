@@ -356,7 +356,7 @@ func offerRequiredPlugins(ctx context.Context, t *terminal, api *serverapi.Clien
 	if len(required) == 0 {
 		return
 	}
-	mgr := pluginmgr.New(pluginmgr.HTTPCatalog{BaseURL: serverURL}, nil)
+	mgr := pluginmgr.New(api, nil)
 	missing := make([]string, 0, len(required))
 	for _, id := range required {
 		if _, ok, err := mgr.Find(id); err == nil && ok {

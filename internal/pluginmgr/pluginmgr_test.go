@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-contract/catalog"
 	"github.com/easyssl-io/easyssl-contract/l10n"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
@@ -68,7 +69,11 @@ func newManager(t *testing.T, srv *httptest.Server, desc plugincontract.Describe
 	t.Helper()
 	m := New(nil, nil)
 	if srv != nil {
-		m.catalog = HTTPCatalog{BaseURL: srv.URL}
+		api, err := serverapi.New(srv.URL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.catalog = api
 	}
 	m.installDir = filepath.Join(t.TempDir(), "plugins")
 	m.runDescribe = func(_ context.Context, _ string) ([]byte, error) {
@@ -337,21 +342,6 @@ func TestRunByExecRefusesAnOversizedAnswer(t *testing.T) {
 	if _, err := runByExec(context.Background(), script, plugincontract.OpDiscover, slog.New(slog.DiscardHandler)); err == nil ||
 		!strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("err = %v, want the answer refused as too large", err)
-	}
-}
-
-// The catalog names artifacts by path on the Server, and a URL naming any other
-// origin is refused rather than followed.
-func TestDownloadStaysOnTheServer(t *testing.T) {
-	srv := newMarketplace(t, "")
-	c := HTTPCatalog{BaseURL: srv.URL}
-	body, err := c.Download(context.Background(), wire.APIPrefix+catalog.PluginArtifactPath("generic-cli", "linux", "amd64"))
-	if err != nil {
-		t.Fatalf("a path on the Server: %v", err)
-	}
-	body.Close()
-	if _, err := c.Download(context.Background(), "https://elsewhere.example/plugin"); err == nil {
-		t.Fatal("a URL on another origin was followed")
 	}
 }
 

@@ -629,7 +629,7 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	mgr := pluginmgr.New(pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL}, agentLogger())
+	mgr := pluginmgr.New(api, agentLogger())
 	// The host's own platform: an Agent installs for the machine it runs on,
 	// never for another, so there is no flag to get this wrong.
 	out := make([]pluginmgr.Installed, 0, len(names))
@@ -699,7 +699,11 @@ func cmdPluginCatalog(ctx context.Context, args []string) error {
 	if err != nil {
 		return stateError("plugin catalog", err)
 	}
-	offered, err := pluginmgr.HTTPCatalog{BaseURL: cfg.ServerURL}.Fetch(ctx)
+	api, err := serverapi.New(cfg.ServerURL)
+	if err != nil {
+		return err
+	}
+	offered, err := api.Catalog(ctx)
 	if err != nil {
 		return err
 	}
