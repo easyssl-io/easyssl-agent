@@ -12,15 +12,15 @@ func TestInventoryFingerprintIsOrderAndClockIndependent(t *testing.T) {
 	a := wire.Inventory{
 		Diagnostics: wire.Diagnostics{Hostname: "h", OS: "Debian 13", HostType: "vm"},
 		Keys: []wire.KeyInfo{
-			{Fingerprint: "bb", Algorithm: "ec_p256", CreatedAt: at},
-			{Fingerprint: "aa", Algorithm: "ec_p256", CreatedAt: at.In(time.FixedZone("x", 3600)).Add(300 * time.Millisecond)},
+			{Fingerprint: "bb", KeyType: "ec_p256", CreatedAt: at},
+			{Fingerprint: "aa", KeyType: "ec_p256", CreatedAt: at.In(time.FixedZone("x", 3600)).Add(300 * time.Millisecond)},
 		},
 	}
 	b := wire.Inventory{
 		Diagnostics: a.Diagnostics,
 		Keys: []wire.KeyInfo{
-			{Fingerprint: "aa", Algorithm: "ec_p256", CreatedAt: at},
-			{Fingerprint: "bb", Algorithm: "ec_p256", CreatedAt: at},
+			{Fingerprint: "aa", KeyType: "ec_p256", CreatedAt: at},
+			{Fingerprint: "bb", KeyType: "ec_p256", CreatedAt: at},
 		},
 	}
 	fa, err := Fingerprint(a)

@@ -420,7 +420,7 @@ func TestListReportsUsableKeysOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(keys) != 1 || keys[0].Fingerprint != fp || keys[0].Algorithm != "ec_p256" || keys[0].CreatedAt.IsZero() {
+	if len(keys) != 1 || keys[0].Fingerprint != fp || keys[0].KeyType != "ec_p256" || keys[0].CreatedAt.IsZero() {
 		t.Fatalf("List() = %+v, want the one usable key %s", keys, fp)
 	}
 }
@@ -468,8 +468,8 @@ func TestEveryKeyTypeRoundTrips(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range keys {
-		if k.Algorithm != fps[k.Fingerprint] {
-			t.Fatalf("inventory names %s as %s, want %s", k.Fingerprint, k.Algorithm, fps[k.Fingerprint])
+		if k.KeyType != fps[k.Fingerprint] {
+			t.Fatalf("inventory names %s as %s, want %s", k.Fingerprint, k.KeyType, fps[k.Fingerprint])
 		}
 	}
 	if len(keys) != len(wire.KeyTypes) {
