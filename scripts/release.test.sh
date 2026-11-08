@@ -2,17 +2,14 @@
 # Tests scripts/release.sh in a throwaway clone of this repository, so nothing
 # here is ever tagged: a release keeps a loadable copy of every pinned example,
 # and refuses a repeated tag, a dirty tree and a version without a
-# CHANGELOG.md entry. The clone sits beside the
-# contract this checkout builds against, as go.mod expects. It takes no tags,
+# CHANGELOG.md entry. The clone takes no tags,
 # and the test uses versions 0.901.x, which no real release reaches, so it
 # passes whatever this repository has released.
 set -eu
 cd "$(dirname "$0")/.."
-contract=$(cd ../contract && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 git clone -q --no-tags . "$work/agent"
-ln -s "$contract" "$work/contract"
 mkdir -p "$work/agent/scripts" && cp scripts/release.sh "$work/agent/scripts/release.sh"
 cd "$work/agent"
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.com

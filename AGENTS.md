@@ -13,11 +13,8 @@ to it must respect.
 go build ./... && go test ./... && go vet ./...
 ```
 
-`easyssl-contract` resolves through a `replace` pointing at a sibling checkout,
-so a clone of this repository on its own does not build yet. Build from a
-checkout that has `easyssl-contract` beside it, and read `replacement directory
-../contract does not exist` as an environment problem rather than a defect in
-the change under review.
+`easyssl-contract` is required at a released version, so a clone of this
+repository builds on its own.
 
 `register`, `run` and `uninstall` drive the host's init system, `/etc/easyssl/`, `/var/lib/easyssl/`
 and the network, so they are exercised on a real Linux host or a container
