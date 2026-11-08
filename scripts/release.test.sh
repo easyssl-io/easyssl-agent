@@ -1,7 +1,8 @@
 #!/bin/sh
 # Tests scripts/release.sh in a throwaway clone of this repository, so nothing
 # here is ever tagged: a release keeps a loadable copy of every pinned example,
-# and refuses a repeated tag and a dirty tree. The clone sits beside the
+# and refuses a repeated tag, a dirty tree and a version without a
+# CHANGELOG.md entry. The clone sits beside the
 # contract this checkout builds against, as go.mod expects. It takes no tags,
 # and the test uses versions 0.901.x, which no real release reaches, so it
 # passes whatever this repository has released.
@@ -26,11 +27,20 @@ expect() { # expect STATUS DESCRIPTION COMMAND...
   if "$@" >"$work/out" 2>&1; then got=0; else got=1; fi
   if [ "$got" != "$want" ]; then echo "FAIL: $what (exit $got)"; cat "$work/out"; fail=1; fi
 }
+entry() { # entry VERSION, committed
+  printf '\n## %s\n\nA test release.\n' "$1" >> CHANGELOG.md
+  git add CHANGELOG.md && git commit -q -m "entry $1"
+}
+expect 1 "a version CHANGELOG.md has no entry for" scripts/release.sh 0.901.0
+grep -q 'CHANGELOG.md has no' "$work/out" || { echo "FAIL: the refusal does not name CHANGELOG.md"; fail=1; }
+entry 0.901.0
 expect 0 "a release" scripts/release.sh 0.901.0
 [ "$(git tag --points-at HEAD)" = v0.901.0 ] || { echo "FAIL: v0.901.0 is not on the release commit"; fail=1; }
 [ -f internal/identity/testdata/v0.901.0/config.json ] || { echo "FAIL: no copy of the config examples"; fail=1; }
 expect 1 "a version already tagged" scripts/release.sh 0.901.0
+entry 0.901.1
 expect 0 "a second release, loading the first's copies" scripts/release.sh 0.901.1
+entry 0.901.2
 echo x >> README.md
 expect 1 "a working tree with changes" scripts/release.sh 0.901.2
 exit "$fail"
