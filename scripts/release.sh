@@ -8,7 +8,8 @@
 # back, those of each package that pins them with contracttest.Messages
 # (config.json today), under `<package>/testdata/v<VERSION>/`. Those copies
 # never change: every later Agent must still load them, since an upgrade finds
-# the files the old one wrote. Refuses a dirty tree and an existing tag, runs
+# the files the old one wrote. Refuses a dirty tree, an existing tag and a
+# version CHANGELOG.md has no `## VERSION` entry for, runs
 # the tests, commits and tags `v<VERSION>`. Pushing is left to the caller:
 # `git push origin HEAD v<VERSION>`.
 set -eu
@@ -22,6 +23,8 @@ echo "$version" | grep -Eq '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
 if git rev-parse -q --verify "refs/tags/v$version" >/dev/null; then
   echo "v$version is already tagged" >&2; exit 1
 fi
+grep -qx "## $version" CHANGELOG.md 2>/dev/null ||
+  { echo "CHANGELOG.md has no \"## $version\" entry: write what this release changes first, in its own commit" >&2; exit 1; }
 
 for test in $(grep -l 'contracttest.Messages(t, "testdata"' $(git ls-files '*_test.go')); do
   dir=$(dirname "$test")/testdata
