@@ -491,3 +491,19 @@ func TestRunRelocatePassesTheLanguage(t *testing.T) {
 		t.Fatalf("relocate saw EASYSSL_LANG=%q, %v", out, err)
 	}
 }
+
+// A Plugin built before 0.2.0 reports certbot's certificates only as warnings,
+// so the command says why it offers none of them and how to change that.
+func TestAPluginTooOldToRelocateIsNamed(t *testing.T) {
+	h := host{t: t, root: t.TempDir()}
+	h.lineage("example.com")
+	obs := &observer{answers: [][]pluginmgr.Observation{{nginx("0.1.0")}}}
+	r := &run{}
+	if err := Run(context.Background(), h.options(r, obs, "\n")); err != nil {
+		t.Fatal(err)
+	}
+	if out := r.out.String(); !strings.Contains(out, "The nginx Plugin was built against contract 0.1.0, older than 0.2.0") ||
+		!strings.Contains(out, "`easyssl-agent plugin install nginx`") {
+		t.Fatalf("output:\n%s", out)
+	}
+}

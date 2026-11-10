@@ -73,6 +73,7 @@
   "migrate.plan.shared_line": "{file}:{line} también nombra {value}, para un certificado no elegido, así que no se cambió nada. Elígelos juntos.",
   "migrate.plan.unknown_setting": "El Plugin {plugin} nombra {file}:{line} para su ajuste {setting}, que no contiene ningún archivo de este certificado, así que no se cambió nada.",
   "migrate.plan.unreadable": "{file} no se puede leer, así que no se cambió nada: {err}",
+  "migrate.plugin_too_old": "El Plugin {plugin} se compiló con el contrato {version}, anterior a {since}, así que sus certificados no se pueden mover: reinstálalo con `easyssl-agent plugin install {plugin}` y vuelve a ejecutar este comando.",
   "migrate.plugin_unobserved": "El Plugin {plugin} no respondió a `{op}`, así que no se revisó lo que usa: {err}",
   "migrate.relocate.done": "✓ El Plugin {plugin} cambió su configuración.",
   "migrate.relocate.exited": "su salida dice por qué",

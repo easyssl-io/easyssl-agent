@@ -135,6 +135,15 @@ func Run(ctx context.Context, opts Options) error {
 		if o.Err != nil {
 			s.say(msg.T("migrate.plugin_unobserved", "The {plugin} Plugin did not answer `{op}`, so what it uses was not checked: {err}",
 				"plugin", o.ID, "op", o.FailedOp, "err", o.Err))
+			continue
+		}
+		// A Plugin built before the Agent took over refusing other clients'
+		// directories still refuses them itself and reports their
+		// certificates only as warnings, so none of them reaches this
+		// command until the Plugin is reinstalled.
+		if !plugincontract.AtLeast(o.Describe.ContractVersion, plugincontract.RelocateSince) {
+			s.say(msg.T("migrate.plugin_too_old", "The {plugin} Plugin was built against contract {version}, older than {since}, so its certificates cannot be moved: reinstall it with `easyssl-agent plugin install {plugin}`, then run this command again.",
+				"plugin", o.ID, "version", o.Describe.ContractVersion, "since", plugincontract.RelocateSince))
 		}
 	}
 
