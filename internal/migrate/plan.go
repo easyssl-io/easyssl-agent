@@ -348,8 +348,8 @@ func (s *session) copyAll(m *migration) error {
 // exists is left as it is.
 func (s *session) ensureDestDir() error {
 	dir := s.opts.Host.File(DestDir)
-	if _, err := os.Stat(dir); err == nil {
-		return nil
+	if _, err := os.Lstat(dir); err == nil {
+		return safeDir(dir)
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
 		return err
@@ -363,12 +363,40 @@ func (s *session) ensureDestDir() error {
 	return s.opts.Chown(dir, 0, 0)
 }
 
+// safeDir refuses a directory a key must not be written into as root: a
+// symlink, which could lead anywhere, one that is not a directory, one that
+// group or others can write, where another user could swap files, and, when
+// this runs as root, one root does not own. Only root can create these
+// directories on a normal host, so a refusal means something to look at.
+func safeDir(dir string) error {
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return err
+	}
+	switch {
+	case fi.Mode()&fs.ModeSymlink != 0:
+		return msg.Err.T("migrate.unsafe_dir.symlink", "{dir} is a symlink, so no key is written there", "dir", dir)
+	case !fi.IsDir():
+		return msg.Err.T("migrate.unsafe_dir.not_dir", "{dir} is not a directory", "dir", dir)
+	case fi.Mode().Perm()&0o022 != 0:
+		return msg.Err.T("migrate.unsafe_dir.writable", "{dir} can be written by users other than its owner, so no key is written there", "dir", dir)
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && os.Geteuid() == 0 && st.Uid != 0 {
+		return msg.Err.T("migrate.unsafe_dir.owner", "{dir} is not owned by root, so no key is written there", "dir", dir)
+	}
+	return nil
+}
+
 // writeCopy writes one copy under a temporary name, sets its owner, group and
 // mode, then links it into place, which fails rather than replace a file that
 // appeared meanwhile; an identical one is taken as the copy.
 func (s *session) writeCopy(c *copyStep) error {
 	dir := s.opts.Host.File(path.Dir(c.dest))
-	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Lstat(dir); err == nil {
+		if err := safeDir(dir); err != nil {
+			return err
+		}
+	} else if errors.Is(err, fs.ErrNotExist) {
 		if err := os.Mkdir(dir, c.dirMode); err != nil {
 			return err
 		}

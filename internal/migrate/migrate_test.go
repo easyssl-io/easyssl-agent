@@ -507,3 +507,53 @@ func TestAPluginTooOldToRelocateIsNamed(t *testing.T) {
 		t.Fatalf("output:\n%s", out)
 	}
 }
+
+// A destination directory someone could have prepared is refused before any
+// key is written: a symlink, or one others can write.
+func TestUnsafeDestinationDirectoriesAreRefused(t *testing.T) {
+	for name, prepare := range map[string]func(t *testing.T, root string) string{
+		"easySSL's directory is a symlink": func(t *testing.T, root string) string {
+			elsewhere := t.TempDir()
+			mustMkdir(t, filepath.Join(root, "etc/ssl"), 0o755)
+			if err := os.Symlink(elsewhere, filepath.Join(root, DestDir)); err != nil {
+				t.Fatal(err)
+			}
+			return elsewhere
+		},
+		"the certificate's directory is group-writable": func(t *testing.T, root string) string {
+			dir := filepath.Join(root, DestDir, "example.com")
+			mustMkdir(t, dir, 0o775)
+			if err := os.Chmod(dir, 0o775); err != nil {
+				t.Fatal(err)
+			}
+			return dir
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := host{t: t, root: t.TempDir()}
+			_, sum := h.lineage("example.com")
+			a := target("/etc/letsencrypt/archive/example.com/fullchain1.pem", "/etc/letsencrypt/archive/example.com/privkey1.pem", sum, nil,
+				ref("ssl_certificate", "/etc/nginx/a", 1, "/etc/letsencrypt/live/example.com/fullchain.pem"))
+			watched := prepare(t, h.root)
+			relocated := false
+			opts := h.options(&run{}, &observer{answers: [][]pluginmgr.Observation{{nginx("0.2.0", a)}}}, "1\ny\n")
+			opts.Relocate = func(context.Context, pluginmgr.Installed, plugincontract.RelocateRequest) (string, int, error) {
+				relocated = true
+				return "", 0, nil
+			}
+			if err := Run(context.Background(), opts); err == nil || !strings.Contains(err.Error(), "so no key is written there") {
+				t.Fatalf("err = %v", err)
+			}
+			if entries, _ := os.ReadDir(watched); len(entries) != 0 || relocated {
+				t.Fatalf("wrote %d entries, relocated %v", len(entries), relocated)
+			}
+		})
+	}
+}
+
+func mustMkdir(t *testing.T, dir string, mode os.FileMode) {
+	t.Helper()
+	if err := os.MkdirAll(dir, mode); err != nil {
+		t.Fatal(err)
+	}
+}
