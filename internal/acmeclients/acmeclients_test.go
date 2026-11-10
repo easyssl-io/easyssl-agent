@@ -324,3 +324,31 @@ func TestWarningsNeverNameTheTargetsPath(t *testing.T) {
 		t.Fatalf("hook copy warning = %q", hook)
 	}
 }
+
+// A `..` after a link applies to where the link leads, as the kernel opens the
+// path: cleaning the path first would check /opt/example.com instead.
+func TestADotDotAfterALinkIsResolvedAsTheKernelDoes(t *testing.T) {
+	f := newFixture(t)
+	f.lineage(DefaultCertbotDir, "example.com")
+	f.link("/opt/alias", "/etc/letsencrypt/archive/example.com")
+	r := f.host().Scan(nil)
+	for _, p := range []string{
+		"/opt/alias/../example.com/fullchain1.pem",
+		"/opt/alias/../example.com/privkey1.pem",
+		// Not there yet: a Deployment would create it in certbot's archive.
+		"/opt/alias/../example.com/new.pem",
+	} {
+		fs := r.Check(Target{Paths: []string{p}})
+		if len(fs) != 1 || fs[0].Kind != Certbot || fs[0].Path != p {
+			t.Errorf("%s: findings = %+v", p, fs)
+		}
+	}
+	if real, err := f.host().Resolve("/opt/alias/../example.com/fullchain1.pem"); err != nil || real != "/etc/letsencrypt/archive/example.com/fullchain1.pem" {
+		t.Fatalf("resolved = %q, %v", real, err)
+	}
+	// The copies' own directory reached through a link is not the copies'.
+	f.link("/etc/ssl/easyssl/alias", "/etc/letsencrypt/archive/example.com")
+	if f.host().ownCopy([]string{"/etc/ssl/easyssl/alias/../example.com/fullchain1.pem"}) {
+		t.Fatal("a path through a link out of OwnDir counted as an own copy")
+	}
+}

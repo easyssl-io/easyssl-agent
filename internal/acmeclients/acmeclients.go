@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -277,7 +278,7 @@ func (r *Rule) Check(t Target) []Finding {
 			}
 		}
 	}
-	if !inCertbot && !ownCopy(t.Paths) && t.CertSHA256 != "" && len(t.Paths) > 0 {
+	if !inCertbot && !r.host.ownCopy(t.Paths) && t.CertSHA256 != "" && len(t.Paths) > 0 {
 		for _, d := range r.certbot {
 			for _, l := range d.Lineages {
 				if l.CertSHA256 != "" && l.CertSHA256 == t.CertSHA256 {
@@ -378,11 +379,14 @@ var otherClients = []struct{ client, dir string }{
 // reason to write into easySSL's own directory.
 const OwnDir = "/etc/ssl/easyssl"
 
-// ownCopy reports whether every path lies under OwnDir.
-func ownCopy(paths []string) bool {
+// ownCopy reports whether every path lies under OwnDir, as written and as the
+// kernel opens it.
+func (h Host) ownCopy(paths []string) bool {
 	for _, p := range paths {
-		if !within(path.Clean(p), OwnDir) {
-			return false
+		for _, q := range h.forms(p) {
+			if !within(q, OwnDir) {
+				return false
+			}
 		}
 	}
 	return len(paths) > 0
@@ -561,17 +565,22 @@ func LeafSHA256(name string) string {
 	}
 }
 
-// forms are the ways a path is checked: as given, and with every symlink
-// followed, since a link outside a managed directory can point into one.
+// forms are the ways a path is checked: as written, and as the kernel opens
+// it, since a link outside a managed directory can point into one. The second
+// is resolved from p as given, never from its cleaned form: cleaning drops a
+// `..` against the name before it, but the kernel applies it to where a link
+// leads, so `/opt/alias/../x` cleans to `/opt/x` while it opens a sibling of
+// alias's target. A file that does not exist yet resolves through the
+// directories that do, since that is where it would be written.
 func (h Host) forms(p string) []string {
 	if !path.IsAbs(p) {
 		return nil
 	}
-	p = path.Clean(p)
-	if real, err := h.Resolve(p); err == nil && real != p {
-		return []string{p, real}
+	clean := path.Clean(p)
+	if real, err := h.resolve(p, true); err == nil && real != clean {
+		return []string{clean, real}
 	}
-	return []string{p}
+	return []string{clean}
 }
 
 var errTooManyLinks = errors.New("too many levels of symbolic links")
@@ -579,9 +588,20 @@ var errTooManyLinks = errors.New("too many levels of symbolic links")
 // Resolve follows every symlink in the host path p, reading each link under
 // Root, so an absolute link target stays on the host being read rather than
 // the machine running the test.
+//
+// A `..` is applied to the directory reached so far, after any link before it
+// is followed, as the kernel does; p is not cleaned first, which would apply
+// it to the name instead.
 func (h Host) Resolve(p string) (string, error) {
+	return h.resolve(p, false)
+}
+
+// resolve is Resolve; with missingOK, a component that does not exist ends the
+// walk, and it and the rest are joined to what was resolved, as they would be
+// created there.
+func (h Host) resolve(p string, missingOK bool) (string, error) {
 	links := 0
-	rest := strings.Split(path.Clean(p), "/")
+	rest := strings.Split(p, "/")
 	resolved := "/"
 	for len(rest) > 0 {
 		c := rest[0]
@@ -595,6 +615,9 @@ func (h Host) Resolve(p string) (string, error) {
 		}
 		next := path.Join(resolved, c)
 		fi, err := os.Lstat(h.File(next))
+		if missingOK && errors.Is(err, fs.ErrNotExist) {
+			return path.Join(append([]string{next}, rest...)...), nil
+		}
 		if err != nil {
 			return "", err
 		}
