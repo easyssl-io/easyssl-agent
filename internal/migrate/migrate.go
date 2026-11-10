@@ -30,7 +30,7 @@ import (
 )
 
 // DestDir is where the copies go, one directory per certificate.
-const DestDir = "/etc/ssl/easyssl"
+const DestDir = acmeclients.OwnDir
 
 // Observer runs every installed Plugin's describe and discover.
 type Observer interface {

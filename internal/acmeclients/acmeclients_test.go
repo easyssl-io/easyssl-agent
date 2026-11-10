@@ -219,6 +219,17 @@ func TestAHookCopy(t *testing.T) {
 	if len(fs[1]) != 1 || fs[1][0].Kind != Certbot {
 		t.Fatalf("findings = %+v", fs[1])
 	}
+	// The migration's own copies, identical to the lineage until it renews,
+	// are not hook copies: they would never be suggested otherwise.
+	own := Target{Paths: []string{OwnDir + "/example.com/certificate.pem", OwnDir + "/example.com/key.pem"}, CertSHA256: sum, CertPath: OwnDir + "/example.com/certificate.pem"}
+	if fs := r.Check(own); len(fs) != 0 {
+		t.Fatalf("an own copy: findings = %+v", fs)
+	}
+	// One path outside it is enough to be a copy again.
+	own.Paths[1] = "/etc/nginx/ssl/example.key"
+	if fs := r.Check(own); len(fs) != 1 || fs[0].Kind != HookCopy {
+		t.Fatalf("half an own copy: findings = %+v", fs)
+	}
 	// Another certificate is not a copy.
 	_, other := certPEM(t, "other.example")
 	if fs := r.Check(Target{Paths: []string{"/etc/nginx/ssl/o.pem"}, CertSHA256: other}); len(fs) != 0 {

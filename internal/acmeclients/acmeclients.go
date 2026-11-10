@@ -277,7 +277,7 @@ func (r *Rule) Check(t Target) []Finding {
 			}
 		}
 	}
-	if !inCertbot && t.CertSHA256 != "" && len(t.Paths) > 0 {
+	if !inCertbot && !ownCopy(t.Paths) && t.CertSHA256 != "" && len(t.Paths) > 0 {
 		for _, d := range r.certbot {
 			for _, l := range d.Lineages {
 				if l.CertSHA256 != "" && l.CertSHA256 == t.CertSHA256 {
@@ -369,6 +369,23 @@ var otherClients = []struct{ client, dir string }{
 	{"dehydrated", "/etc/dehydrated"},
 	{"dehydrated", "/var/lib/dehydrated"},
 	{"lego", "/var/lib/acme"},
+}
+
+// OwnDir is where `easyssl-agent migrate` puts its copies. A copy there is
+// identical to its lineage's current certificate until certbot next renews,
+// which would otherwise read as a deploy hook copying it, and leave nothing
+// migrated suggested until the lineage is deleted. No certbot hook has a
+// reason to write into easySSL's own directory.
+const OwnDir = "/etc/ssl/easyssl"
+
+// ownCopy reports whether every path lies under OwnDir.
+func ownCopy(paths []string) bool {
+	for _, p := range paths {
+		if !within(path.Clean(p), OwnDir) {
+			return false
+		}
+	}
+	return len(paths) > 0
 }
 
 func otherClientDir(p string) (client, dir string, ok bool) {
