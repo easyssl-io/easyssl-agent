@@ -200,7 +200,7 @@ func TestMigrateMovesACertbotCertificate(t *testing.T) {
 	fixFirst.Warnings = []l10n.Text{{"en": "It is also named by `SSLCertificateChainFile`."}}
 	hookCopy := target("/etc/nginx/ssl/copy.pem", "/etc/nginx/ssl/copy.key", sum, []string{"example.com"},
 		ref("ssl_certificate", "/etc/nginx/sites-enabled/copy", 2, "/etc/nginx/ssl/copy.pem"))
-	before := nginx("0.1.1", moved, fixFirst, hookCopy)
+	before := nginx("0.2.0", moved, fixFirst, hookCopy)
 
 	after := moved
 	after.Settings = map[string]string{"ssl_certificate": "/etc/ssl/easyssl/example.com/certificate.pem", "ssl_certificate_key": "/etc/ssl/easyssl/example.com/key.pem"}
@@ -208,7 +208,7 @@ func TestMigrateMovesACertbotCertificate(t *testing.T) {
 		ref("ssl_certificate", site, 3, "/etc/ssl/easyssl/example.com/certificate.pem"),
 		ref("ssl_certificate_key", site, 4, "/etc/ssl/easyssl/example.com/key.pem"),
 	}
-	obs := &observer{answers: [][]pluginmgr.Observation{{before}, {nginx("0.1.1", after, fixFirst, hookCopy)}}}
+	obs := &observer{answers: [][]pluginmgr.Observation{{before}, {nginx("0.2.0", after, fixFirst, hookCopy)}}}
 
 	r := &run{}
 	if err := Run(context.Background(), h.options(r, obs, "1\ny\n")); err != nil {
@@ -285,7 +285,7 @@ func TestALineageStillUsedIsListedInsteadOfDeleted(t *testing.T) {
 		ref("ssl_certificate", "/etc/nginx/a", 1, "/etc/letsencrypt/live/example.com/fullchain.pem"))
 	// The Plugin's configuration still names the lineage after the move, as it
 	// would had another server block been added meanwhile.
-	obs := &observer{answers: [][]pluginmgr.Observation{{nginx("0.1.1", a)}}}
+	obs := &observer{answers: [][]pluginmgr.Observation{{nginx("0.2.0", a)}}}
 	r := &run{}
 	if err := Run(context.Background(), h.options(r, obs, "all\ny\n")); err != nil {
 		t.Fatal(err)
@@ -305,7 +305,7 @@ func TestCancelingChangesNothing(t *testing.T) {
 			a := target("/etc/letsencrypt/archive/example.com/fullchain1.pem", "/etc/letsencrypt/archive/example.com/privkey1.pem", sum, nil,
 				ref("ssl_certificate", "/etc/nginx/a", 1, "/etc/letsencrypt/live/example.com/fullchain.pem"))
 			r := &run{}
-			err := Run(context.Background(), h.options(r, &observer{answers: [][]pluginmgr.Observation{{nginx("0.1.1", a)}}}, input))
+			err := Run(context.Background(), h.options(r, &observer{answers: [][]pluginmgr.Observation{{nginx("0.2.0", a)}}}, input))
 			if !errors.Is(err, ErrNothingChanged) {
 				t.Fatalf("err = %v", err)
 			}
@@ -329,9 +329,9 @@ func TestWhatTheCommandCannotMove(t *testing.T) {
 		want string
 	}{
 		"an older Plugin": {nginx("0.1.0", a), false, "Its nginx Plugin 0.2.0 cannot change its configuration."},
-		"an ACL":          {nginx("0.1.1", a), true, "/etc/letsencrypt/archive/example.com/fullchain1.pem carries a POSIX ACL"},
-		"no references":   {nginx("0.1.1", target(a.Settings["ssl_certificate"], a.Settings["ssl_certificate_key"], sum, nil)), false, "reports no configuration line naming it"},
-		"another client":  {nginx("0.1.1", lego), false, "It is under `/var/lib/acme`, which lego manages"},
+		"an ACL":          {nginx("0.2.0", a), true, "/etc/letsencrypt/archive/example.com/fullchain1.pem carries a POSIX ACL"},
+		"no references":   {nginx("0.2.0", target(a.Settings["ssl_certificate"], a.Settings["ssl_certificate_key"], sum, nil)), false, "reports no configuration line naming it"},
+		"another client":  {nginx("0.2.0", lego), false, "It is under `/var/lib/acme`, which lego manages"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := &run{}
@@ -360,7 +360,7 @@ func TestALineSharedWithACertificateNotChosenRefuses(t *testing.T) {
 	b := target("/etc/letsencrypt/archive/b.example/fullchain1.pem", "/etc/letsencrypt/archive/b.example/privkey1.pem", sum2, nil,
 		ref("ssl_certificate", "/etc/nginx/b", 1, "fullchain.pem"))
 	r := &run{}
-	err := Run(context.Background(), h.options(r, &observer{answers: [][]pluginmgr.Observation{{nginx("0.1.1", a, b)}}}, "1\n"))
+	err := Run(context.Background(), h.options(r, &observer{answers: [][]pluginmgr.Observation{{nginx("0.2.0", a, b)}}}, "1\n"))
 	if err == nil || !strings.Contains(err.Error(), "for a certificate not chosen") {
 		t.Fatalf("err = %v", err)
 	}
@@ -380,7 +380,7 @@ func TestCopiesAreNamedAndNeverOverwritten(t *testing.T) {
 	h.write("/etc/ssl/easyssl/_.example.org/key.pem", keyPEM, 0o600)
 
 	s := &session{opts: Options{Host: acmeclients.Host{Root: h.root}}}
-	it := &item{obs: &pluginmgr.Observation{Describe: declared("0.1.1")}, target: target("/etc/certbot-like/fullchain.pem", "/etc/certbot-like/privkey.pem", sum, []string{"*.Example.org"},
+	it := &item{obs: &pluginmgr.Observation{Describe: declared("0.2.0")}, target: target("/etc/certbot-like/fullchain.pem", "/etc/certbot-like/privkey.pem", sum, []string{"*.Example.org"},
 		ref("ssl_certificate", "/etc/nginx/a", 1, "/etc/certbot-like/fullchain.pem"),
 		ref("ssl_certificate_key", "/etc/nginx/a", 2, "/etc/certbot-like/privkey.pem"))}
 	m, err := s.plan([]*item{it}, []*item{it})
@@ -404,7 +404,7 @@ func TestNames(t *testing.T) {
 	none, _ := cert(t, "", nil, nil)
 	h.write("/c/none.pem", none, 0o644)
 	s := &session{opts: Options{Host: acmeclients.Host{Root: h.root}}}
-	obs := &pluginmgr.Observation{Describe: declared("0.1.1")}
+	obs := &pluginmgr.Observation{Describe: declared("0.2.0")}
 	for want, it := range map[string]*item{
 		"example.com":     {obs: obs, lineage: &acmeclients.Lineage{Name: "example.com"}, target: target("/x", "/y", "", []string{"other.example"})},
 		"_.example.org":   {obs: obs, target: target("/x", "/y", "", []string{"*.EXAMPLE.org", "example.org"})},
@@ -438,7 +438,7 @@ func TestAFailedRelocateIsReported(t *testing.T) {
 	a := target("/etc/letsencrypt/archive/example.com/fullchain1.pem", "/etc/letsencrypt/archive/example.com/privkey1.pem", sum, nil,
 		ref("ssl_certificate", "/etc/nginx/a", 1, "/etc/letsencrypt/live/example.com/fullchain.pem"))
 	r := &run{}
-	opts := h.options(r, &observer{answers: [][]pluginmgr.Observation{{nginx("0.1.1", a)}}}, "1\ny\n")
+	opts := h.options(r, &observer{answers: [][]pluginmgr.Observation{{nginx("0.2.0", a)}}}, "1\ny\n")
 	opts.Relocate = func(context.Context, pluginmgr.Installed, plugincontract.RelocateRequest) (string, int, error) {
 		return "nginx -t failed; the original configuration is back\n", 1, errors.New("its output says why")
 	}

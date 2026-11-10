@@ -443,7 +443,7 @@ func TestDiscoverMarksTargetsOnManagedPaths(t *testing.T) {
 	// As a Plugin prints it, with fields this build does not know at both
 	// levels, one Target in certbot's directory and one outside every client's,
 	// and the in-certbot one from a Plugin too old to send warnings.
-	raw := `{"contractVersion":"0.1.1","future":{"x":1},"warnings":[],"discoveredTargets":[` +
+	raw := `{"contractVersion":"0.2.0","future":{"x":1},"warnings":[],"discoveredTargets":[` +
 		`{"settings":{"cert":"/etc/letsencrypt/live/example.com/fullchain.pem","key":"/etc/letsencrypt/live/example.com/privkey.pem"},"extraData":[],"references":[],"newField":"kept"},` +
 		`{"settings":{"cert":"/etc/ssl/a.pem","key":"/etc/ssl/a.key"},"extraData":[],"references":[],"warnings":[{"en":"a Plugin warning"}]}]}`
 	m.runDiscover = func(context.Context, string) ([]byte, error) { return []byte(raw), nil }
@@ -482,7 +482,7 @@ func TestDiscoverMarksTargetsOnManagedPaths(t *testing.T) {
 }
 
 func TestMarkManagedLeavesAnUnmanagedAnswerAsPrinted(t *testing.T) {
-	raw := []byte(`{"contractVersion":"0.1.1",  "discoveredTargets":[]}`)
+	raw := []byte(`{"contractVersion":"0.2.0",  "discoveredTargets":[]}`)
 	got, err := MarkManaged(fileAnswer(), raw, [][]acmeclients.Finding{})
 	if err != nil || string(got) != string(raw) {
 		t.Fatalf("marked = %s, %v", got, err)

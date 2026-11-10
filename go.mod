@@ -4,5 +4,5 @@ go 1.26.10
 
 require github.com/easyssl-io/easyssl-contract v0.1.0
 
-// TODO: drop with the easyssl-contract 0.1.1 release; never merge to main with this replace.
+// TODO: drop with the easyssl-contract 0.2.0 release; never merge to main with this replace.
 replace github.com/easyssl-io/easyssl-contract => ../contract
