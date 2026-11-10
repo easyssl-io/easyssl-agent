@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/easyssl-io/easyssl-agent/internal/acmeclients"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-contract/catalog"
 	"github.com/easyssl-io/easyssl-contract/l10n"
@@ -76,6 +77,8 @@ func newManager(t *testing.T, srv *httptest.Server, desc plugincontract.Describe
 		m.catalog = api
 	}
 	m.installDir = filepath.Join(t.TempDir(), "plugins")
+	// An empty host, so no test reads this machine's certbot directories.
+	m.acme = acmeclients.Host{Root: t.TempDir()}
 	m.runDescribe = func(_ context.Context, _ string) ([]byte, error) {
 		if descErr != nil {
 			return nil, descErr
@@ -413,5 +416,75 @@ func TestAThirdPartyPluginInstallsNothing(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(m.installDir); len(entries) != 0 {
 		t.Fatalf("left %d files behind", len(entries))
+	}
+}
+
+// fileAnswer is a describe answer declaring two path settings, the way a
+// Plugin that writes files does.
+func fileAnswer() plugincontract.DescribeResponse {
+	return plugincontract.DescribeResponse{
+		ContractVersion: plugincontract.ContractVersion,
+		Version:         "0.0.2",
+		Declarations: []plugincontract.SettingDeclaration{
+			{Key: "cert", Label: l10n.Text{"en": "Certificate"}, Type: plugincontract.SettingTypePath, Required: true, Identity: true},
+			{Key: "key", Label: l10n.Text{"en": "Key"}, Type: plugincontract.SettingTypePath, Required: true},
+		},
+	}
+}
+
+func TestDiscoverMarksTargetsOnManagedPaths(t *testing.T) {
+	m := newManager(t, newMarketplace(t, ""), fileAnswer(), nil)
+	if _, err := m.Install(context.Background(), "generic-cli", "linux", "amd64"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(m.acme.Root, "etc/letsencrypt/live/example.com"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// As a Plugin prints it, with fields this build does not know at both
+	// levels, one Target in certbot's directory and one outside every client's,
+	// and the in-certbot one from a Plugin too old to send warnings.
+	raw := `{"contractVersion":"0.2.0","future":{"x":1},"warnings":[],"discoveredTargets":[` +
+		`{"settings":{"cert":"/etc/letsencrypt/live/example.com/fullchain.pem","key":"/etc/letsencrypt/live/example.com/privkey.pem"},"extraData":[],"references":[],"newField":"kept"},` +
+		`{"settings":{"cert":"/etc/ssl/a.pem","key":"/etc/ssl/a.key"},"extraData":[],"references":[],"warnings":[{"en":"a Plugin warning"}]}]}`
+	m.runDiscover = func(context.Context, string) ([]byte, error) { return []byte(raw), nil }
+
+	got, err := m.Discover(context.Background())
+	if err != nil || len(got) != 1 || got[0].Unobserved {
+		t.Fatalf("discover = %+v, %v", got, err)
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(got[0].Discover, &top); err != nil {
+		t.Fatal(err)
+	}
+	if string(top["future"]) != `{"x":1}` {
+		t.Fatalf("an unknown top-level field was lost: %s", got[0].Discover)
+	}
+	var disc struct {
+		DiscoveredTargets []struct {
+			NewField string      `json:"newField"`
+			Warnings []l10n.Text `json:"warnings"`
+		} `json:"discoveredTargets"`
+	}
+	if err := json.Unmarshal(got[0].Discover, &disc); err != nil {
+		t.Fatal(err)
+	}
+	ts := disc.DiscoveredTargets
+	if len(ts) != 2 || ts[0].NewField != "kept" || len(ts[0].Warnings) != 1 {
+		t.Fatalf("targets = %+v", ts)
+	}
+	if w := ts[0].Warnings[0]; !strings.Contains(w["en"], "certbot's directory `/etc/letsencrypt`") || w["es"] == "" {
+		t.Fatalf("warning = %v", w)
+	}
+	// The other Target keeps exactly the Plugin's own warning.
+	if len(ts[1].Warnings) != 1 || ts[1].Warnings[0]["en"] != "a Plugin warning" {
+		t.Fatalf("unmanaged Target's warnings = %+v", ts[1].Warnings)
+	}
+}
+
+func TestMarkManagedLeavesAnUnmanagedAnswerAsPrinted(t *testing.T) {
+	raw := []byte(`{"contractVersion":"0.2.0",  "discoveredTargets":[]}`)
+	got, err := MarkManaged(fileAnswer(), raw, [][]acmeclients.Finding{})
+	if err != nil || string(got) != string(raw) {
+		t.Fatalf("marked = %s, %v", got, err)
 	}
 }

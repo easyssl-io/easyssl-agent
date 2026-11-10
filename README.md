@@ -23,6 +23,7 @@ easyssl-agent register --server <url> --reactivation-token <token>    resume a d
 easyssl-agent run                                                     the service loop (periodic check-in)
 easyssl-agent status                                                  print local state and what the Server says
 easyssl-agent uninstall [--yes]                                       deactivate and remove the Agent
+easyssl-agent migrate                                                 move what the Plugins serve out of certbot's directories
 easyssl-agent language [<code>]                                       print or change the language the commands speak
 ```
 
@@ -204,6 +205,32 @@ cannot repair it and re-registration is required.
 Work is reported finished only after its outcome has been recorded, never
 before. An Agent that dies in between is handed the same instruction again on
 restart, which is why running one twice has to be safe.
+
+## Files another ACME client manages
+
+A file that certbot, acme.sh, dehydrated or lego rewrites on its own schedule is
+not one easySSL deploys to, since that client would undo the Deployment or be
+broken by it. The Agent decides this itself, on every value of a setting a
+Plugin declares as a path: it is managed when it lies, as written or with
+symlinks followed, in a certbot directory (`/etc/letsencrypt`, any directory a
+certbot command in a systemd unit or cron entry names with `--config-dir`, the
+`config-dir` of a `cli.ini`, or one a lineage's layout reveals), when it holds
+the current certificate of a certbot lineage (what a deploy hook's copy looks
+like), or when it lies in acme.sh's, dehydrated's or lego's default directory.
+Such a certificate is reported with a warning saying what to do, so it is never
+suggested as a Target, and a Deployment to such a path fails before its Plugin
+runs.
+
+`sudo easyssl-agent migrate` moves certificates out of certbot's directories.
+It lists the ACME clients it found and what it can move, asks which to move,
+shows every file it will copy and every configuration line it will change, and
+only after a yes copies each file to `/etc/ssl/easyssl/<name>/` (keeping its
+owner, group and mode, and never overwriting anything) and asks each Plugin to
+point its configuration at the copies, which the Plugin tests and reloads, and
+undoes if that fails. certbot itself is left alone: the command only prints the
+`certbot delete` that stops a lineage renewing once nothing its Plugins read
+uses it. It then sends the host inventory, so the web console suggests the
+moved certificates straight away.
 
 ## Checking state
 

@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/easyssl-io/easyssl-agent/internal/acmeclients"
 	"github.com/easyssl-io/easyssl-agent/internal/commands"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
@@ -75,6 +76,45 @@ var _ Plugins = (*pluginmgr.Manager)(nil)
 // keystore. Load never generates: a certificate whose key this host does not
 // hold under the name the Server gave cannot be installed here.
 var loadKey = keystore.Load
+
+// acmeHost is the host the managed-path rule reads, indirected so a test can
+// lay out certbot's directories somewhere it may write.
+var acmeHost = acmeclients.System
+
+// managedPaths applies the managed-path rule (acmeclients) to the values of
+// every path setting of the Deployment, reading the certificate each file
+// holds now, so a deploy hook's copy is caught as on a check-in. It returns
+// the refusal, one sentence per finding, or nil.
+func managedPaths(host acmeclients.Host, installed pluginmgr.Installed, settings map[string]string) l10n.Text {
+	paths := acmeclients.PathValues(installed.Declarations, settings)
+	if len(paths) == 0 {
+		return nil
+	}
+	target := acmeclients.Target{Paths: paths}
+	for _, p := range paths {
+		if sum := host.CertSHA256(p); sum != "" {
+			target.CertSHA256, target.CertPath = sum, p
+			break
+		}
+	}
+	findings := host.Scan(paths).Check(target)
+	if len(findings) == 0 {
+		return nil
+	}
+	out := l10n.Text{}
+	for _, f := range findings {
+		line := msg.Text("deploy.managed_path",
+			"easySSL does not write to {path}, so the {plugin} Plugin was not run. {reason}",
+			"path", plugincontract.Code(f.Path), "plugin", installed.ID, "reason", f.Reason())
+		for lang, s := range line {
+			if out[lang] != "" {
+				s = out[lang] + "\n" + s
+			}
+			out[lang] = s
+		}
+	}
+	return out
+}
 
 // New returns the handler for wire.CommandDeploy.
 func New(api API, plugins Plugins, token string, logger *slog.Logger) commands.Handler {
@@ -157,6 +197,13 @@ func run(ctx context.Context, plugins Plugins, work wire.DeploymentWork, logger 
 				"so nothing could install this Certificate.\n"+
 				"Install it there again and deploy again:\n    easyssl-agent plugin install {plugin}",
 			"plugin", work.PluginID, "err", err))
+	}
+
+	// A file another ACME client manages would be overwritten at its next
+	// renewal, or the Deployment would break that client, so the Plugin is not
+	// run at all.
+	if refusal := managedPaths(acmeHost(), installed, work.Settings); refusal != nil {
+		return failed(installed.Version, refusal)
 	}
 
 	// The key is the one the Server named, never one this host picks: the

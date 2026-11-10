@@ -3,6 +3,23 @@
 Every release of the easySSL Agent, newest first. `scripts/release.sh` tags
 no version this file has no entry for.
 
+## 0.2.0
+
+Built against `easyssl-contract` 0.2.0. It still runs 0.1 Plugins, and a
+Server answers it and 0.1 Agents alike.
+
+- Knows the directories other ACME clients manage (certbot's, read from its
+  systemd units, cron jobs and `cli.ini`, and acme.sh's, dehydrated's and
+  lego's defaults): a discovered certificate there carries a warning and is
+  not suggested, and a Deployment there is refused before any Plugin runs.
+- Adds `easyssl-agent migrate`, which moves the certificates such a client
+  manages into `/etc/ssl/easyssl` and points the web server at the copies
+  through the Plugin's `relocate`, after confirming each move, so easySSL can
+  take over their renewal. It names a Plugin too old to relocate.
+- Refuses a destination directory a non-root user could change before writing
+  a private key into it.
+- Ctrl+C at an interactive prompt ends the command.
+
 ## 0.1.0
 
 The first release, built against `easyssl-contract` 0.1.0.

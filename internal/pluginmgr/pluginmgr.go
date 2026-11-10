@@ -26,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/easyssl-io/easyssl-agent/internal/acmeclients"
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
@@ -64,6 +65,9 @@ type Installed struct {
 	// Digest is the SHA-256 of the executable as it is on disk now.
 	Digest string `json:"digest"`
 	Path   string `json:"path"`
+	// Declarations are the settings the executable declared, filled by Find,
+	// which a Deployment reads to know which values are paths.
+	Declarations []plugincontract.SettingDeclaration `json:"-"`
 }
 
 // Catalog is the Marketplace read. Separate from Reporter because the catalog
@@ -84,6 +88,9 @@ type Manager struct {
 	// without a real binary.
 	runDescribe func(ctx context.Context, path string) ([]byte, error)
 	runDiscover func(ctx context.Context, path string) ([]byte, error)
+	// acme is the host the managed-path rule reads; a field so a test can lay
+	// out certbot's directories somewhere it may write.
+	acme acmeclients.Host
 }
 
 // New builds a Manager over the host's real Plugin directory. catalog may be
@@ -93,7 +100,7 @@ func New(catalog Catalog, logger *slog.Logger) *Manager {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	return &Manager{
-		catalog: catalog, installDir: InstallDir, logger: logger,
+		catalog: catalog, installDir: InstallDir, logger: logger, acme: acmeclients.System(),
 		runDescribe: func(ctx context.Context, path string) ([]byte, error) {
 			return runByExec(ctx, path, plugincontract.OpDescribe, logger)
 		},
@@ -245,63 +252,217 @@ func (m *Manager) List() ([]Installed, error) {
 
 // Discover runs every installed Plugin's describe and then its discover, each
 // under the timeout, and returns what the host inventory carries for each: the
-// digest of the bytes on disk and the two answers merged. A Plugin that exits
-// non-zero, times out or answers something unusable is returned as present but
-// unobserved, with a warning naming the failure, because otherwise it would
-// look uninstalled. Only an unreadable directory is an error, since a report
-// must not then claim the host has no Plugins.
+// digest of the bytes on disk and the two answers merged, with the Agent's own
+// warning added to every discovered Target on a path another ACME client
+// manages (MarkManaged). A Plugin that exits non-zero, times out or answers
+// something unusable is returned as present but unobserved, with a warning
+// naming the failure, because otherwise it would look uninstalled. Only an
+// unreadable directory is an error, since a report must not then claim the
+// host has no Plugins.
 func (m *Manager) Discover(ctx context.Context) ([]wire.PluginInventory, error) {
+	obs, err := m.Observe(ctx)
+	if err != nil {
+		return nil, err
+	}
+	_, findings := m.Assess(obs)
+	out := make([]wire.PluginInventory, len(obs))
+	for i, o := range obs {
+		out[i] = m.inventoryEntry(o, findings[i])
+	}
+	return out, nil
+}
+
+// Observation is one installed Plugin as it answered this run.
+type Observation struct {
+	Installed
+	// Describe and Discover are its checked answers, exactly as it gave them:
+	// without the Agent's warnings, which Assess computes beside them.
+	// Meaningful only when Err is nil.
+	Describe plugincontract.DescribeResponse
+	Discover plugincontract.DiscoverResponse
+	// FailedOp is the operation that failed when Err is set.
+	FailedOp string
+	Err      error
+
+	describeRaw, discoverRaw []byte
+}
+
+// Observe runs every installed Plugin's describe and discover, each under the
+// timeout and each Plugin at once, so the pass takes as long as the slowest
+// Plugin rather than the sum of all of them and stays within the check-in
+// interval however many are installed.
+func (m *Manager) Observe(ctx context.Context) ([]Observation, error) {
 	installed, err := m.List()
 	if err != nil {
 		return nil, err
 	}
-	// Each Plugin is observed at once, so the pass takes as long as the slowest
-	// Plugin rather than the sum of all of them, and stays within the check-in
-	// interval however many are installed.
-	out := make([]wire.PluginInventory, len(installed))
+	out := make([]Observation, len(installed))
 	var wg sync.WaitGroup
 	for i, p := range installed {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			out[i] = m.inventoryEntry(ctx, p)
+			out[i] = m.observe(ctx, p)
 		}()
 	}
 	wg.Wait()
 	return out, nil
 }
 
-// inventoryEntry is what the host inventory carries for one installed Plugin.
-func (m *Manager) inventoryEntry(ctx context.Context, p Installed) wire.PluginInventory {
-	entry := wire.PluginInventory{ID: p.ID, SHA256: p.Digest, Warnings: []l10n.Text{}}
-	desc, disc, op, err := m.observe(ctx, p)
+// Assess is AssessOn this Manager's host.
+func (m *Manager) Assess(obs []Observation) (*acmeclients.Rule, [][][]acmeclients.Finding) {
+	return AssessOn(m.acme, obs)
+}
+
+// AssessOn applies the managed-path rule (acmeclients) to every discovered
+// Target of every observed Plugin at once, reading each Target's path settings
+// and its certificate's digest. The result is indexed like obs and each
+// Plugin's discovered Targets. The host is read only when some Target has a
+// path, so a host with nothing to check costs no scan; the Rule is then nil.
+func AssessOn(host acmeclients.Host, obs []Observation) (*acmeclients.Rule, [][][]acmeclients.Finding) {
+	var targets []acmeclients.Target
+	var paths []string
+	for _, o := range obs {
+		if o.Err != nil {
+			continue
+		}
+		for _, t := range o.Discover.DiscoveredTargets {
+			at := acmeclients.Target{Paths: acmeclients.PathValues(o.Describe.Declarations, t.Settings)}
+			if t.Certificate != nil {
+				at.CertSHA256 = t.Certificate.SHA256
+			}
+			targets = append(targets, at)
+			paths = append(paths, at.Paths...)
+		}
+	}
+	out := make([][][]acmeclients.Finding, len(obs))
+	for i, o := range obs {
+		if o.Err == nil {
+			out[i] = make([][]acmeclients.Finding, len(o.Discover.DiscoveredTargets))
+		}
+	}
+	if len(paths) == 0 {
+		return nil, out
+	}
+	rule := host.Scan(paths)
+	assessed := rule.Assess(targets)
+	k := 0
+	for i, o := range obs {
+		if o.Err != nil {
+			continue
+		}
+		for j := range o.Discover.DiscoveredTargets {
+			out[i][j] = assessed[k]
+			k++
+		}
+	}
+	return rule, out
+}
+
+// inventoryEntry is what the host inventory carries for one observed Plugin,
+// with its findings as warnings on the discovered Targets they concern.
+func (m *Manager) inventoryEntry(o Observation, findings [][]acmeclients.Finding) wire.PluginInventory {
+	entry := wire.PluginInventory{ID: o.ID, SHA256: o.Digest, Warnings: []l10n.Text{}}
+	op, err := o.FailedOp, o.Err
+	var discover []byte
+	if err == nil {
+		discover, err = MarkManaged(o.Describe, o.discoverRaw, findings)
+		op = plugincontract.OpDiscover
+	}
 	if err != nil {
 		entry.Unobserved = true
 		// Written by this Agent rather than by the Plugin, and read on the
 		// Server by people of any language, so it carries every one.
 		entry.Warnings = []l10n.Text{msg.Text("plugin.inventory.unobserved", "`{op}` produced nothing usable this run: {err}", "op", op, "err", err)}
-		m.logger.Warn("plugin unobserved", "plugin", p.ID, "op", op, "err", err)
-	} else {
-		entry.Describe, entry.Discover = desc, disc
+		m.logger.Warn("plugin unobserved", "plugin", o.ID, "op", op, "err", err)
+		return entry
 	}
+	entry.Describe, entry.Discover = o.describeRaw, discover
 	return entry
 }
 
-// observe runs one Plugin's describe and discover, checks decoded copies of
-// both answers and returns them as printed, with the operation that failed
-// alongside the error. The two run as separate processes, so the executable is
+// MarkManaged appends each finding's warning to the discovered Target it
+// concerns, in the discover answer as the Plugin printed it, and checks the
+// result as any answer is checked. Only the warnings of a Target with
+// findings change: every other byte is the Plugin's, so a field a newer
+// Plugin adds still reaches the Server through this Agent. A warning is what
+// keeps the Server from suggesting the Target, so an answer that cannot carry
+// one is refused rather than sent without it.
+func MarkManaged(desc plugincontract.DescribeResponse, raw []byte, findings [][]acmeclients.Finding) ([]byte, error) {
+	marked := false
+	for _, fs := range findings {
+		marked = marked || len(fs) > 0
+	}
+	if !marked {
+		return raw, nil
+	}
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		return nil, err
+	}
+	var targets []map[string]json.RawMessage
+	if err := json.Unmarshal(top["discoveredTargets"], &targets); err != nil {
+		return nil, err
+	}
+	if len(targets) != len(findings) {
+		return nil, fmt.Errorf("%d discovered Targets, %d assessed", len(targets), len(findings))
+	}
+	for i, fs := range findings {
+		if len(fs) == 0 {
+			continue
+		}
+		var warnings []l10n.Text
+		if w, ok := targets[i]["warnings"]; ok {
+			if err := json.Unmarshal(w, &warnings); err != nil {
+				return nil, err
+			}
+		}
+		for _, f := range fs {
+			warnings = append(warnings, f.Warning())
+		}
+		b, err := json.Marshal(warnings)
+		if err != nil {
+			return nil, err
+		}
+		targets[i]["warnings"] = b
+	}
+	b, err := json.Marshal(targets)
+	if err != nil {
+		return nil, err
+	}
+	top["discoveredTargets"] = b
+	out, err := json.Marshal(top)
+	if err != nil {
+		return nil, err
+	}
+	var disc plugincontract.DiscoverResponse
+	if err := json.Unmarshal(out, &disc); err != nil {
+		return nil, err
+	}
+	if err := plugincontract.ValidateDiscover(desc.Declarations, disc); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// observe runs one Plugin's describe and discover and checks decoded copies of
+// both answers. The two run as separate processes, so the executable is
 // hashed again afterwards: a binary replaced between them would otherwise
 // report one build's declarations with another's findings.
-func (m *Manager) observe(ctx context.Context, p Installed) (describe, discover []byte, failedOp string, err error) {
+func (m *Manager) observe(ctx context.Context, p Installed) Observation {
+	o := Observation{Installed: p}
+	fail := func(op string, err error) Observation {
+		return Observation{Installed: p, FailedOp: op, Err: err}
+	}
 	desc, describe, err := m.describeRaw(ctx, p.Path, p.ID)
 	if err != nil {
-		return nil, nil, plugincontract.OpDescribe, err
+		return fail(plugincontract.OpDescribe, err)
 	}
 	dctx, cancel := context.WithTimeout(ctx, plugincontract.AnswerTimeout)
-	discover, err = m.runDiscover(dctx, p.Path)
+	discover, err := m.runDiscover(dctx, p.Path)
 	cancel()
+	var disc plugincontract.DiscoverResponse
 	if err == nil {
-		var disc plugincontract.DiscoverResponse
 		if jerr := json.Unmarshal(discover, &disc); jerr != nil {
 			err = msg.Err.T("plugin.op.not_json", "the Plugin's `{op}` output is not JSON: {err}", "op", plugincontract.OpDiscover, "err", jerr)
 		} else {
@@ -309,12 +470,15 @@ func (m *Manager) observe(ctx context.Context, p Installed) (describe, discover 
 		}
 	}
 	if err != nil {
-		return nil, nil, plugincontract.OpDiscover, err
+		return fail(plugincontract.OpDiscover, err)
 	}
 	if now, err := fileDigest(p.Path); err != nil || now != p.Digest {
-		return nil, nil, plugincontract.OpDiscover, msg.Err.T("plugin.inventory.changed", "the executable changed while it was being read")
+		return fail(plugincontract.OpDiscover, msg.Err.T("plugin.inventory.changed", "the executable changed while it was being read"))
 	}
-	return describe, discover, "", nil
+	o.Version = desc.Version
+	o.Describe, o.Discover = desc, disc
+	o.describeRaw, o.discoverRaw = describe, discover
+	return o
 }
 
 // download writes an artifact to a temporary executable in the Plugin
@@ -459,7 +623,7 @@ func (m *Manager) Find(id string) (Installed, bool, error) {
 	if err != nil {
 		return Installed{}, true, msg.Err.T("plugin.find.unusable_answer", "{plugin} did not answer `describe` usably: {err}", "plugin", id, "err", err)
 	}
-	return Installed{ID: id, Digest: digest, Path: path, Version: desc.Version}, true, nil
+	return Installed{ID: id, Digest: digest, Path: path, Version: desc.Version, Declarations: desc.Declarations}, true, nil
 }
 
 // fileDigest is the SHA-256 of a file, lowercase hex, the same form the
