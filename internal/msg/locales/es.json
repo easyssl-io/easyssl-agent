@@ -8,6 +8,7 @@
   "deploy.artifact.not_executable": "no es ejecutable (modo {mode})",
   "deploy.key_not_encoded": "al codificar la clave privada: {err}",
   "deploy.key_unreadable": "al leer la clave privada: {err}",
+  "deploy.managed_path": "easySSL no escribe en {path}, así que el Plugin {plugin} no se ejecutó. {reason}",
   "deploy.no_key": "este host no tiene la clave privada {fingerprint} de {certificate}, así que no puede instalarlo. Un Certificado solo puede instalarlo un Agente que tenga su clave.",
   "deploy.no_key_named": "el Servidor no indicó ninguna clave privada para {certificate}, así que nada pudo instalarlo. El Servidor es más antiguo que este Agente.",
   "deploy.plugin_ended": "el Plugin terminó sin un estado de salida: {err}",

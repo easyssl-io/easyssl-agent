@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/easyssl-io/easyssl-agent/internal/acmeclients"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
@@ -235,5 +236,58 @@ func TestAnUnusablePluginNamesTheReinstall(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Errorf("message %q lacks %q", got, want)
 		}
+	}
+}
+
+// A Deployment to a file another ACME client manages fails before its Plugin
+// runs, and says so in every language; one beside it runs.
+func TestAManagedPathIsRefusedBeforeThePluginRuns(t *testing.T) {
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "ran")
+	path := filepath.Join(dir, "nginx")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "etc/letsencrypt/live/example.com"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	acmeHost = func() acmeclients.Host { return acmeclients.Host{Root: root} }
+	t.Cleanup(func() { acmeHost = acmeclients.System })
+	loadKey = func(string) (crypto.Signer, error) { return ecdsa.GenerateKey(elliptic.P256(), rand.Reader) }
+	t.Cleanup(func() { loadKey = keystore.Load })
+
+	installed := pluginmgr.Installed{ID: "nginx", Path: path, Version: "0.2.0", Declarations: []plugincontract.SettingDeclaration{
+		{Key: "ssl_certificate", Type: plugincontract.SettingTypePath},
+		{Key: "reload", Type: plugincontract.SettingTypeCommand},
+	}}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	work := wire.DeploymentWork{PluginID: "nginx", KeySPKISHA256: "00", Settings: map[string]string{
+		"ssl_certificate": "/etc/letsencrypt/live/example.com/fullchain.pem", "reload": "/etc/letsencrypt/x",
+	}}
+	res := run(context.Background(), plugins{installed: installed}, work, logger)
+	if res.OK || res.PluginRun != nil || res.PluginVersion != "0.2.0" {
+		t.Fatalf("result = %+v, want a refusal with no run", res)
+	}
+	if _, err := os.Stat(marker); err == nil {
+		t.Fatal("the Plugin ran")
+	}
+	en := res.AgentMessage["en"]
+	if !strings.HasPrefix(en, "easySSL does not write to `/etc/letsencrypt/live/example.com/fullchain.pem`, so the nginx Plugin was not run. It is in certbot's directory `/etc/letsencrypt`") {
+		t.Fatalf("AgentMessage = %q", en)
+	}
+	if es := res.AgentMessage["es"]; !strings.Contains(es, "directorio de certbot") {
+		t.Fatalf("Spanish AgentMessage = %q", es)
+	}
+
+	// Only path settings count: the same directory in a command is not a file
+	// easySSL writes.
+	work.Settings["ssl_certificate"] = "/etc/ssl/example.pem"
+	res = run(context.Background(), plugins{installed: installed}, work, logger)
+	if !res.OK {
+		t.Fatalf("result = %+v, want the Plugin to run", res)
+	}
+	if _, err := os.Stat(marker); err != nil {
+		t.Fatal("the Plugin did not run")
 	}
 }

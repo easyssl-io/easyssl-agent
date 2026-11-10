@@ -455,7 +455,7 @@ func (h Host) lineages(dir string) []Lineage {
 		}
 		if c := conf["cert"]; path.IsAbs(c) {
 			l.LiveDir = path.Dir(path.Clean(c))
-			l.CertSHA256 = h.leafSHA256(c)
+			l.CertSHA256 = h.CertSHA256(c)
 		}
 		out = append(out, l)
 	}
@@ -510,9 +510,9 @@ func (h Host) cliIniConfigDir(p string) string {
 	return dir
 }
 
-// leafSHA256 is the SHA-256 of the first certificate in the PEM file p,
-// symlinks followed; empty when there is none.
-func (h Host) leafSHA256(p string) string {
+// CertSHA256 is the leaf SHA-256 of the first certificate in the PEM file at
+// the host path p, symlinks followed; empty when there is none.
+func (h Host) CertSHA256(p string) string {
 	real, err := h.Resolve(p)
 	if err != nil {
 		return ""

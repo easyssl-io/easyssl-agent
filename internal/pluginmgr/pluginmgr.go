@@ -65,6 +65,9 @@ type Installed struct {
 	// Digest is the SHA-256 of the executable as it is on disk now.
 	Digest string `json:"digest"`
 	Path   string `json:"path"`
+	// Declarations are the settings the executable declared, filled by Find,
+	// which a Deployment reads to know which values are paths.
+	Declarations []plugincontract.SettingDeclaration `json:"-"`
 }
 
 // Catalog is the Marketplace read. Separate from Reporter because the catalog
@@ -615,7 +618,7 @@ func (m *Manager) Find(id string) (Installed, bool, error) {
 	if err != nil {
 		return Installed{}, true, msg.Err.T("plugin.find.unusable_answer", "{plugin} did not answer `describe` usably: {err}", "plugin", id, "err", err)
 	}
-	return Installed{ID: id, Digest: digest, Path: path, Version: desc.Version}, true, nil
+	return Installed{ID: id, Digest: digest, Path: path, Version: desc.Version, Declarations: desc.Declarations}, true, nil
 }
 
 // fileDigest is the SHA-256 of a file, lowercase hex, the same form the
