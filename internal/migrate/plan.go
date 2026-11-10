@@ -195,7 +195,13 @@ func (s *session) copyFor(value, name string, bySource, byDest map[string]*copyS
 		case errors.Is(err, fs.ErrNotExist):
 			step.dest = dest
 		default:
-			continue
+			// Something else has the name, so the next one is tried. An
+			// error that is not about the name, such as a parent that is
+			// a file or a symlink loop, fails every name the same way.
+			if _, lerr := os.Lstat(s.opts.Host.File(dest)); lerr == nil {
+				continue
+			}
+			return nil, msg.Err.T("migrate.plan.dest_unusable", "{file} cannot hold a copy, so nothing was changed: {err}", "file", dest, "err", err)
 		}
 		bySource[real] = step
 		return step, nil

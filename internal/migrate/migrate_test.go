@@ -397,6 +397,32 @@ func TestCopiesAreNamedAndNeverOverwritten(t *testing.T) {
 	}
 }
 
+// A destination whose parent cannot be a directory fails every name the same
+// way, so planning stops and says why instead of trying names forever.
+func TestADestinationThatCannotHoldCopiesStopsPlanning(t *testing.T) {
+	h := host{t: t, root: t.TempDir()}
+	certText, sum := cert(t, "a.example", []string{"a.example"}, nil)
+	h.write("/etc/certbot-like/fullchain.pem", certText, 0o644)
+	h.write("/etc/ssl/easyssl", "a file where the directory goes", 0o644)
+
+	s := &session{opts: Options{Host: acmeclients.Host{Root: h.root}}}
+	it := &item{obs: &pluginmgr.Observation{Describe: declared("0.2.0")}, target: target("/etc/certbot-like/fullchain.pem", "", sum, []string{"a.example"},
+		ref("ssl_certificate", "/etc/nginx/a", 1, "/etc/certbot-like/fullchain.pem"))}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.plan([]*item{it}, []*item{it})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "cannot hold a copy") {
+			t.Fatalf("err = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("planning did not return")
+	}
+}
+
 func TestNames(t *testing.T) {
 	h := host{t: t, root: t.TempDir()}
 	cnOnly, _ := cert(t, "Only.CN.example", nil, nil)
