@@ -35,6 +35,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-agent/internal/inventory"
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
+	"github.com/easyssl-io/easyssl-agent/internal/migrate"
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-agent/internal/plugintrace"
@@ -70,6 +71,8 @@ func main() {
 		err = cmdStatus(os.Args[2:])
 	case "uninstall":
 		err = cmdUninstall(ctx, os.Args[2:])
+	case "migrate":
+		err = cmdMigrate(ctx, os.Args[2:])
 	case "plugin":
 		err = cmdPlugin(ctx, os.Args[2:])
 	case "language":
@@ -97,7 +100,7 @@ func main() {
 const exitUnchanged = 3
 
 func usage() {
-	fmt.Fprintln(os.Stderr, msg.T("main.usage", "usage: easyssl-agent <register|run|status|uninstall|plugin|language> [flags]"))
+	fmt.Fprintln(os.Stderr, msg.T("main.usage", "usage: easyssl-agent <register|run|status|uninstall|migrate|plugin|language> [flags]"))
 }
 
 // commandLanguage is the language this run speaks: EASYSSL_LANG when it names a
@@ -153,7 +156,7 @@ func rootCommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "register", "run", "status", "uninstall", "language":
+	case "register", "run", "status", "uninstall", "migrate", "language":
 		return args[0]
 	case "plugin":
 		if len(args) < 2 {
@@ -201,6 +204,37 @@ func cmdUninstall(ctx context.Context, args []string) error {
 	yes := fs.Bool("yes", false, msg.T("uninstall.flag.yes", "do not ask for confirmation"))
 	_ = fs.Parse(args)
 	return flow.Uninstall(ctx, *yes)
+}
+
+// cmdMigrate moves what the Plugins serve out of certbot's directories
+// (internal/migrate), then sends the host inventory the way `plugin install`
+// does, so the web console suggests the moved certificates within one round
+// trip rather than at the service's next check-in. The service's own next
+// check-in then computes the same fingerprint and sends nothing again.
+func cmdMigrate(ctx context.Context, args []string) error {
+	fs := newFlagSet("migrate")
+	_ = fs.Parse(args)
+	plugins := pluginmgr.New(nil, nil)
+	report := func(ctx context.Context) (string, error) {
+		cfg, err := identity.LoadConfig()
+		if err != nil {
+			return "", stateError("migrate", err)
+		}
+		token, err := identity.LoadToken()
+		if err != nil {
+			return "", stateError("migrate", err)
+		}
+		api, err := serverapi.New(cfg.ServerURL)
+		if err != nil {
+			return "", err
+		}
+		inv, err := inventory.Collect(ctx, plugins)
+		if err != nil {
+			return "", err
+		}
+		return cfg.ServerURL, api.ReportInventory(ctx, token, inv)
+	}
+	return migrate.Run(ctx, migrate.System(plugins, agentLogger(), report))
 }
 
 // cmdLanguage prints the language saved on this host, or saves another.

@@ -31,6 +31,7 @@ func TestRootPreflightCoversEveryOperationalCommand(t *testing.T) {
 		{[]string{"run"}, "run"},
 		{[]string{"status"}, "status"},
 		{[]string{"uninstall", "--yes"}, "uninstall"},
+		{[]string{"migrate"}, "migrate"},
 		{[]string{"plugin", "catalog"}, "plugin catalog"},
 		{[]string{"plugin", "install", "generic-cli"}, "plugin install"},
 		{[]string{"plugin", "list"}, "plugin list"},
