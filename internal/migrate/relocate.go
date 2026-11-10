@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"os"
 	"os/exec"
 	"strings"
 	"syscall"
@@ -35,6 +36,9 @@ func runRelocate(ctx context.Context, path string, req plugincontract.RelocateRe
 	// operation is the contract's constant.
 	cmd := exec.CommandContext(rctx, path, plugincontract.OpRelocate)
 	cmd.Stdin = strings.NewReader(string(body))
+	// The Plugin speaks the language EASYSSL_LANG names, and `sudo` drops the
+	// variable, so the language this run speaks is passed on explicitly.
+	cmd.Env = append(os.Environ(), "EASYSSL_LANG="+msg.Language())
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = 5 * time.Second

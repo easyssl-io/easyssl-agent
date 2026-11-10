@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/easyssl-io/easyssl-agent/internal/acmeclients"
+	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-contract/l10n"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
@@ -471,5 +472,22 @@ func TestRunRelocate(t *testing.T) {
 	out, status, err = runRelocate(context.Background(), plugin, req, nil)
 	if err == nil || status != 1 || out != "changed 1 line\ndiagnostics" {
 		t.Fatalf("relocate = %q, %d, %v", out, status, err)
+	}
+}
+
+// The Plugin answers in the language this run speaks, whatever EASYSSL_LANG the
+// caller's environment held (`sudo` drops it).
+func TestRunRelocatePassesTheLanguage(t *testing.T) {
+	dir := t.TempDir()
+	plugin := filepath.Join(dir, "nginx")
+	if err := os.WriteFile(plugin, []byte("#!/bin/sh\necho \"$EASYSSL_LANG\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EASYSSL_LANG", "en")
+	msg.SetLanguage("es")
+	t.Cleanup(func() { msg.SetLanguage("en") })
+	out, _, err := runRelocate(context.Background(), plugin, plugincontract.RelocateRequest{}, nil)
+	if err != nil || out != "es\n" {
+		t.Fatalf("relocate saw EASYSSL_LANG=%q, %v", out, err)
 	}
 }
