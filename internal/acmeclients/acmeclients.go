@@ -42,8 +42,8 @@ type Host struct {
 // System is the host this process runs on.
 func System() Host { return Host{Root: "/", PATH: os.Getenv("PATH")} }
 
-// file is where the host path p is read from.
-func (h Host) file(p string) string {
+// File is where the host path p is read from on this machine.
+func (h Host) File(p string) string {
 	if h.Root == "" || h.Root == "/" {
 		return p
 	}
@@ -64,7 +64,8 @@ const (
 	FromDefault
 	// FromStructure: a checked path lies in `<dir>/live/<lineage>/` or
 	// `<dir>/archive/<lineage>/` and `<dir>/renewal/<lineage>.conf` names
-	// that archive directory, whatever the directory is called.
+	// that archive directory, whatever the directory is called. Given only
+	// for a directory nothing else named.
 	FromStructure
 )
 
@@ -225,9 +226,11 @@ func (h Host) Scan(paths []string) *Rule {
 		}
 	}
 	add(DefaultCertbotDir, Source{Kind: FromDefault})
+	// Structure only finds what nothing else named, and says so once, by the
+	// first path that showed it.
 	for _, p := range paths {
 		for _, q := range h.forms(p) {
-			if dir, ok := h.structureDir(q); ok {
+			if dir, ok := h.structureDir(q); ok && found[dir] == nil {
 				add(dir, Source{Kind: FromStructure, File: p})
 			}
 		}
@@ -408,7 +411,7 @@ func (h Host) lookPath(name string) (string, bool) {
 			continue
 		}
 		p := path.Join(dir, name)
-		if fi, err := os.Stat(h.file(p)); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
+		if fi, err := os.Stat(h.File(p)); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
 			return p, true
 		}
 	}
@@ -435,7 +438,7 @@ func (h Host) structureDir(p string) (string, bool) {
 
 // lineages reads every `renewal/*.conf` of a certbot directory.
 func (h Host) lineages(dir string) []Lineage {
-	entries, err := os.ReadDir(h.file(path.Join(dir, "renewal")))
+	entries, err := os.ReadDir(h.File(path.Join(dir, "renewal")))
 	if err != nil {
 		return nil
 	}
@@ -465,7 +468,7 @@ func (h Host) lineages(dir string) []Lineage {
 // readConf reads the top-level `key = value` lines of a certbot renewal
 // configuration, before its first section.
 func (h Host) readConf(p string) (map[string]string, error) {
-	f, err := os.Open(h.file(p))
+	f, err := os.Open(h.File(p))
 	if err != nil {
 		return nil, err
 	}
@@ -487,7 +490,7 @@ func (h Host) readConf(p string) (map[string]string, error) {
 // cliIniConfigDir is the `config-dir` a certbot cli.ini sets, which certbot
 // reads as `key = value`, `key: value` or `key value`.
 func (h Host) cliIniConfigDir(p string) string {
-	f, err := os.Open(h.file(p))
+	f, err := os.Open(h.File(p))
 	if err != nil {
 		return ""
 	}
@@ -517,7 +520,7 @@ func (h Host) CertSHA256(p string) string {
 	if err != nil {
 		return ""
 	}
-	return LeafSHA256(h.file(real))
+	return LeafSHA256(h.File(real))
 }
 
 // LeafSHA256 is the lowercase hex SHA-256 of the DER of the first certificate
@@ -574,7 +577,7 @@ func (h Host) Resolve(p string) (string, error) {
 			continue
 		}
 		next := path.Join(resolved, c)
-		fi, err := os.Lstat(h.file(next))
+		fi, err := os.Lstat(h.File(next))
 		if err != nil {
 			return "", err
 		}
@@ -585,7 +588,7 @@ func (h Host) Resolve(p string) (string, error) {
 		if links++; links > 40 {
 			return "", errTooManyLinks
 		}
-		target, err := os.Readlink(h.file(next))
+		target, err := os.Readlink(h.File(next))
 		if err != nil {
 			return "", err
 		}
@@ -598,12 +601,12 @@ func (h Host) Resolve(p string) (string, error) {
 }
 
 func (h Host) exists(p string) bool {
-	_, err := os.Stat(h.file(p))
+	_, err := os.Stat(h.File(p))
 	return err == nil
 }
 
 func (h Host) isDir(p string) bool {
-	fi, err := os.Stat(h.file(p))
+	fi, err := os.Stat(h.File(p))
 	return err == nil && fi.IsDir()
 }
 

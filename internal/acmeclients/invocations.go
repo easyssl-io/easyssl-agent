@@ -69,7 +69,7 @@ func systemdExec(line string) (string, bool) {
 }
 
 func (h Host) scanFile(p string, kind SourceKind, command func(string) (string, bool)) []invocation {
-	f, err := os.Open(h.file(p))
+	f, err := os.Open(h.File(p))
 	if err != nil {
 		return nil
 	}
@@ -161,14 +161,14 @@ func shellWords(s string) []string {
 // listFiles lists the regular files of a directory, and with dropIns the
 // files of its `*.d` subdirectories too.
 func (h Host) listFiles(dir string, dropIns bool) []string {
-	entries, err := os.ReadDir(h.file(dir))
+	entries, err := os.ReadDir(h.File(dir))
 	if err != nil {
 		return nil
 	}
 	var out []string
 	for _, e := range entries {
 		p := path.Join(dir, e.Name())
-		fi, err := os.Stat(h.file(p))
+		fi, err := os.Stat(h.File(p))
 		if err != nil {
 			continue
 		}

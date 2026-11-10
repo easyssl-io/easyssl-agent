@@ -309,12 +309,17 @@ func (m *Manager) Observe(ctx context.Context) ([]Observation, error) {
 	return out, nil
 }
 
-// Assess applies the managed-path rule (acmeclients) to every discovered
+// Assess is AssessOn this Manager's host.
+func (m *Manager) Assess(obs []Observation) (*acmeclients.Rule, [][][]acmeclients.Finding) {
+	return AssessOn(m.acme, obs)
+}
+
+// AssessOn applies the managed-path rule (acmeclients) to every discovered
 // Target of every observed Plugin at once, reading each Target's path settings
 // and its certificate's digest. The result is indexed like obs and each
 // Plugin's discovered Targets. The host is read only when some Target has a
-// path, so a host with nothing to check costs no scan.
-func (m *Manager) Assess(obs []Observation) (*acmeclients.Rule, [][][]acmeclients.Finding) {
+// path, so a host with nothing to check costs no scan; the Rule is then nil.
+func AssessOn(host acmeclients.Host, obs []Observation) (*acmeclients.Rule, [][][]acmeclients.Finding) {
 	var targets []acmeclients.Target
 	var paths []string
 	for _, o := range obs {
@@ -337,9 +342,9 @@ func (m *Manager) Assess(obs []Observation) (*acmeclients.Rule, [][][]acmeclient
 		}
 	}
 	if len(paths) == 0 {
-		return m.acme.Scan(nil), out
+		return nil, out
 	}
-	rule := m.acme.Scan(paths)
+	rule := host.Scan(paths)
 	assessed := rule.Assess(targets)
 	k := 0
 	for i, o := range obs {
