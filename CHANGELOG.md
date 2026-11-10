@@ -3,6 +3,20 @@
 Every release of the easySSL Agent, newest first. `scripts/release.sh` tags
 no version this file has no entry for.
 
+## 0.2.1
+
+Fixes in what 0.2.0 added.
+
+- A Target path with `..` after a symlink (`/opt/alias/../x`) is checked where
+  the kernel opens it: it was checked as if `..` applied to the name, so a
+  Deployment into certbot's directories through such a path was not refused.
+- `easyssl-agent migrate` checks the directories of copies an earlier run left,
+  and reuses only a file that is exactly the copy (not a symlink, same owner,
+  group and mode), before the confirmation and again before changing any
+  configuration.
+- `easyssl-agent migrate` no longer hangs when `/etc/ssl/easyssl` or a
+  certificate's directory there is not a directory; it says why and stops.
+
 ## 0.2.0
 
 Built against `easyssl-contract` 0.2.0. It still runs 0.1 Plugins, and a
