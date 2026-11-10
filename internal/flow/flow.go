@@ -32,6 +32,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-agent/internal/service"
+	"github.com/easyssl-io/easyssl-agent/internal/termio"
 	"github.com/easyssl-io/easyssl-contract/l10n"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
@@ -864,7 +865,7 @@ func openTerminal() *terminal {
 // prompts so buffered input is never dropped between them.
 func (t *terminal) prompt(label string) string {
 	fmt.Fprint(t.out, label)
-	line, err := t.in.ReadString('\n')
+	line, err := termio.ReadLine(t.in)
 	if err != nil && line == "" {
 		return ""
 	}
@@ -876,7 +877,7 @@ func (t *terminal) prompt(label string) string {
 // tell from an empty answer and which would otherwise ask forever.
 func (t *terminal) ask(label string) (answer string, ok bool) {
 	fmt.Fprint(t.out, label)
-	line, err := t.in.ReadString('\n')
+	line, err := termio.ReadLine(t.in)
 	if err != nil && line == "" {
 		return "", false
 	}

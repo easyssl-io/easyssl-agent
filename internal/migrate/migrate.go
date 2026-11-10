@@ -26,6 +26,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/acmeclients"
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
+	"github.com/easyssl-io/easyssl-agent/internal/termio"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
 )
 
@@ -190,7 +191,7 @@ func (s *session) say(line string) { fmt.Fprintln(s.out, line) }
 // can be read, which an empty answer is not.
 func (s *session) ask(label string) (string, bool) {
 	fmt.Fprint(s.out, label)
-	line, err := s.in.ReadString('\n')
+	line, err := termio.ReadLine(s.in)
 	if err != nil && line == "" {
 		return "", false
 	}
