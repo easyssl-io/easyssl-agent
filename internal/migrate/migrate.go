@@ -174,6 +174,9 @@ func Run(ctx context.Context, opts Options) error {
 	if err := s.copyAll(p); err != nil {
 		return err
 	}
+	if err := s.checkDests(p); err != nil {
+		return err
+	}
 	failed := s.relocateAll(ctx, p)
 	s.advise(ctx, chosen)
 	s.report(ctx)

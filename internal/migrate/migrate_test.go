@@ -375,9 +375,9 @@ func TestCopiesAreNamedAndNeverOverwritten(t *testing.T) {
 	h.write("/etc/certbot-like/fullchain.pem", certText, 0o644)
 	h.write("/etc/certbot-like/privkey.pem", keyPEM, 0o640)
 	// An earlier run left another certificate under the same name, and the
-	// same key.
+	// same key, with the source's mode.
 	h.write("/etc/ssl/easyssl/_.example.org/certificate.pem", "earlier", 0o644)
-	h.write("/etc/ssl/easyssl/_.example.org/key.pem", keyPEM, 0o600)
+	h.write("/etc/ssl/easyssl/_.example.org/key.pem", keyPEM, 0o640)
 
 	s := &session{opts: Options{Host: acmeclients.Host{Root: h.root}}}
 	it := &item{obs: &pluginmgr.Observation{Describe: declared("0.2.0")}, target: target("/etc/certbot-like/fullchain.pem", "/etc/certbot-like/privkey.pem", sum, []string{"*.Example.org"},
@@ -394,6 +394,91 @@ func TestCopiesAreNamedAndNeverOverwritten(t *testing.T) {
 	want := map[string]bool{"/etc/ssl/easyssl/_.example.org/certificate-2.pem": false, "/etc/ssl/easyssl/_.example.org/key.pem": true}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("copies = %v", got)
+	}
+}
+
+// A file left by an earlier run is reused only when it is exactly the copy:
+// a symlink or another mode is someone else's file under that name, and a
+// directory that is no longer safe refuses the plan, reused copies included.
+func TestReusedCopiesAreCheckedLikeNewOnes(t *testing.T) {
+	plan := func(t *testing.T, prepare func(h host)) (map[string]bool, error) {
+		h := host{t: t, root: t.TempDir()}
+		certText, sum := cert(t, "a.example", []string{"a.example"}, nil)
+		h.write("/etc/certbot-like/fullchain.pem", certText, 0o644)
+		h.write("/etc/certbot-like/privkey.pem", keyPEM, 0o600)
+		h.write("/etc/ssl/easyssl/a.example/certificate.pem", certText, 0o644)
+		h.write("/etc/ssl/easyssl/a.example/key.pem", keyPEM, 0o600)
+		for _, d := range []string{"/etc/ssl/easyssl", "/etc/ssl/easyssl/a.example"} {
+			if err := os.Chmod(filepath.Join(h.root, d), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		prepare(h)
+		s := &session{opts: Options{Host: acmeclients.Host{Root: h.root}}}
+		it := &item{obs: &pluginmgr.Observation{Describe: declared("0.2.0")}, target: target("/etc/certbot-like/fullchain.pem", "/etc/certbot-like/privkey.pem", sum, []string{"a.example"},
+			ref("ssl_certificate", "/etc/nginx/a", 1, "/etc/certbot-like/fullchain.pem"),
+			ref("ssl_certificate_key", "/etc/nginx/a", 2, "/etc/certbot-like/privkey.pem"))}
+		m, err := s.plan([]*item{it}, []*item{it})
+		if err != nil {
+			return nil, err
+		}
+		got := map[string]bool{}
+		for _, c := range m.copies {
+			got[c.dest] = c.reuse
+		}
+		return got, nil
+	}
+	got, err := plan(t, func(host) {})
+	if want := map[string]bool{"/etc/ssl/easyssl/a.example/certificate.pem": true, "/etc/ssl/easyssl/a.example/key.pem": true}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("exact copies: %v, %v", got, err)
+	}
+	got, err = plan(t, func(h host) {
+		key := filepath.Join(h.root, "/etc/ssl/easyssl/a.example/key.pem")
+		os.Remove(key)
+		h.write("/elsewhere/key.pem", keyPEM, 0o600)
+		if err := os.Symlink(filepath.Join(h.root, "/elsewhere/key.pem"), key); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(filepath.Join(h.root, "/etc/ssl/easyssl/a.example/certificate.pem"), 0o664); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if want := map[string]bool{"/etc/ssl/easyssl/a.example/certificate-2.pem": false, "/etc/ssl/easyssl/a.example/key-2.pem": false}; err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("a symlink and another mode: %v, %v", got, err)
+	}
+	_, err = plan(t, func(h host) {
+		if err := os.Chmod(filepath.Join(h.root, "/etc/ssl/easyssl/a.example"), 0o777); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "can be written by users other than its owner") {
+		t.Fatalf("a writable directory holding reused copies: err = %v", err)
+	}
+}
+
+// A destination whose parent cannot be a directory fails every name the same
+// way, so planning stops and says why instead of trying names forever.
+func TestADestinationThatCannotHoldCopiesStopsPlanning(t *testing.T) {
+	h := host{t: t, root: t.TempDir()}
+	certText, sum := cert(t, "a.example", []string{"a.example"}, nil)
+	h.write("/etc/certbot-like/fullchain.pem", certText, 0o644)
+	h.write("/etc/ssl/easyssl", "a file where the directory goes", 0o644)
+
+	s := &session{opts: Options{Host: acmeclients.Host{Root: h.root}}}
+	it := &item{obs: &pluginmgr.Observation{Describe: declared("0.2.0")}, target: target("/etc/certbot-like/fullchain.pem", "", sum, []string{"a.example"},
+		ref("ssl_certificate", "/etc/nginx/a", 1, "/etc/certbot-like/fullchain.pem"))}
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.plan([]*item{it}, []*item{it})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "cannot hold a copy") {
+			t.Fatalf("err = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("planning did not return")
 	}
 }
 

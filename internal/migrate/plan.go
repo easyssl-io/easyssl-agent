@@ -115,7 +115,52 @@ func (s *session) plan(chosen, items []*item) (*migration, error) {
 			}
 		}
 	}
+	if err := s.checkDests(m); err != nil {
+		return nil, err
+	}
 	return m, nil
+}
+
+// checkDests refuses a plan whose copies would be read from a directory a key
+// must not be in (safeDir), checking every one that exists, including those
+// holding reused copies, which writeCopy never sees; and a reused copy that is
+// no longer the file it was taken for. Run before the confirmation and again
+// before any configuration is changed, since time passes between them.
+func (s *session) checkDests(m *migration) error {
+	dirs := map[string]bool{DestDir: true}
+	for _, c := range m.copies {
+		dirs[path.Dir(c.dest)] = true
+	}
+	for dir := range dirs {
+		if _, err := os.Lstat(s.opts.Host.File(dir)); errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err := safeDir(s.opts.Host.File(dir)); err != nil {
+			return err
+		}
+	}
+	for _, c := range m.copies {
+		if c.reuse && !s.isCopy(c.dest, c) {
+			return msg.Err.T("migrate.plan.reused_changed", "{file} changed since it was taken as a copy, so no configuration was changed; run this command again.", "file", c.dest)
+		}
+	}
+	return nil
+}
+
+// isCopy reports whether the host file dest is exactly what writeCopy would
+// have written for c: a regular file, not a symlink, with its content, owner,
+// group and mode.
+func (s *session) isCopy(dest string, c *copyStep) bool {
+	file := s.opts.Host.File(dest)
+	fi, err := os.Lstat(file)
+	if err != nil || !fi.Mode().IsRegular() || fi.Mode().Perm() != c.mode {
+		return false
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && (int(st.Uid) != c.uid || int(st.Gid) != c.gid) {
+		return false
+	}
+	existing, err := os.ReadFile(file)
+	return err == nil && bytes.Equal(existing, c.data)
 }
 
 // add records a reference and its move, refusing one spelling of a path that
@@ -190,12 +235,18 @@ func (s *session) copyFor(value, name string, bySource, byDest map[string]*copyS
 		}
 		existing, err := os.ReadFile(s.opts.Host.File(dest))
 		switch {
-		case err == nil && bytes.Equal(existing, data):
+		case err == nil && bytes.Equal(existing, data) && s.isCopy(dest, step):
 			step.dest, step.reuse = dest, true
 		case errors.Is(err, fs.ErrNotExist):
 			step.dest = dest
 		default:
-			continue
+			// Something else has the name, so the next one is tried. An
+			// error that is not about the name, such as a parent that is
+			// a file or a symlink loop, fails every name the same way.
+			if _, lerr := os.Lstat(s.opts.Host.File(dest)); lerr == nil {
+				continue
+			}
+			return nil, msg.Err.T("migrate.plan.dest_unusable", "{file} cannot hold a copy, so nothing was changed: {err}", "file", dest, "err", err)
 		}
 		bySource[real] = step
 		return step, nil

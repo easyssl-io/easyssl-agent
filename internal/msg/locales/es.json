@@ -72,6 +72,8 @@
   "migrate.plan.reuse": "{from} -> {to} (ya está allí, se reutiliza)",
   "migrate.plan.shared_line": "{file}:{line} también nombra {value}, para un certificado no elegido, así que no se cambió nada. Elígelos juntos.",
   "migrate.plan.unknown_setting": "El Plugin {plugin} nombra {file}:{line} para su ajuste {setting}, que no contiene ningún archivo de este certificado, así que no se cambió nada.",
+  "migrate.plan.dest_unusable": "{file} no puede contener una copia, así que no se cambió nada: {err}",
+  "migrate.plan.reused_changed": "{file} cambió desde que se tomó como copia, así que no se cambió ninguna configuración; ejecuta este comando de nuevo.",
   "migrate.plan.unreadable": "{file} no se puede leer, así que no se cambió nada: {err}",
   "migrate.plugin_too_old": "El Plugin {plugin} se compiló con el contrato {version}, anterior a {since}, así que sus certificados no se pueden mover: reinstálalo con `easyssl-agent plugin install {plugin}` y vuelve a ejecutar este comando.",
   "migrate.unsafe_dir.not_dir": "{dir} no es un directorio",
