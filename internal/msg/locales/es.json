@@ -200,7 +200,7 @@
   "reinstall.unreachable.service_updated": "✓ {service} actualizado",
   "reinstall.unreachable.update_service": "al actualizar el servicio: {err}",
   "reinstall.update_service": "al actualizar el servicio: {err}",
-  "server.refused.contract_unsupported": "el Servidor no habla la versión de contrato {version} de este Agente: actualiza el Agente, o el Servidor si es el más antiguo",
+  "server.refused.contract_unsupported": "el Servidor no habla la versión de contrato {version} de este Agente: actualiza el Agente",
   "server_url.no_host": "\"{url}\" no nombra ningún host; la URL del Servidor es como https://server.example.com",
   "server_url.no_scheme": "\"{url}\" no es una URL de Servidor; debe empezar con https://, como en https://server.example.com",
   "server_url.not_encrypted": "\"{url}\" no está cifrada, y este Agente enviaría por ella, sin cifrar, la clave de registro, su token y cada clave privada que instale; usa https://{host} (http solo se permite hacia localhost, para un Servidor que se ejecuta en esta máquina)",

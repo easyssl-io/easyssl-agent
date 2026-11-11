@@ -80,7 +80,7 @@ func (e *APIError) Error() string {
 	case wire.CodeInvalidRegistrationKey:
 		return msg.T("server.refused.registration_key", "the Server did not accept the registration key")
 	case wire.CodeContractUnsupported:
-		return msg.T("server.refused.contract_unsupported", "the Server does not speak this Agent's contract version {version}: update the Agent, or the Server if it is the older one", "version", wire.ContractVersion)
+		return msg.T("server.refused.contract_unsupported", "the Server does not speak this Agent's contract version {version}: update the Agent", "version", wire.ContractVersion)
 	case wire.CodeInvalidReactivationToken:
 		return msg.T("server.refused.reactivation_token", "the Server did not accept the reactivation token: it is unknown, expired or already used")
 	}
