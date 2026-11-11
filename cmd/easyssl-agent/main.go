@@ -77,6 +77,10 @@ func main() {
 		err = cmdPlugin(ctx, os.Args[2:])
 	case "language":
 		err = cmdLanguage(os.Args[2:])
+	case "update":
+		err = cmdUpdate(ctx, os.Args[2:])
+	case "version":
+		err = cmdVersion()
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -100,7 +104,7 @@ func main() {
 const exitUnchanged = 3
 
 func usage() {
-	fmt.Fprintln(os.Stderr, msg.T("main.usage", "usage: easyssl-agent <register|run|status|uninstall|migrate|plugin|language> [flags]"))
+	fmt.Fprintln(os.Stderr, msg.T("main.usage", "usage: easyssl-agent <register|run|status|update|uninstall|migrate|plugin|language|version> [flags]"))
 }
 
 // commandLanguage is the language this run speaks: EASYSSL_LANG when it names a
@@ -156,14 +160,14 @@ func rootCommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "register", "run", "status", "uninstall", "migrate", "language":
+	case "register", "run", "status", "update", "uninstall", "migrate", "language":
 		return args[0]
 	case "plugin":
 		if len(args) < 2 {
 			return ""
 		}
 		switch args[1] {
-		case "catalog", "install", "list":
+		case "catalog", "install", "list", "update":
 			return "plugin " + args[1]
 		}
 	}
@@ -631,7 +635,7 @@ func isUnknownToken(err error) bool {
 // Server's Marketplace on demand; nothing is bundled into this binary.
 func cmdPlugin(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return msg.Err.T("plugin.usage", "usage: easyssl-agent plugin <catalog|install|list> [flags]")
+		return msg.Err.T("plugin.usage", "usage: easyssl-agent plugin <catalog|install|list|update> [flags]")
 	}
 	switch args[0] {
 	case "catalog":
@@ -640,8 +644,10 @@ func cmdPlugin(ctx context.Context, args []string) error {
 		return cmdPluginInstall(ctx, args[1:])
 	case "list":
 		return cmdPluginList(args[1:])
+	case "update":
+		return cmdPluginUpdate(ctx, args[1:])
 	default:
-		return msg.Err.T("plugin.unknown_command", "unknown plugin command \"{command}\" (want catalog, install or list)", "command", args[0])
+		return msg.Err.T("plugin.unknown_command", "unknown plugin command \"{command}\" (want catalog, install, list or update)", "command", args[0])
 	}
 }
 

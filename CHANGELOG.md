@@ -5,6 +5,17 @@ no version this file has no entry for.
 
 ## Unreleased
 
+- `easyssl-agent update` updates the Agent to the build the Server's catalog
+  offers, checking its SHA-256 and that it runs before swapping it in, keeping
+  the previous build and putting it back if the service does not stay up on
+  the new one; then it updates the Plugins. `--agent-only` leaves the Plugins
+  alone, `--check` only says what would change, and an older build is never
+  taken. Built against `easyssl-contract` 0.2.1, whose catalog names the
+  Agent build.
+- `easyssl-agent plugin update [name...]` installs the catalog's build of each
+  installed Plugin whose bytes differ; one the catalog no longer offers is
+  left as it is.
+- `easyssl-agent version` prints the version alone.
 - A Server that no longer speaks this Agent's contract version is reported as
   such: `easyssl-agent status` says the Agent is refused and how to update it,
   the service logs it at error level, and its systemd status line says so,

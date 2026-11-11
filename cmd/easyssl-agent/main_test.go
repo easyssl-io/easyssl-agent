@@ -39,6 +39,8 @@ func TestRootPreflightCoversEveryOperationalCommand(t *testing.T) {
 		{[]string{"plugin", "catalog"}, "plugin catalog"},
 		{[]string{"plugin", "install", "generic-cli"}, "plugin install"},
 		{[]string{"plugin", "list"}, "plugin list"},
+		{[]string{"plugin", "update"}, "plugin update"},
+		{[]string{"update", "--check"}, "update"},
 		{[]string{"language", "es"}, "language"},
 	}
 	for _, tt := range tests {
