@@ -316,6 +316,9 @@ func cmdRun(ctx context.Context, args []string) error {
 	// error level the first time and rarely after that: the condition does not
 	// change on its own, and a line a minute would bury the journal.
 	removedSince := time.Time{}
+	// The same for a Server that refuses this Agent's contract version: nothing
+	// on the host changes that but updating the Agent.
+	refusedSince := time.Time{}
 
 	poll := 60
 	for {
@@ -330,6 +333,11 @@ func cmdRun(ctx context.Context, args []string) error {
 			fingerprint = ""
 		}
 		resp, err := api.Checkin(ctx, token, flow.CheckinBody(fingerprint))
+		if err == nil && !refusedSince.IsZero() {
+			logger.Info("the Server accepts this Agent's contract version again; resuming work")
+			sdnotify.Status("Checking in.")
+			refusedSince = time.Time{}
+		}
 		if err == nil {
 			if !removedSince.IsZero() {
 				// Only a new registration while the service ran recovers a revoked token.
@@ -377,6 +385,20 @@ func cmdRun(ctx context.Context, args []string) error {
 					runner.Reconcile(ctx)
 				}
 			}
+		} else if isContractUnsupported(err) {
+			// The Server no longer speaks the contract this Agent was built against.
+			// Like a revoked token, the service stays up and does no work, but it
+			// says so where an operator looks: the journal, at error level, and the
+			// unit's status line, which otherwise kept reading as healthy. The
+			// Server records the refusal too, and the Agent's page in the web
+			// console gives the command that updates it.
+			if refusedSince.IsZero() || time.Since(refusedSince) > 30*time.Minute {
+				refusedSince = time.Now()
+				logger.Error("the Server refuses this Agent: it no longer speaks the contract version this Agent was built against",
+					"server", cfg.ServerURL, "contract", wire.ContractVersion,
+					"next", "update the Agent with the command on its page in the web console, which re-runs the installer and keeps this registration")
+			}
+			sdnotify.Status("Refused by the Server: it no longer speaks contract " + wire.ContractVersion + ". Update the Agent with the command on its page in the web console.")
 		} else if isUnknownToken(err) {
 			// Deactivated or removed in the web console. The service keeps running and
 			// stops doing work: this Agent belongs to the host, so a decision taken in
@@ -586,11 +608,18 @@ func serverState(cfg identity.Config, token string, tokenErr error) (detail stri
 		return msg.T("status.state.pending", "pending authorization"), resp
 	case err == nil:
 		return resp.Status, resp
+	case isContractUnsupported(err):
+		return msg.T("status.state.contract_refused", "refused (the Server no longer speaks contract {version}, which this Agent was built against; update the Agent with the command on its page in the web console)", "version", wire.ContractVersion), reg
 	case isUnknownToken(err):
 		return msg.T("status.state.token_rejected", "not registered (the Server rejected this token; the Agent was deactivated or removed there)"), reg
 	default:
 		return msg.T("status.state.unreachable", "unknown (could not reach {server}: {err})", "server", cfg.ServerURL, "err", err), reg
 	}
+}
+
+func isContractUnsupported(err error) bool {
+	apiErr, ok := errors.AsType[*serverapi.APIError](err)
+	return ok && apiErr.Code == wire.CodeContractUnsupported
 }
 
 func isUnknownToken(err error) bool {

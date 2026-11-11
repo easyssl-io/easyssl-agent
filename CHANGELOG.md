@@ -3,6 +3,13 @@
 Every release of the easySSL Agent, newest first. `scripts/release.sh` tags
 no version this file has no entry for.
 
+## Unreleased
+
+- A Server that no longer speaks this Agent's contract version is reported as
+  such: `easyssl-agent status` says the Agent is refused and how to update it,
+  the service logs it at error level, and its systemd status line says so,
+  instead of reading as unreachable or healthy.
+
 ## 0.2.1
 
 Fixes in what 0.2.0 added.

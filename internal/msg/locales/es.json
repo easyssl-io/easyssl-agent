@@ -230,6 +230,7 @@
   "status.state.bad_url": "desconocido ({err})",
   "status.state.no_token": "no registrado (no hay token local)",
   "status.state.pending": "pendiente de autorización",
+  "status.state.contract_refused": "rechazado (el Servidor ya no habla el contrato {version}, con el que se construyó este Agente; actualiza el Agente con el comando de su página en la consola web)",
   "status.state.token_rejected": "no registrado (el Servidor rechazó este token; el Agente fue desactivado o eliminado allí)",
   "status.state.unreachable": "desconocido (no se pudo conectar con {server}: {err})",
   "status.token.missing": "falta, así que este Agente no puede autenticarse",

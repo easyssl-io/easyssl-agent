@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/easyssl-io/easyssl-agent/internal/flow"
+	"github.com/easyssl-io/easyssl-agent/internal/identity"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
@@ -85,5 +89,20 @@ func TestRegisterRefusedFlagsAreUnchanged(t *testing.T) {
 	}
 	if err := cmdRegister(context.Background(), []string{"--help"}); err != nil {
 		t.Errorf("register --help = %v, want nil", err)
+	}
+}
+
+// A Server that no longer speaks this Agent's contract version is not a Server
+// that cannot be reached: status says it refuses the Agent and what to do.
+func TestStatusNamesAContractRefusal(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(wire.ErrorResponse{Code: wire.CodeContractUnsupported, Message: "this Server speaks contract version 0.3.0"})
+	}))
+	defer srv.Close()
+	detail, _ := serverState(identity.Config{ServerURL: srv.URL}, "token", nil)
+	if !strings.HasPrefix(detail, "refused (the Server no longer speaks contract "+wire.ContractVersion) {
+		t.Fatalf("status = %q", detail)
 	}
 }
