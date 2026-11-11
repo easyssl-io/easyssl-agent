@@ -303,5 +303,7 @@
   "plugin.update.flag.yes": "actualizar sin pedir confirmación",
   "plugin.update.not_installed": "{plugin} no está instalado en este host; instálalo con `easyssl-agent plugin install {plugin}`",
   "plugin.update.failed": "actualizando {plugin}: {err}",
-  "plugin.update.done": "✓ {plugin} actualizado a {version}"
+  "plugin.update.done": "✓ {plugin} actualizado a {version}",
+  "status.label.version": "versión",
+  "status.label.contract": "contrato"
 }

@@ -28,6 +28,7 @@ import (
 
 	"github.com/easyssl-io/easyssl-contract/catalog"
 
+	"github.com/easyssl-io/easyssl-agent/internal/buildinfo"
 	"github.com/easyssl-io/easyssl-agent/internal/commands"
 	"github.com/easyssl-io/easyssl-agent/internal/csr"
 	"github.com/easyssl-io/easyssl-agent/internal/deploy"
@@ -570,6 +571,10 @@ func cmdStatus(args []string) error {
 	if reg.DisplayName != "" {
 		line(msg.T("status.label.name", "name"), reg.DisplayName)
 	}
+	// This build's own, beside what the Server says of it: the contract version is
+	// what a refusal below is about. `version` prints the first alone, for scripts.
+	line(msg.T("status.label.version", "version"), buildinfo.Version)
+	line(msg.T("status.label.contract", "contract"), wire.ContractVersion)
 	line(msg.T("status.label.server", "Server"), cfg.ServerURL)
 	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
 		line(msg.T("status.label.organization", "Organization"), cfg.Organization())
