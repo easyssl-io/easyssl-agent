@@ -102,7 +102,7 @@ func TestStatusNamesAContractRefusal(t *testing.T) {
 	}))
 	defer srv.Close()
 	detail, _ := serverState(identity.Config{ServerURL: srv.URL}, "token", nil)
-	if !strings.HasPrefix(detail, "refused (the Server no longer speaks contract "+wire.ContractVersion) {
+	if !strings.HasPrefix(detail, "refused (the Server answered, but no longer speaks this Agent's contract "+wire.ContractVersion) {
 		t.Fatalf("status = %q", detail)
 	}
 }

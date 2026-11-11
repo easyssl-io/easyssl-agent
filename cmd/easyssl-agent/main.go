@@ -609,7 +609,7 @@ func serverState(cfg identity.Config, token string, tokenErr error) (detail stri
 	case err == nil:
 		return resp.Status, resp
 	case isContractUnsupported(err):
-		return msg.T("status.state.contract_refused", "refused (the Server no longer speaks contract {version}, which this Agent was built against; update the Agent with the command on its page in the web console)", "version", wire.ContractVersion), reg
+		return msg.T("status.state.contract_refused", "refused (the Server answered, but no longer speaks this Agent's contract {version}; update the Agent with the command on its page in the web console)", "version", wire.ContractVersion), reg
 	case isUnknownToken(err):
 		return msg.T("status.state.token_rejected", "not registered (the Server rejected this token; the Agent was deactivated or removed there)"), reg
 	default:
