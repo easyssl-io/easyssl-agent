@@ -286,6 +286,7 @@
   "update.does_not_run": "el Agente descargado no se ejecuta en este host como {version}: {err}",
   "update.keep_previous_failed": "conservando el Agente anterior como {path}: {err}",
   "update.flag.yes": "actualizar sin pedir confirmación",
+  "update.agent.watching": "el Agente {version} se inició; esperando su primer check-in…",
   "update.strands.agent_only": "el Agente {version} rechazaría {plugins}, compilados para un contrato que ya no habla, así que no se cambió nada. Actualiza el Agente y sus Plugins juntos: sudo easyssl-agent update",
   "update.strands": "el Agente {version} rechazaría {plugins}, compilados para un contrato que ya no habla, y el Marketplace no ofrece otra compilación de ellos, así que no se cambió nada",
   "version.flag.contracts": "imprimir las versiones de contrato que este Agente acepta de un Plugin",

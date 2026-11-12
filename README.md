@@ -271,8 +271,10 @@ new build is downloaded beside the installed one as `easyssl-agent.new`, its
 SHA-256 is checked, and it is run once (`easyssl-agent version`) to prove it
 runs on this host and is the version offered. Only then is it renamed into
 place, keeping the previous build as `easyssl-agent.prev`, and the service
-restarted. If the service is not active at each of five looks, three seconds
-apart, the previous build is put back and the service restarted on it.
+restarted. The update is done once the new build's service has a check-in
+accepted, which it records in `/var/lib/easyssl/checked-in`; if the service is
+found not active before then, at looks a second apart for at most fifteen
+seconds, the previous build is put back and the service restarted on it.
 
 Before the swap, the new build is asked which contract versions it accepts
 from a Plugin (`easyssl-agent version --contracts`), and every installed

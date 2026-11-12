@@ -154,7 +154,12 @@ func updateAgent(ctx context.Context, api *serverapi.Client, plan selfupdate.Pla
 		_ = os.Remove(staged)
 		return err
 	}
-	if err := service.Start(); err != nil || !staysActive(ctx) {
+	restarted := time.Now()
+	err = service.Start()
+	if err == nil {
+		fmt.Println(msg.T("update.agent.watching", "Agent {version} started; waiting for its first check-in…", "version", plan.Offered))
+	}
+	if err != nil || !selfupdate.Settle(ctx, service.State, func() bool { return identity.CheckedInSince(plan.Offered, restarted) }, time.Second, 15*time.Second) {
 		if rerr := selfupdate.Restore(service.BinaryPath); rerr != nil {
 			return msg.Err.T("update.restore_failed", "the new Agent did not stay up, and putting the previous one back failed: {err}; it is kept as {path}", "err", rerr, "path", service.BinaryPath+".prev")
 		}
@@ -163,23 +168,6 @@ func updateAgent(ctx context.Context, api *serverapi.Client, plan selfupdate.Pla
 	}
 	fmt.Println(msg.T("update.agent.done", "✓ Agent updated to {version}; the service restarted on it", "version", plan.Offered))
 	return nil
-}
-
-// staysActive watches the service for a quarter of a minute after the restart:
-// a build that exits on start is restarted by the init system and shows as
-// not active at one of the looks.
-func staysActive(ctx context.Context) bool {
-	for i := 0; i < 5; i++ {
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(3 * time.Second):
-		}
-		if service.State() != "active" {
-			return false
-		}
-	}
-	return true
 }
 
 // cmdPluginUpdate installs the catalog's build of each installed Plugin, or of

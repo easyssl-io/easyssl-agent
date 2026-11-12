@@ -326,6 +326,9 @@ func cmdRun(ctx context.Context, args []string) error {
 	refusedSince := time.Time{}
 
 	poll := 60
+	// Recorded once per start, on the first check-in the Server accepts, for
+	// `update` watching the build it just started.
+	markedCheckIn := false
 	for {
 		// The fingerprint on the wire is always over the whole current inventory; the
 		// document itself goes only when the Server says it lacks it. A contributor
@@ -342,6 +345,12 @@ func cmdRun(ctx context.Context, args []string) error {
 			logger.Info("the Server accepts this Agent's contract version again; resuming work")
 			sdnotify.Status("Checking in.")
 			refusedSince = time.Time{}
+		}
+		if err == nil && !markedCheckIn {
+			if merr := identity.MarkCheckedIn(buildinfo.Version); merr != nil {
+				logger.Warn("could not record the accepted check-in", "err", merr)
+			}
+			markedCheckIn = true
 		}
 		if err == nil {
 			if !removedSince.IsZero() {
