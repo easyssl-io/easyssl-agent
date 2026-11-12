@@ -17,11 +17,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
+	"github.com/easyssl-io/easyssl-agent/internal/version"
 	"github.com/easyssl-io/easyssl-contract/catalog"
 )
 
@@ -68,62 +67,11 @@ func Decide(entry *catalog.Agent, goos, goarch, current, currentDigest string) (
 	if a.SHA256 == "" {
 		return p, msg.Err.T("update.no_digest", "the catalog publishes no digest for the Agent build, so it was not taken")
 	}
-	if a.SHA256 == currentDigest || Older(entry.Version, current) {
+	if a.SHA256 == currentDigest || version.Older(entry.Version, current) {
 		return p, nil
 	}
 	p.Artifact, p.Needed = a, true
 	return p, nil
-}
-
-// Older reports whether v ranks below than as semantic versions without the
-// leading `v`, ignoring build metadata (`+dev.<commit>`). A value that is not
-// a version is never older, so nothing is refused on a version unread.
-func Older(v, than string) bool {
-	a, okA := parse(v)
-	b, okB := parse(than)
-	if !okA || !okB {
-		return false
-	}
-	for i := 0; i < 3; i++ {
-		if a.n[i] != b.n[i] {
-			return a.n[i] < b.n[i]
-		}
-	}
-	// A pre-release ranks below its release; two pre-releases by their text,
-	// which is enough for the forms this project tags.
-	switch {
-	case a.pre == b.pre:
-		return false
-	case a.pre == "":
-		return false
-	case b.pre == "":
-		return true
-	}
-	return a.pre < b.pre
-}
-
-type semver struct {
-	n   [3]int
-	pre string
-}
-
-func parse(v string) (semver, bool) {
-	v, _, _ = strings.Cut(v, "+")
-	core, pre, _ := strings.Cut(v, "-")
-	parts := strings.Split(core, ".")
-	if len(parts) != 3 {
-		return semver{}, false
-	}
-	var s semver
-	for i, p := range parts {
-		n, err := strconv.Atoi(p)
-		if err != nil || n < 0 || p == "" || (len(p) > 1 && p[0] == '0') {
-			return semver{}, false
-		}
-		s.n[i] = n
-	}
-	s.pre = pre
-	return s, true
 }
 
 // Downloader fetches an artifact by the URL the catalog names, from the Server
