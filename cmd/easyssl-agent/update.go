@@ -108,10 +108,14 @@ func cmdUpdate(ctx context.Context, args []string) error {
 	if !plan.Needed {
 		return updatePlugins(ctx, cfg, api, nil)
 	}
-	updating := map[string]bool{}
+	// Each Plugin about to be updated, to the contract its new build was made
+	// against: under the new Agent, that build is the one that runs.
+	updating := map[string]string{}
 	if !*agentOnly {
 		for _, p := range plugins {
-			updating[p.ID] = p.State == pluginmgr.UpdateNeeded
+			if p.State == pluginmgr.UpdateNeeded {
+				updating[p.ID] = p.OfferedContract
+			}
 		}
 	}
 	if err := updateAgent(ctx, api, plan, updating, *agentOnly); err != nil {
@@ -132,7 +136,7 @@ func cmdUpdate(ctx context.Context, args []string) error {
 // the service, putting the previous build back if the service does not stay
 // up on the new one. It refuses, before replacing anything, a build that
 // would refuse an installed Plugin not in updating.
-func updateAgent(ctx context.Context, api *serverapi.Client, plan selfupdate.Plan, updating map[string]bool, agentOnly bool) error {
+func updateAgent(ctx context.Context, api *serverapi.Client, plan selfupdate.Plan, updating map[string]string, agentOnly bool) error {
 	staged, err := selfupdate.Stage(ctx, api, plan, service.BinaryPath)
 	if err != nil {
 		return err
@@ -148,7 +152,7 @@ func updateAgent(ctx context.Context, api *serverapi.Client, plan selfupdate.Pla
 		if agentOnly {
 			return msg.Err.T("update.strands.agent_only", "Agent {version} would refuse {plugins}, built against a contract it no longer speaks, so nothing was changed. Update the Agent and its Plugins together: sudo easyssl-agent update", "version", plan.Offered, "plugins", names)
 		}
-		return msg.Err.T("update.strands", "Agent {version} would refuse {plugins}, built against a contract it no longer speaks, and the Marketplace offers no other build of them, so nothing was changed", "version", plan.Offered, "plugins", names)
+		return msg.Err.T("update.strands", "Agent {version} would refuse {plugins}, built against a contract it no longer speaks, and the Marketplace offers no build of them it runs, so nothing was changed", "version", plan.Offered, "plugins", names)
 	}
 	if err := selfupdate.Swap(service.BinaryPath, staged); err != nil {
 		_ = os.Remove(staged)

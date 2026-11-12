@@ -9,23 +9,26 @@ import (
 	"testing"
 )
 
-// A new Agent that would refuse an installed Plugin strands it, unless the
-// update about to follow brings that Plugin a new build; a build that cannot
-// say what it accepts strands nothing.
+// A new Agent that would refuse a Plugin strands it: the installed build, or
+// the catalog's build an update is about to replace it with. A build that
+// cannot say what it accepts strands nothing.
 func TestStrands(t *testing.T) {
-	plugins := map[string]string{"nginx": "0.1.0", "apache": "0.2.1", "generic-cli": "0.3.0", "odd": "x"}
+	installed := map[string]string{"nginx": "0.1.0", "apache": "0.2.1", "generic-cli": "0.3.0", "odd": "x"}
 	for _, c := range []struct {
-		name     string
-		accepts  []string
-		updating map[string]bool
-		want     []string
+		name    string
+		accepts []string
+		updates map[string]string
+		want    []string
 	}{
 		{"the same range", []string{"0.3", "0.2"}, nil, []string{"nginx", "odd"}},
-		{"the stranded one is being updated", []string{"0.3", "0.2"}, map[string]bool{"nginx": true}, []string{"odd"}},
+		{"its update runs under the new Agent", []string{"0.3", "0.2"}, map[string]string{"nginx": "0.3.0"}, []string{"odd"}},
+		{"its update does not", []string{"0.3", "0.2"}, map[string]string{"nginx": "0.1.1"}, []string{"nginx", "odd"}},
+		{"an update to a running build is judged by its build", []string{"0.3", "0.2"}, map[string]string{"apache": "0.1.0"}, []string{"apache", "nginx", "odd"}},
+		{"a catalog that does not say", []string{"0.3", "0.2"}, map[string]string{"nginx": ""}, []string{"odd"}},
 		{"an older range", []string{"0.2", "0.1"}, nil, []string{"generic-cli", "odd"}},
 		{"a build that cannot say", nil, nil, nil},
 	} {
-		if got := Strands(c.accepts, plugins, c.updating); !reflect.DeepEqual(got, c.want) {
+		if got := Strands(c.accepts, installed, c.updates); !reflect.DeepEqual(got, c.want) {
 			t.Errorf("%s: Strands = %v, want %v", c.name, got, c.want)
 		}
 	}

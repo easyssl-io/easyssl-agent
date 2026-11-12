@@ -282,7 +282,8 @@ Plugin is asked which one it was built against. An Agent accepts its own
 breaking version and the one before, so a Plugin two behind would stop
 working under it. The update is refused, before anything is replaced, when it
 would leave such a Plugin behind: with `--agent-only` any of them, and
-otherwise one the Marketplace offers no other build of.
+otherwise one whose installed build, or the Marketplace's build about to
+replace it, the new Agent would refuse.
 
 The downloads are outside the contract check, so an Agent the Server refuses
 for its contract version can still update itself. An Agent built before this

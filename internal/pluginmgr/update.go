@@ -27,7 +27,10 @@ const (
 type PluginUpdate struct {
 	ID      string
 	Offered string // the catalog's version, when it offers the Plugin
-	State   UpdateState
+	// OfferedContract is the contract version the catalog's build was made
+	// against, empty when the catalog does not say.
+	OfferedContract string
+	State           UpdateState
 }
 
 // PlanUpdates compares each installed Plugin, or only those named, with the
@@ -58,7 +61,7 @@ func (m *Manager) PlanUpdates(ctx context.Context, ids []string, goos, goarch st
 		case !ok:
 			u.State = UpdateNotOffered
 		default:
-			u.Offered = entry.Version
+			u.Offered, u.OfferedContract = entry.Version, entry.ContractVersion
 			a, ok := artifactFor(entry, goos, goarch)
 			switch {
 			case !ok:

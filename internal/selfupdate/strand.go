@@ -27,19 +27,24 @@ func Accepts(ctx context.Context, path string) []string {
 }
 
 // Strands names the installed Plugins a build accepting the breaking versions
-// accepts would refuse, leaving out those about to be updated, since the
-// update brings their build for it. plugins maps each Plugin to the contract
-// version it answered describe with. An Agent two breaking versions ahead of a
-// Plugin refuses it: every check-in reports it as not answering and every
-// Deployment through it fails, so `update` refuses to strand one.
-func Strands(accepts []string, plugins map[string]string, updating map[string]bool) []string {
+// accepts would refuse. installed maps each Plugin to the contract version it
+// answered describe with; updates maps those about to be updated to the
+// contract version of the build replacing them, which is the one judged, and
+// a Plugin updated from a catalog that does not say is not judged. An Agent
+// two breaking versions ahead of a Plugin refuses it: every check-in reports
+// it as not answering and every Deployment through it fails, so `update`
+// refuses to strand one.
+func Strands(accepts []string, installed map[string]string, updates map[string]string) []string {
 	if len(accepts) == 0 {
 		return nil
 	}
 	var out []string
-	for id, contract := range plugins {
-		if updating[id] {
-			continue
+	for id, contract := range installed {
+		if next, ok := updates[id]; ok {
+			if next == "" {
+				continue
+			}
+			contract = next
 		}
 		breaking, ok := plugincontract.BreakingVersion(contract)
 		if !ok || !contains(accepts, breaking) {
