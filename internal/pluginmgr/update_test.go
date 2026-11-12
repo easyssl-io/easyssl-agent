@@ -10,7 +10,7 @@ import (
 
 // Each installed Plugin is compared with the catalog by digest: the catalog's
 // own bytes are current, others are updated, and one the catalog no longer
-// offers is left alone. Naming one not installed is refused, since an update
+// offers is left alone. Each carries the version its build answers with. Naming one not installed is refused, since an update
 // installs nothing new.
 func TestPlanUpdatesComparesByDigest(t *testing.T) {
 	m := newManager(t, newMarketplace(t, ""), answer(), nil)
@@ -35,6 +35,13 @@ func TestPlanUpdatesComparesByDigest(t *testing.T) {
 	}
 	if got["generic-cli"] != UpdateNeeded || got["retired"] != UpdateNotOffered || len(got) != 2 {
 		t.Fatalf("plan = %+v", plan)
+	}
+	// The installed build's own version, for the plan to show what it
+	// replaces.
+	for _, p := range plan {
+		if p.ID == "generic-cli" && p.Current != answer().Version {
+			t.Fatalf("current = %q, want the installed build's %q", p.Current, answer().Version)
+		}
 	}
 
 	write("generic-cli", artifactBody)

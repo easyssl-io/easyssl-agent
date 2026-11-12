@@ -300,7 +300,7 @@
   "update.restore_failed": "el nuevo Agente no se mantuvo en marcha, y volver a poner el anterior falló: {err}; se conserva como {path}",
   "update.rolled_back": "el servicio no se mantuvo en marcha con el Agente {version}, así que la compilación anterior ({previous}) está de vuelta",
   "update.agent.done": "✓ Agente actualizado a {version}; el servicio se reinició con él",
-  "update.plugin.planned": "Plugin {plugin}: → {offered}",
+  "update.plugin.planned": "Plugin {plugin}: {current} → {offered}",
   "update.plugin.current": "Plugin {plugin}: {offered}, al día",
   "update.plugin.not_offered": "Plugin {plugin}: el Servidor ya no lo ofrece, se deja como está",
   "update.plugin.no_build": "Plugin {plugin}: no hay compilación para la plataforma de este host, se deja como está",

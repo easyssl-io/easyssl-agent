@@ -245,7 +245,7 @@ func printPluginPlan(plugins []pluginmgr.PluginUpdate) {
 	for _, p := range plugins {
 		switch p.State {
 		case pluginmgr.UpdateNeeded:
-			fmt.Println(msg.T("update.plugin.planned", "Plugin {plugin}: → {offered}", "plugin", p.ID, "offered", p.Offered))
+			fmt.Println(msg.T("update.plugin.planned", "Plugin {plugin}: {current} → {offered}", "plugin", p.ID, "current", orUnknown(p.Current), "offered", p.Offered))
 		case pluginmgr.UpdateCurrent:
 			fmt.Println(msg.T("update.plugin.current", "Plugin {plugin}: {offered}, up to date", "plugin", p.ID, "offered", p.Offered))
 		case pluginmgr.UpdateNotOffered:
@@ -254,6 +254,14 @@ func printPluginPlan(plugins []pluginmgr.PluginUpdate) {
 			fmt.Println(msg.T("update.plugin.no_build", "Plugin {plugin}: no build for this host's platform, left as it is", "plugin", p.ID))
 		}
 	}
+}
+
+// orUnknown stands in for a version a Plugin did not give.
+func orUnknown(v string) string {
+	if v == "" {
+		return "?"
+	}
+	return v
 }
 
 func countNeeded(plugins []pluginmgr.PluginUpdate) int {

@@ -25,7 +25,10 @@ const (
 
 // PluginUpdate is one installed Plugin compared with the catalog.
 type PluginUpdate struct {
-	ID      string
+	ID string
+	// Current is the version the installed build answers describe with, empty
+	// when it does not answer.
+	Current string
 	Offered string // the catalog's version, when it offers the Plugin
 	// OfferedContract is the contract version the catalog's build was made
 	// against, empty when the catalog does not say.
@@ -56,6 +59,11 @@ func (m *Manager) PlanUpdates(ctx context.Context, ids []string, goos, goarch st
 			continue
 		}
 		u := PluginUpdate{ID: inst.ID}
+		// describeRaw decodes the answer before judging it, so a build this
+		// Agent refuses still says what it is.
+		if desc, _, _ := m.describeRaw(ctx, inst.Path, inst.ID); desc.Version != "" {
+			u.Current = desc.Version
+		}
 		entry, ok := findPlugin(cat, inst.ID)
 		switch {
 		case !ok:
