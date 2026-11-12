@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/easyssl-io/easyssl-agent/internal/buildinfo"
@@ -19,13 +20,34 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/selfupdate"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-agent/internal/service"
+	"github.com/easyssl-io/easyssl-contract/plugincontract"
 )
 
 // cmdVersion prints this build's version alone, which `update` reads from a
 // downloaded build to know it runs on this host before it replaces this one.
-func cmdVersion() error {
+// With --contracts it prints instead the breaking contract versions this
+// build accepts from a Plugin, which `update` reads to know which installed
+// Plugins the new build would refuse.
+func cmdVersion(args []string) error {
+	fs := newFlagSet("version")
+	contracts := fs.Bool("contracts", false, msg.T("version.flag.contracts", "print the contract versions this Agent accepts from a Plugin"))
+	_ = fs.Parse(args)
+	if *contracts {
+		fmt.Println(strings.Join(acceptedContracts(), " "))
+		return nil
+	}
 	fmt.Println(buildinfo.Version)
 	return nil
+}
+
+// acceptedContracts are the breaking versions plugincontract.Compatible lets
+// through, newest first.
+func acceptedContracts() []string {
+	current, _ := plugincontract.BreakingVersion(plugincontract.ContractVersion)
+	if plugincontract.PreviousBreakingVersion == "" {
+		return []string{current}
+	}
+	return []string{current, plugincontract.PreviousBreakingVersion}
 }
 
 // cmdUpdate brings the Agent, then its Plugins, to the builds the Server's
@@ -86,7 +108,13 @@ func cmdUpdate(ctx context.Context, args []string) error {
 	if !plan.Needed {
 		return updatePlugins(ctx, cfg, api, nil)
 	}
-	if err := updateAgent(ctx, api, plan); err != nil {
+	updating := map[string]bool{}
+	if !*agentOnly {
+		for _, p := range plugins {
+			updating[p.ID] = p.State == pluginmgr.UpdateNeeded
+		}
+	}
+	if err := updateAgent(ctx, api, plan, updating, *agentOnly); err != nil {
 		return err
 	}
 	if pluginsNeeded == 0 {
@@ -102,11 +130,25 @@ func cmdUpdate(ctx context.Context, args []string) error {
 
 // updateAgent replaces the installed Agent with the planned build and restarts
 // the service, putting the previous build back if the service does not stay
-// up on the new one.
-func updateAgent(ctx context.Context, api *serverapi.Client, plan selfupdate.Plan) error {
+// up on the new one. It refuses, before replacing anything, a build that
+// would refuse an installed Plugin not in updating.
+func updateAgent(ctx context.Context, api *serverapi.Client, plan selfupdate.Plan, updating map[string]bool, agentOnly bool) error {
 	staged, err := selfupdate.Stage(ctx, api, plan, service.BinaryPath)
 	if err != nil {
 		return err
+	}
+	contracts, err := pluginmgr.New(api, agentLogger()).Contracts(ctx)
+	if err != nil {
+		_ = os.Remove(staged)
+		return err
+	}
+	if stranded := selfupdate.Strands(selfupdate.Accepts(ctx, staged), contracts, updating); len(stranded) > 0 {
+		_ = os.Remove(staged)
+		names := strings.Join(stranded, ", ")
+		if agentOnly {
+			return msg.Err.T("update.strands.agent_only", "Agent {version} would refuse {plugins}, built against a contract it no longer speaks, so nothing was changed. Update the Agent and its Plugins together: sudo easyssl-agent update", "version", plan.Offered, "plugins", names)
+		}
+		return msg.Err.T("update.strands", "Agent {version} would refuse {plugins}, built against a contract it no longer speaks, and the Marketplace offers no other build of them, so nothing was changed", "version", plan.Offered, "plugins", names)
 	}
 	if err := selfupdate.Swap(service.BinaryPath, staged); err != nil {
 		_ = os.Remove(staged)

@@ -81,7 +81,7 @@ func main() {
 	case "update":
 		err = cmdUpdate(ctx, os.Args[2:])
 	case "version":
-		err = cmdVersion()
+		err = cmdVersion(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return

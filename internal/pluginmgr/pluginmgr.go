@@ -250,6 +250,26 @@ func (m *Manager) List() ([]Installed, error) {
 	return out, nil
 }
 
+// Contracts maps each installed Plugin to the contract version it answers
+// describe with, including one this Agent refuses, so `update` can tell which
+// a newer Agent would refuse. A Plugin that does not answer is left out: it
+// runs under no Agent now.
+func (m *Manager) Contracts(ctx context.Context) (map[string]string, error) {
+	installed, err := m.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(installed))
+	for _, p := range installed {
+		// describeRaw decodes the answer before judging it, so the version is
+		// there when only the contract check failed.
+		if desc, _, _ := m.describeRaw(ctx, p.Path, p.ID); desc.ContractVersion != "" {
+			out[p.ID] = desc.ContractVersion
+		}
+	}
+	return out, nil
+}
+
 // Discover runs every installed Plugin's describe and then its discover, each
 // under the timeout, and returns what the host inventory carries for each: the
 // digest of the bytes on disk and the two answers merged, with the Agent's own

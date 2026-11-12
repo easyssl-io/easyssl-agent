@@ -22,7 +22,7 @@ easyssl-agent register --server <url> [--registration-key <key>] [--agent-name <
 easyssl-agent register --server <url> --reactivation-token <token>    resume a deactivated Agent on this host
 easyssl-agent run                                                     the service loop (periodic check-in)
 easyssl-agent status                                                  print local state and what the Server says
-easyssl-agent version                                                 print this build's version
+easyssl-agent version [--contracts]                                   print this build's version, or the contract versions it accepts from a Plugin
 easyssl-agent update [--check] [--agent-only] [--yes]                 update the Agent, then its Plugins, to the builds the Server offers
 easyssl-agent plugin catalog                                          list the Plugins the Marketplace offers for this host
 easyssl-agent plugin install <name>... [--yes]                        install Plugins from the Marketplace
@@ -273,6 +273,14 @@ runs on this host and is the version offered. Only then is it renamed into
 place, keeping the previous build as `easyssl-agent.prev`, and the service
 restarted. If the service is not active at each of five looks, three seconds
 apart, the previous build is put back and the service restarted on it.
+
+Before the swap, the new build is asked which contract versions it accepts
+from a Plugin (`easyssl-agent version --contracts`), and every installed
+Plugin is asked which one it was built against. An Agent accepts its own
+breaking version and the one before, so a Plugin two behind would stop
+working under it. The update is refused, before anything is replaced, when it
+would leave such a Plugin behind: with `--agent-only` any of them, and
+otherwise one the Marketplace offers no other build of.
 
 The downloads are outside the contract check, so an Agent the Server refuses
 for its contract version can still update itself. An Agent built before this

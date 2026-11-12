@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"github.com/easyssl-io/easyssl-contract/plugincontract"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -106,5 +107,23 @@ func TestStatusNamesAContractRefusal(t *testing.T) {
 	detail, _ := serverState(identity.Config{ServerURL: srv.URL}, "token", nil)
 	if !strings.HasPrefix(detail, "refused (the Server answered, but no longer speaks this Agent's contract "+wire.ContractVersion) {
 		t.Fatalf("status = %q", detail)
+	}
+}
+
+// What `version --contracts` prints is what this build's contract check lets
+// through, so a newer Agent's answer can be trusted by the one it replaces.
+func TestAcceptedContractsAreWhatCompatibleAccepts(t *testing.T) {
+	got := acceptedContracts()
+	if len(got) == 0 {
+		t.Fatal("no accepted contracts")
+	}
+	for _, breaking := range got {
+		if !plugincontract.Compatible(breaking + ".0") {
+			t.Errorf("%s.0 is listed but not Compatible", breaking)
+		}
+	}
+	current, _ := plugincontract.BreakingVersion(plugincontract.ContractVersion)
+	if got[0] != current {
+		t.Errorf("first = %s, want this build's own %s", got[0], current)
 	}
 }
