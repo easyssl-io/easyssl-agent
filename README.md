@@ -27,7 +27,7 @@ easyssl-agent update [--check] [--agent-only] [--yes]                 update the
 easyssl-agent plugin catalog                                          list the Plugins the Marketplace offers for this host
 easyssl-agent plugin install <name>... [--yes]                        install Plugins from the Marketplace
 easyssl-agent plugin list                                             list the installed Plugins
-easyssl-agent plugin update [<name>...] [--check] [--yes]             update the installed Plugins, or those named
+easyssl-agent plugin update [<name>...] [--check] [--allow-downgrade] [--yes]   update the installed Plugins, or those named
 easyssl-agent uninstall [--yes]                                       deactivate and remove the Agent
 easyssl-agent migrate                                                 move what the Plugins serve out of certbot's directories
 easyssl-agent language [<code>]                                       print or change the language the commands speak
@@ -267,6 +267,8 @@ they are, and `--yes` skips the confirmation.
 A build is current when its SHA-256 is the one the catalog lists, whatever its
 version says, and a build offered at a lower version than the running one is
 never taken, so a Server holding an older Agent does not downgrade a host. The
+same holds for each Plugin, except that `plugin update --allow-downgrade`
+installs an older Marketplace build when that is the intent. The
 new build is downloaded beside the installed one as `easyssl-agent.new`, its
 SHA-256 is checked, and it is run once (`easyssl-agent version`) to prove it
 runs on this host and is the version offered. Only then is it renamed into

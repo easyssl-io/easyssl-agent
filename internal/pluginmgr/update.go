@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
+	"github.com/easyssl-io/easyssl-agent/internal/version"
 )
 
 // UpdateState is what `plugin update` does with one installed Plugin.
@@ -21,7 +22,21 @@ const (
 	UpdateNotOffered UpdateState = "not_offered"
 	// UpdateNoBuild: it does, but not for this platform.
 	UpdateNoBuild UpdateState = "no_build"
+	// UpdateOlder: the catalog's build is a lower version than the installed
+	// one, so it is left as it is unless a downgrade is asked for
+	// (AllowDowngrade), as the Agent never downgrades itself.
+	UpdateOlder UpdateState = "older"
 )
+
+// AllowDowngrade marks every UpdateOlder in plan as UpdateNeeded, for
+// `plugin update --allow-downgrade`.
+func AllowDowngrade(plan []PluginUpdate) {
+	for i := range plan {
+		if plan[i].State == UpdateOlder {
+			plan[i].State = UpdateNeeded
+		}
+	}
+}
 
 // PluginUpdate is one installed Plugin compared with the catalog.
 type PluginUpdate struct {
@@ -76,6 +91,8 @@ func (m *Manager) PlanUpdates(ctx context.Context, ids []string, goos, goarch st
 				u.State = UpdateNoBuild
 			case a.SHA256 == inst.Digest:
 				u.State = UpdateCurrent
+			case version.Older(entry.Version, u.Current):
+				u.State = UpdateOlder
 			default:
 				u.State = UpdateNeeded
 			}

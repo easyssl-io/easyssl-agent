@@ -55,3 +55,28 @@ func TestPlanUpdatesComparesByDigest(t *testing.T) {
 		t.Fatalf("naming one not installed = %v", err)
 	}
 }
+
+// A Marketplace build at a lower version than the installed one is left as it
+// is, as the Agent never downgrades itself, unless a downgrade is asked for.
+func TestPlanUpdatesLeavesANewerInstalledBuild(t *testing.T) {
+	newer := answer()
+	newer.Version = "10.0.0" // the catalog offers 9.9.9-catalog-says
+	m := newManager(t, newMarketplace(t, ""), newer, nil)
+	if err := os.MkdirAll(m.installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.installDir, "generic-cli"), []byte("a later build\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := m.PlanUpdates(context.Background(), nil, "linux", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan) != 1 || plan[0].State != UpdateOlder || plan[0].Current != "10.0.0" {
+		t.Fatalf("plan = %+v, want generic-cli left as older", plan)
+	}
+	AllowDowngrade(plan)
+	if plan[0].State != UpdateNeeded {
+		t.Fatalf("after AllowDowngrade = %+v, want it updated", plan)
+	}
+}

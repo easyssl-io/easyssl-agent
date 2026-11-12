@@ -180,6 +180,7 @@ func cmdPluginUpdate(ctx context.Context, args []string) error {
 	fs := newFlagSet("plugin update")
 	yes := fs.Bool("yes", false, msg.T("plugin.update.flag.yes", "update without the confirmation prompt"))
 	check := fs.Bool("check", false, msg.T("update.flag.check", "only say what would be updated"))
+	downgrade := fs.Bool("allow-downgrade", false, msg.T("plugin.update.flag.allow_downgrade", "also install a Marketplace build older than the installed one"))
 	_ = fs.Parse(args)
 	cfg, err := identity.LoadConfig()
 	if err != nil {
@@ -192,6 +193,9 @@ func cmdPluginUpdate(ctx context.Context, args []string) error {
 	plugins, err := pluginmgr.New(api, agentLogger()).PlanUpdates(ctx, fs.Args(), runtime.GOOS, runtime.GOARCH)
 	if err != nil {
 		return err
+	}
+	if *downgrade {
+		pluginmgr.AllowDowngrade(plugins)
 	}
 	printPluginPlan(plugins)
 	if *check {
@@ -252,6 +256,8 @@ func printPluginPlan(plugins []pluginmgr.PluginUpdate) {
 			fmt.Println(msg.T("update.plugin.not_offered", "Plugin {plugin}: no longer offered by the Server, left as it is", "plugin", p.ID))
 		case pluginmgr.UpdateNoBuild:
 			fmt.Println(msg.T("update.plugin.no_build", "Plugin {plugin}: no build for this host's platform, left as it is", "plugin", p.ID))
+		case pluginmgr.UpdateOlder:
+			fmt.Println(msg.T("update.plugin.older", "Plugin {plugin}: {current}, newer than the Marketplace's {offered}, left as it is; `sudo easyssl-agent plugin update --allow-downgrade {plugin}` installs it", "plugin", p.ID, "current", p.Current, "offered", p.Offered))
 		}
 	}
 }

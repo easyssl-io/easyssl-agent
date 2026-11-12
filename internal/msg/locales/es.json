@@ -305,6 +305,8 @@
   "update.plugin.not_offered": "Plugin {plugin}: el Servidor ya no lo ofrece, se deja como está",
   "update.plugin.no_build": "Plugin {plugin}: no hay compilación para la plataforma de este host, se deja como está",
   "plugin.update.flag.yes": "actualizar sin pedir confirmación",
+  "plugin.update.flag.allow_downgrade": "instalar también una compilación del Marketplace anterior a la instalada",
+  "update.plugin.older": "Plugin {plugin}: {current}, más nueva que la {offered} del Marketplace, se deja como está; `sudo easyssl-agent plugin update --allow-downgrade {plugin}` la instala",
   "plugin.update.not_installed": "{plugin} no está instalado en este host; instálalo con `easyssl-agent plugin install {plugin}`",
   "plugin.update.failed": "actualizando {plugin}: {err}",
   "plugin.update.done": "✓ {plugin} actualizado a {version}",
