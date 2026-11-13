@@ -683,6 +683,18 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 		return stateError("plugin install", err)
 	}
 
+	api, err := serverapi.New(cfg.ServerURL)
+	if err != nil {
+		return err
+	}
+	mgr := pluginmgr.New(api, agentLogger())
+	// Refused before the prompt, not after it: a Plugin the Marketplace does not
+	// offer for this host, or one built against a contract this Agent does not
+	// run, would only be refused once authorized.
+	if err := mgr.Installable(ctx, names, runtime.GOOS, runtime.GOARCH); err != nil {
+		return err
+	}
+
 	// Said before anything is installed, because this is when the authorization is
 	// given and it grants more than it looks like: a Plugin runs with this Agent's
 	// privileges, root wherever the Agent is a system service, with no boundary
@@ -708,11 +720,6 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 		}
 	}
 
-	api, err := serverapi.New(cfg.ServerURL)
-	if err != nil {
-		return err
-	}
-	mgr := pluginmgr.New(api, agentLogger())
 	// The host's own platform: an Agent installs for the machine it runs on,
 	// never for another, so there is no flag to get this wrong.
 	out := make([]pluginmgr.Installed, 0, len(names))

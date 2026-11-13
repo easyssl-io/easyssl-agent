@@ -123,6 +123,7 @@
   "plugin.install.other_origin": "el catálogo nombra {url}, que no está en el Servidor",
   "plugin.install.reported": "informado  a {server}",
   "plugin.install.unusable_answer": "la respuesta del Plugin no es utilizable, así que no se instaló: {err}",
+  "plugin.install.refused": "{plugin}: {err}",
   "plugin.install.usage": "uso: easyssl-agent plugin install <name>... [--yes]",
   "plugin.install.warning": "Instalando {plugins} en este host.\n\nUn Plugin se ejecuta con los privilegios de este Agente, que son los de root siempre que el Agente se ejecute como servicio del sistema. Autorizar esta instalación autoriza la ejecución de código con ese nivel en este host: un Plugin puede leer y escribir claves privadas y reiniciar servicios. La comprobación del digest que hace el Servidor es el único límite, y responde si el artefacto es el que easySSL publicó, no qué puede hacer.\n",
   "plugin.install.write_failed": "al escribir el Plugin en disco: {err}",

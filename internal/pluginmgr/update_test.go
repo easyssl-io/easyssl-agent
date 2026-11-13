@@ -85,8 +85,9 @@ func TestPlanUpdatesLeavesANewerInstalledBuild(t *testing.T) {
 }
 
 // A Marketplace build speaking a contract this Agent does not run is left
-// as it is, and neither planning nor installing downloads it; the refusal
-// names the contract this Agent speaks and those it runs.
+// as it is, and neither planning nor installing downloads it, nor does
+// `plugin install` get as far as asking; the refusal names the contract this
+// Agent speaks and those it runs.
 func TestABuildOnAContractThisAgentDoesNotRunIsNeverDownloaded(t *testing.T) {
 	m := newManager(t, newMarketplaceSpeaking(t, "", catalog.PartyFirst, "99.0.0"), answer(), nil)
 	if err := os.MkdirAll(m.installDir, 0o755); err != nil {
@@ -101,6 +102,10 @@ func TestABuildOnAContractThisAgentDoesNotRunIsNeverDownloaded(t *testing.T) {
 	}
 	if len(plan) != 1 || plan[0].State != UpdateNeedsAgent || plan[0].OfferedContract != "99.0.0" {
 		t.Fatalf("plan = %+v, want generic-cli left for a newer Agent", plan)
+	}
+	// What `plugin install` checks before it asks for authorization.
+	if err := m.Installable(context.Background(), []string{"generic-cli"}, "linux", "amd64"); err == nil || !strings.Contains(err.Error(), `"99.0.0"`) {
+		t.Fatalf("installable = %v, want the contract refused", err)
 	}
 	_, err = m.Install(context.Background(), "generic-cli", "linux", "amd64")
 	if err == nil || !strings.Contains(err.Error(), `"99.0.0"`) || !strings.Contains(err.Error(), "speaks contract "+plugincontract.ContractVersion) ||
