@@ -11,6 +11,7 @@ import (
 
 	"github.com/easyssl-io/easyssl-agent/internal/flow"
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
+	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
 	"github.com/easyssl-io/easyssl-contract/catalog"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
@@ -118,7 +119,7 @@ func TestStatusNamesAContractRefusal(t *testing.T) {
 // What `version --contracts` prints is what this build's contract check lets
 // through, so a newer Agent's answer can be trusted by the one it replaces.
 func TestAcceptedContractsAreWhatCompatibleAccepts(t *testing.T) {
-	got := acceptedContracts()
+	got := pluginmgr.AcceptedContracts()
 	if len(got) == 0 {
 		t.Fatal("no accepted contracts")
 	}

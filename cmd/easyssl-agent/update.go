@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -40,21 +41,11 @@ func cmdVersion(args []string) error {
 		return nil
 	}
 	if *contracts {
-		fmt.Println(strings.Join(acceptedContracts(), " "))
+		fmt.Println(strings.Join(pluginmgr.AcceptedContracts(), " "))
 		return nil
 	}
 	fmt.Println(buildinfo.Version)
 	return nil
-}
-
-// acceptedContracts are the breaking versions plugincontract.Compatible lets
-// through, newest first.
-func acceptedContracts() []string {
-	current, _ := plugincontract.BreakingVersion(plugincontract.ContractVersion)
-	if plugincontract.PreviousBreakingVersion == "" {
-		return []string{current}
-	}
-	return []string{current, plugincontract.PreviousBreakingVersion}
 }
 
 // cmdUpdate brings the Agent, then its Plugins, to the builds the Server's
@@ -101,6 +92,16 @@ func cmdUpdate(ctx context.Context, args []string) error {
 		printPluginPlan(plugins)
 	}
 	pluginsNeeded := countNeeded(plugins)
+	// A Plugin whose offered build this Agent does not run may be run by the
+	// new one, which plans again after it replaces this one.
+	pending := map[string]string{}
+	if plan.Needed {
+		for _, p := range plugins {
+			if p.State == pluginmgr.UpdateNeedsAgent {
+				pending[p.ID] = p.OfferedContract
+			}
+		}
+	}
 	if *check {
 		return nil
 	}
@@ -125,10 +126,10 @@ func cmdUpdate(ctx context.Context, args []string) error {
 			}
 		}
 	}
-	if err := updateAgent(ctx, api, plan, updating, *agentOnly); err != nil {
+	if err := updateAgent(ctx, api, plan, updating, pending, *agentOnly); err != nil {
 		return err
 	}
-	if pluginsNeeded == 0 {
+	if pluginsNeeded == 0 && len(pending) == 0 {
 		return nil
 	}
 	// The new build installs the Plugins: it is the one that runs them, and the
@@ -142,8 +143,10 @@ func cmdUpdate(ctx context.Context, args []string) error {
 // updateAgent replaces the installed Agent with the planned build and restarts
 // the service, putting the previous build back if the service does not stay
 // up on the new one. It refuses, before replacing anything, a build that
-// would refuse an installed Plugin not in updating.
-func updateAgent(ctx context.Context, api *serverapi.Client, plan selfupdate.Plan, updating map[string]string, agentOnly bool) error {
+// would refuse an installed Plugin not in updating. A Plugin in pending, whose
+// offered build this Agent does not run, counts as updated when the new build
+// runs that build, since it will then install it, and as left otherwise.
+func updateAgent(ctx context.Context, api *serverapi.Client, plan selfupdate.Plan, updating, pending map[string]string, agentOnly bool) error {
 	staged, err := selfupdate.Stage(ctx, api, plan, service.BinaryPath)
 	if err != nil {
 		return err
@@ -153,7 +156,13 @@ func updateAgent(ctx context.Context, api *serverapi.Client, plan selfupdate.Pla
 		_ = os.Remove(staged)
 		return err
 	}
-	if stranded := selfupdate.Strands(selfupdate.Accepts(ctx, staged), contracts, updating); len(stranded) > 0 {
+	accepts := selfupdate.Accepts(ctx, staged)
+	for id, contract := range pending {
+		if breaking, ok := plugincontract.BreakingVersion(contract); ok && slices.Contains(accepts, breaking) {
+			updating[id] = contract
+		}
+	}
+	if stranded := selfupdate.Strands(accepts, contracts, updating); len(stranded) > 0 {
 		_ = os.Remove(staged)
 		names := strings.Join(stranded, ", ")
 		if agentOnly {
@@ -263,6 +272,9 @@ func printPluginPlan(plugins []pluginmgr.PluginUpdate) {
 			fmt.Println(msg.T("update.plugin.not_offered", "Plugin {plugin}: no longer offered by the Server, left as it is", "plugin", p.ID))
 		case pluginmgr.UpdateNoBuild:
 			fmt.Println(msg.T("update.plugin.no_build", "Plugin {plugin}: no build for this host's platform, left as it is", "plugin", p.ID))
+		case pluginmgr.UpdateNeedsAgent:
+			fmt.Println(msg.T("update.plugin.needs_agent", "Plugin {plugin}: {current}, left as it is; the Marketplace's {offered} is built against contract {contract}, which this Agent does not run (it runs {accepted}), so it needs a newer Agent",
+				"plugin", p.ID, "current", orUnknown(p.Current), "offered", p.Offered, "contract", p.OfferedContract, "accepted", strings.Join(pluginmgr.AcceptedContracts(), ", ")))
 		case pluginmgr.UpdateOlder:
 			fmt.Println(msg.T("update.plugin.older", "Plugin {plugin}: {current}, newer than the Marketplace's {offered}, left as it is; `sudo easyssl-agent plugin update --allow-downgrade {plugin}` installs it", "plugin", p.ID, "current", p.Current, "offered", p.Offered))
 		}

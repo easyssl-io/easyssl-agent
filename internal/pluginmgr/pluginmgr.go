@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -153,6 +154,11 @@ func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (I
 	if entry.Party != catalog.PartyFirst {
 		return Installed{}, msg.Err.T("plugin.install.not_first_party", "{plugin} is not a first-party Plugin, and this Agent installs only those", "plugin", pluginID)
 	}
+	// The catalog says which contract the build speaks, so one this Agent would
+	// refuse is refused before it is downloaded rather than after.
+	if entry.ContractVersion != "" && !plugincontract.Compatible(entry.ContractVersion) {
+		return Installed{}, refusedContract(entry.ContractVersion)
+	}
 	artifact, ok := artifactFor(entry, goos, goarch)
 	if !ok {
 		return Installed{}, ErrNoArtifact
@@ -215,7 +221,7 @@ func (m *Manager) describeRaw(ctx context.Context, path, pluginID string) (plugi
 	// expect a request this Agent does not send, or answer one it cannot read,
 	// so it is refused by name rather than run.
 	if !plugincontract.Compatible(desc.ContractVersion) {
-		return desc, nil, msg.Err.T("plugin.describe.contract", "the Plugin was built against contract version \"{got}\", which this Agent ({own}) does not run", "got", desc.ContractVersion, "own", plugincontract.ContractVersion)
+		return desc, nil, refusedContract(desc.ContractVersion)
 	}
 	if err := plugincontract.ValidateDescribe(desc); err != nil {
 		return desc, nil, err
@@ -678,4 +684,22 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	return b.buf.Write(p)
+}
+
+// AcceptedContracts are the breaking contract versions this Agent runs a
+// Plugin built against, the ones plugincontract.Compatible lets through,
+// newest first.
+func AcceptedContracts() []string {
+	current, _ := plugincontract.BreakingVersion(plugincontract.ContractVersion)
+	if plugincontract.PreviousBreakingVersion == "" {
+		return []string{current}
+	}
+	return []string{current, plugincontract.PreviousBreakingVersion}
+}
+
+// refusedContract is the error for a Plugin build on contract got, which this
+// Agent does not run, naming the contract it speaks and those it runs.
+func refusedContract(got string) error {
+	return msg.Err.T("plugin.describe.contract", "the Plugin was built against contract version \"{got}\", which this Agent does not run: it speaks contract {own} and runs Plugins built against {accepted}",
+		"got", got, "own", plugincontract.ContractVersion, "accepted", strings.Join(AcceptedContracts(), ", "))
 }

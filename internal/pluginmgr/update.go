@@ -6,6 +6,7 @@ import (
 
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-agent/internal/version"
+	"github.com/easyssl-io/easyssl-contract/plugincontract"
 )
 
 // UpdateState is what `plugin update` does with one installed Plugin.
@@ -26,6 +27,10 @@ const (
 	// one, so it is left as it is unless a downgrade is asked for
 	// (AllowDowngrade), as the Agent never downgrades itself.
 	UpdateOlder UpdateState = "older"
+	// UpdateNeedsAgent: the catalog's build speaks a contract this Agent does
+	// not run, so it is left as it is, without downloading it; a newer Agent
+	// may run it.
+	UpdateNeedsAgent UpdateState = "needs_agent"
 )
 
 // AllowDowngrade marks every UpdateOlder in plan as UpdateNeeded, for
@@ -93,6 +98,8 @@ func (m *Manager) PlanUpdates(ctx context.Context, ids []string, goos, goarch st
 				u.State = UpdateCurrent
 			case version.Older(entry.Version, u.Current):
 				u.State = UpdateOlder
+			case entry.ContractVersion != "" && !plugincontract.Compatible(entry.ContractVersion):
+				u.State = UpdateNeedsAgent
 			default:
 				u.State = UpdateNeeded
 			}

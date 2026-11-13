@@ -6,6 +6,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/easyssl-io/easyssl-contract/catalog"
+	"github.com/easyssl-io/easyssl-contract/plugincontract"
 )
 
 // Each installed Plugin is compared with the catalog by digest: the catalog's
@@ -78,5 +81,30 @@ func TestPlanUpdatesLeavesANewerInstalledBuild(t *testing.T) {
 	AllowDowngrade(plan)
 	if plan[0].State != UpdateNeeded {
 		t.Fatalf("after AllowDowngrade = %+v, want it updated", plan)
+	}
+}
+
+// A Marketplace build speaking a contract this Agent does not run is left
+// as it is, and neither planning nor installing downloads it; the refusal
+// names the contract this Agent speaks and those it runs.
+func TestABuildOnAContractThisAgentDoesNotRunIsNeverDownloaded(t *testing.T) {
+	m := newManager(t, newMarketplaceSpeaking(t, "", catalog.PartyFirst, "99.0.0"), answer(), nil)
+	if err := os.MkdirAll(m.installDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(m.installDir, "generic-cli"), []byte("an older build\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := m.PlanUpdates(context.Background(), nil, "linux", "amd64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan) != 1 || plan[0].State != UpdateNeedsAgent || plan[0].OfferedContract != "99.0.0" {
+		t.Fatalf("plan = %+v, want generic-cli left for a newer Agent", plan)
+	}
+	_, err = m.Install(context.Background(), "generic-cli", "linux", "amd64")
+	if err == nil || !strings.Contains(err.Error(), `"99.0.0"`) || !strings.Contains(err.Error(), "speaks contract "+plugincontract.ContractVersion) ||
+		!strings.Contains(err.Error(), strings.Join(AcceptedContracts(), ", ")) {
+		t.Fatalf("install = %v, want a refusal naming both contracts", err)
 	}
 }
