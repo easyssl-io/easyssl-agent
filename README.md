@@ -22,7 +22,7 @@ easyssl-agent register --server <url> [--registration-key <key>] [--agent-name <
 easyssl-agent register --server <url> --reactivation-token <token>    resume a deactivated Agent on this host
 easyssl-agent run                                                     the service loop (periodic check-in)
 easyssl-agent status                                                  print local state and what the Server says
-easyssl-agent version [--contracts]                                   print this build's version, or the contract versions it accepts from a Plugin
+easyssl-agent version [--contract | --contracts]                      print this build's version, the contract version it speaks, or those it accepts from a Plugin
 easyssl-agent update [--check] [--agent-only] [--yes]                 update the Agent, then its Plugins, to the builds the Server offers
 easyssl-agent plugin catalog                                          list the Plugins the Marketplace offers for this host
 easyssl-agent plugin install <name>... [--yes]                        install Plugins from the Marketplace
