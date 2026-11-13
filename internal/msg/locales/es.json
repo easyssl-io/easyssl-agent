@@ -290,6 +290,7 @@
   "update.strands.agent_only": "el Agente {version} rechazaría {plugins}, compilados para un contrato que ya no habla, así que no se cambió nada. Actualiza el Agente y sus Plugins juntos: sudo easyssl-agent update",
   "update.strands": "el Agente {version} rechazaría {plugins}, compilados para un contrato que ya no habla, y el Marketplace no ofrece ninguna compilación de ellos que ejecute, así que no se cambió nada",
   "version.flag.contracts": "imprimir las versiones de contrato que este Agente acepta de un Plugin",
+  "version.flag.contract": "imprimir la versión de contrato que habla este Agente",
   "update.flag.check": "solo decir qué se actualizaría",
   "update.flag.agent_only": "actualizar el Agente y dejar los Plugins como están",
   "update.agent.planned": "Agente: {current} → {offered}",

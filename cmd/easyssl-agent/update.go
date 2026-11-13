@@ -21,17 +21,24 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-agent/internal/service"
 	"github.com/easyssl-io/easyssl-contract/plugincontract"
+	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
 // cmdVersion prints this build's version alone, which `update` reads from a
 // downloaded build to know it runs on this host before it replaces this one.
 // With --contracts it prints instead the breaking contract versions this
 // build accepts from a Plugin, which `update` reads to know which installed
-// Plugins the new build would refuse.
+// Plugins the new build would refuse; with --contract the contract version it
+// speaks, which a release records.
 func cmdVersion(args []string) error {
 	fs := newFlagSet("version")
 	contracts := fs.Bool("contracts", false, msg.T("version.flag.contracts", "print the contract versions this Agent accepts from a Plugin"))
+	contract := fs.Bool("contract", false, msg.T("version.flag.contract", "print the contract version this Agent speaks"))
 	_ = fs.Parse(args)
+	if *contract {
+		fmt.Println(wire.ContractVersion)
+		return nil
+	}
 	if *contracts {
 		fmt.Println(strings.Join(acceptedContracts(), " "))
 		return nil
