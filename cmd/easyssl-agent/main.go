@@ -803,7 +803,7 @@ func cmdPluginCatalog(ctx context.Context, args []string) error {
 		return nil
 	}
 	for _, e := range entries {
-		fmt.Printf("%-16s v%-10s %s\n", e.ID, e.Version, e.Party)
+		fmt.Println(catalogEntryLine(e))
 		// The Plugin's own text, in this host's language when the Plugin
 		// supplies it and in English otherwise.
 		if description := e.Description.In(msg.Language()); description != "" {
@@ -841,12 +841,30 @@ func cmdPluginList(args []string) error {
 	return nil
 }
 
+// catalogEntryLine heads one Marketplace entry: its id, the version offered
+// and the contract that build speaks, which decides whether this Agent can
+// run it. Who publishes it is on a line of its own below.
+func catalogEntryLine(e catalog.Plugin) string {
+	line := fmt.Sprintf("%-16s v%-10s", e.ID, e.Version)
+	if e.ContractVersion != "" {
+		line += " " + msg.T("plugin.catalog.contract", "contract {contract}", "contract", e.ContractVersion)
+	}
+	return line
+}
+
+// pluginListLine is one installed Plugin: its version, the contract version it
+// reported speaking, which decides whether this Agent runs it, and its digest.
 func pluginListLine(p wire.PluginInventory) string {
 	if p.Unobserved {
-		return msg.T("plugin.list.unobserved", "{id} {version} sha256:{digest}  (did not answer discover)",
-			"id", fmt.Sprintf("%-16s", p.ID), "version", fmt.Sprintf("%-11s", "?"), "digest", p.SHA256)
+		return msg.T("plugin.list.unobserved", "{id} {version} contract {contract} sha256:{digest}  (did not answer discover)",
+			"id", fmt.Sprintf("%-16s", p.ID), "version", fmt.Sprintf("%-11s", "?"), "contract", fmt.Sprintf("%-7s", "?"), "digest", p.SHA256)
 	}
 	var desc plugincontract.DescribeResponse
 	_ = json.Unmarshal(p.Describe, &desc) // checked already by Discover
-	return fmt.Sprintf("%-16s v%-10s sha256:%s", p.ID, desc.Version, p.SHA256)
+	contract := desc.ContractVersion
+	if contract == "" {
+		contract = "?"
+	}
+	return msg.T("plugin.list.line", "{id} {version} contract {contract} sha256:{digest}",
+		"id", fmt.Sprintf("%-16s", p.ID), "version", fmt.Sprintf("v%-10s", desc.Version), "contract", fmt.Sprintf("%-7s", contract), "digest", p.SHA256)
 }

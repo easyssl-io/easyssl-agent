@@ -11,15 +11,20 @@ import (
 
 	"github.com/easyssl-io/easyssl-agent/internal/flow"
 	"github.com/easyssl-io/easyssl-agent/internal/identity"
+	"github.com/easyssl-io/easyssl-contract/catalog"
 	"github.com/easyssl-io/easyssl-contract/wire"
 )
 
-func TestPluginListLineShowsFullSHA256(t *testing.T) {
+func TestPluginListLineShowsContractAndFullSHA256(t *testing.T) {
 	digest := strings.Repeat("ab", 32)
-	got := pluginListLine(wire.PluginInventory{ID: "generic-cli", Describe: []byte(`{"version":"0.0.1"}`), SHA256: digest})
-	want := "generic-cli      v0.0.1      sha256:" + digest
+	got := pluginListLine(wire.PluginInventory{ID: "generic-cli", Describe: []byte(`{"contractVersion":"0.2.0","version":"0.0.1"}`), SHA256: digest})
+	want := "generic-cli      v0.0.1      contract 0.2.0   sha256:" + digest
 	if got != want {
 		t.Fatalf("plugin list line = %q, want %q", got, want)
+	}
+	// A build older than the field names no contract.
+	if got := pluginListLine(wire.PluginInventory{ID: "generic-cli", Describe: []byte(`{"version":"0.0.1"}`), SHA256: digest}); !strings.Contains(got, "contract ?") {
+		t.Fatalf("no contract: %q", got)
 	}
 	unobserved := pluginListLine(wire.PluginInventory{ID: "generic-cli", SHA256: digest, Unobserved: true})
 	if !strings.Contains(unobserved, "did not answer discover") || !strings.Contains(unobserved, digest) {
@@ -125,5 +130,17 @@ func TestAcceptedContractsAreWhatCompatibleAccepts(t *testing.T) {
 	current, _ := plugincontract.BreakingVersion(plugincontract.ContractVersion)
 	if got[0] != current {
 		t.Errorf("first = %s, want this build's own %s", got[0], current)
+	}
+}
+
+// A catalog entry heads with its version and contract, not with its party,
+// which "by <publisher>" below already says.
+func TestCatalogEntryLineShowsTheContractAndNotTheParty(t *testing.T) {
+	got := catalogEntryLine(catalog.Plugin{ID: "nginx", Version: "0.2.0", ContractVersion: "0.2.0", Party: catalog.PartyFirst})
+	if want := "nginx            v0.2.0      contract 0.2.0"; got != want {
+		t.Fatalf("catalog line = %q, want %q", got, want)
+	}
+	if got := catalogEntryLine(catalog.Plugin{ID: "nginx", Version: "0.2.0"}); strings.Contains(got, "contract") {
+		t.Fatalf("no contract: %q", got)
 	}
 }
