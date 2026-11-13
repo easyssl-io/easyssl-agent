@@ -80,11 +80,17 @@ type Downloader interface {
 	Download(ctx context.Context, url string) (io.ReadCloser, error)
 }
 
-// Stage downloads the build beside binary, as binary + ".new", checks its
+// Staged and Previous are the files an update keeps beside the binary: the
+// build being installed, and the one it replaced, kept for a rollback.
+// Uninstall removes them with the binary.
+func Staged(binary string) string   { return binary + ".new" }
+func Previous(binary string) string { return binary + ".prev" }
+
+// Stage downloads the build beside binary, as Staged(binary), checks its
 // digest and that it runs here and reports the version it was offered as, and
 // returns its path. Nothing replaces the running build yet.
 func Stage(ctx context.Context, d Downloader, p Plan, binary string) (string, error) {
-	staged := binary + ".new"
+	staged := Staged(binary)
 	body, err := d.Download(ctx, p.Artifact.URL)
 	if err != nil {
 		return "", msg.Err.T("update.download_failed", "downloading the Agent: {err}", "err", err)
@@ -115,7 +121,7 @@ func Stage(ctx context.Context, d Downloader, p Plan, binary string) (string, er
 	// replaces one that can.
 	vctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	// #nosec G204 -- staged is binary + ".new", written above and checked
+	// #nosec G204 -- staged is Staged(binary), written above and checked
 	// against the catalog's digest.
 	out, err := exec.CommandContext(vctx, staged, "version").Output()
 	if got := string(bytes.TrimSpace(out)); err != nil || (p.Offered != "" && got != p.Offered) {
@@ -128,11 +134,11 @@ func Stage(ctx context.Context, d Downloader, p Plan, binary string) (string, er
 	return staged, nil
 }
 
-// Swap keeps the running build as binary + ".prev" and renames the staged
+// Swap keeps the running build as Previous(binary) and renames the staged
 // one into its place, which the running process survives: it keeps the inode
 // it was started from.
 func Swap(binary, staged string) error {
-	prev := binary + ".prev"
+	prev := Previous(binary)
 	_ = os.Remove(prev)
 	if err := os.Link(binary, prev); err != nil {
 		return msg.Err.T("update.keep_previous_failed", "keeping the previous Agent as {path}: {err}", "path", prev, "err", err)
@@ -145,7 +151,7 @@ func Swap(binary, staged string) error {
 
 // Restore puts the build Swap kept back in place.
 func Restore(binary string) error {
-	if err := os.Rename(binary+".prev", binary); err != nil {
+	if err := os.Rename(Previous(binary), binary); err != nil {
 		return err
 	}
 	return syncDir(filepath.Dir(binary))

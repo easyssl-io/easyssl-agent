@@ -30,6 +30,7 @@ import (
 	"github.com/easyssl-io/easyssl-agent/internal/keystore"
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
 	"github.com/easyssl-io/easyssl-agent/internal/pluginmgr"
+	"github.com/easyssl-io/easyssl-agent/internal/selfupdate"
 	"github.com/easyssl-io/easyssl-agent/internal/serverapi"
 	"github.com/easyssl-io/easyssl-agent/internal/service"
 	"github.com/easyssl-io/easyssl-agent/internal/termio"
@@ -550,7 +551,7 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 		deactivateOnServer(ctx, cfg, token)
 	}
 
-	hadUnit, hadState, hadBinary := service.Installed(), exists(identity.ConfigPath()) || exists(identity.TokenPath()), exists(service.BinaryPath)
+	hadUnit, hadState := service.Installed(), exists(identity.ConfigPath()) || exists(identity.TokenPath())
 
 	if err := service.Uninstall(); err != nil && !errors.Is(err, service.ErrUnsupportedInit) {
 		return msg.Err.T("uninstall.remove_service", "removing the service: {err}", "err", err)
@@ -566,14 +567,15 @@ func Uninstall(ctx context.Context, assumeYes bool) error {
 		fmt.Println(msg.T("uninstall.state_removed", "✓ {config} and {token} deleted", "config", identity.ConfigPath(), "token", identity.TokenPath()))
 	}
 
-	if err := os.Remove(service.BinaryPath); err != nil && !os.IsNotExist(err) {
-		return msg.Err.T("uninstall.remove_binary", "removing {path}: {err}", "path", service.BinaryPath, "err", err)
+	removed, err := removeBinaries(service.BinaryPath)
+	for _, path := range removed {
+		fmt.Println(msg.T("uninstall.binary_removed", "✓ {path} deleted", "path", path))
 	}
-	if hadBinary {
-		fmt.Println(msg.T("uninstall.binary_removed", "✓ {path} deleted", "path", service.BinaryPath))
+	if err != nil {
+		return err
 	}
 
-	if !hadUnit && !hadState && !hadBinary {
+	if !hadUnit && !hadState && len(removed) == 0 {
 		fmt.Println(msg.T("uninstall.nothing_to_remove", "Nothing to remove; this host has no easySSL Agent installed."))
 		return nil
 	}
@@ -890,4 +892,22 @@ func isTerminal(f *os.File) bool {
 		return false
 	}
 	return fi.Mode()&os.ModeCharDevice != 0
+}
+
+// removeBinaries deletes the Agent binary and the builds an update keeps
+// beside it, the one it replaced and one it was staging, and says which of
+// them there were: an Agent left as easyssl-agent.prev is still a root-owned
+// executable on the host.
+func removeBinaries(binary string) ([]string, error) {
+	var removed []string
+	for _, path := range []string{binary, selfupdate.Previous(binary), selfupdate.Staged(binary)} {
+		err := os.Remove(path)
+		switch {
+		case err == nil:
+			removed = append(removed, path)
+		case !os.IsNotExist(err):
+			return removed, msg.Err.T("uninstall.remove_binary", "removing {path}: {err}", "path", path, "err", err)
+		}
+	}
+	return removed, nil
 }

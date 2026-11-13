@@ -389,7 +389,7 @@ removing it: the token stops working, and the Agent's Targets, key records and
 history stay in the web console, where a reactivation command can bring the
 same Agent back on this host or another. Then, whether or not the Server could
 be reached, it stops and removes the service, deletes `/etc/easyssl/config.json`
-and `/var/lib/easyssl/agent.token`, and deletes the binary. It asks for confirmation,
+and `/var/lib/easyssl/agent.token`, and deletes the binary, with the previous build an update kept beside it. It asks for confirmation,
 refusing to run unattended unless `--yes` is passed, and is idempotent on a
 host with nothing or only remnants installed.
 
