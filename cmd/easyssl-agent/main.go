@@ -404,15 +404,16 @@ func cmdRun(ctx context.Context, args []string) error {
 			// Like a revoked token, the service stays up and does no work, but it
 			// says so where an operator looks: the journal, at error level, and the
 			// unit's status line, which otherwise kept reading as healthy. The
-			// Server records the refusal too, and the Agent's page in the web
-			// console gives the command that updates it.
+			// Server records the refusal too. The command named is this Agent's
+			// own `update`, which an Agent able to say this has, and which the
+			// Agent's page in the web console gives too.
 			if refusedSince.IsZero() || time.Since(refusedSince) > 30*time.Minute {
 				refusedSince = time.Now()
 				logger.Error("the Server refuses this Agent: it no longer speaks the contract version this Agent was built against",
 					"server", cfg.ServerURL, "contract", wire.ContractVersion,
-					"next", "update the Agent with the command on its page in the web console, which re-runs the installer and keeps this registration")
+					"next", "update the Agent with `sudo easyssl-agent update`, which keeps this registration")
 			}
-			sdnotify.Status("Refused by the Server: it no longer speaks contract " + wire.ContractVersion + ". Update the Agent with the command on its page in the web console.")
+			sdnotify.Status("Refused by the Server: it no longer speaks contract " + wire.ContractVersion + ". Update the Agent: sudo easyssl-agent update")
 		} else if isUnknownToken(err) {
 			// Deactivated or removed in the web console. The service keeps running and
 			// stops doing work: this Agent belongs to the host, so a decision taken in
@@ -627,7 +628,7 @@ func serverState(cfg identity.Config, token string, tokenErr error) (detail stri
 	case err == nil:
 		return resp.Status, resp
 	case isContractUnsupported(err):
-		return msg.T("status.state.contract_refused", "refused (the Server answered, but no longer speaks this Agent's contract {version}; update the Agent with the command on its page in the web console)", "version", wire.ContractVersion), reg
+		return msg.T("status.state.contract_refused", "refused (the Server answered, but no longer speaks this Agent's contract {version}; update the Agent: sudo easyssl-agent update)", "version", wire.ContractVersion), reg
 	case isUnknownToken(err):
 		return msg.T("status.state.token_rejected", "not registered (the Server rejected this token; the Agent was deactivated or removed there)"), reg
 	default:
