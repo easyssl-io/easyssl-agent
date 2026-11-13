@@ -16,8 +16,8 @@
 # contract version it speaks and each build's SHA-256. A Server carries that
 # file, so its Marketplace lists every release, and a host running one of
 # those digests runs that release. The first release recorded this way also
-# records the earlier tags, without digests, since their bytes were never
-# published. Everything is committed and the commit tagged `v<VERSION>`.
+# records the earlier tags, rebuilt for their digests. Everything is committed
+# and the commit tagged `v<VERSION>`.
 #
 # Pushing and publishing are left to the caller:
 #

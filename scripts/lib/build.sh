@@ -4,8 +4,12 @@
 
 # The platforms a release is built for, and the flags: -trimpath drops
 # absolute paths, -buildid= the build id and -buildvcs=false the VCS stamp, so
-# a digest identifies the source and the version stamped into it, and a later
-# build of the same tag with the same Go toolchain has the same bytes.
+# a digest identifies the source, the version stamped into it and the Go
+# toolchain. That toolchain is the Go version go.mod names at the tag, through
+# GOTOOLCHAIN, which fetches it when another is installed: a build of a tag is
+# then the same bytes on any machine, so anyone can check a published build
+# against its record, and seeding can record the digests of tags released
+# before releases.json existed.
 PLATFORMS="linux/amd64 linux/arm64"
 VERSION_VAR=github.com/easyssl-io/easyssl-agent/internal/buildinfo.Version
 
@@ -18,10 +22,11 @@ sha256() {
 # builds as the JSON array a release records.
 build_release() {
   dir=$1 version=$2 out=$3
+  toolchain=go$(awk '/^go /{print $2}' "$dir/go.mod")
   json='[]'
   for p in $PLATFORMS; do
     os=${p%/*} arch=${p#*/}
-    (cd "$dir" && GOWORK=off CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
+    (cd "$dir" && GOTOOLCHAIN=$toolchain GOWORK=off CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
       go build -trimpath -buildvcs=false -ldflags "-s -w -buildid= -X $VERSION_VAR=$version" -o "$out/easyssl-agent-$os-$arch" ./cmd/easyssl-agent)
     json=$(printf '%s' "$json" | jq -c --arg os "$os" --arg arch "$arch" --arg sha "$(sha256 "$out/easyssl-agent-$os-$arch")" \
       '. + [{os: $os, arch: $arch, sha256: $sha}]')
@@ -37,27 +42,35 @@ contract_at() {
     sed -n 's#^require github.com/easyssl-io/easyssl-contract v\(.*\)$#\1#p; s#^[[:space:]]*github.com/easyssl-io/easyssl-contract v\([^ ]*\).*$#\1#p' "$1/go.mod" | head -1
 }
 
-# release_record VERSION DATE CONTRACT BUILDS prints one release record; BUILDS
-# is a JSON array, empty for a release whose bytes were never published.
+# release_record VERSION DATE CONTRACT BUILDS prints one release record,
+# BUILDS being the JSON array build_release printed.
 release_record() {
   jq -n -c --arg v "$1" --arg d "$2" --arg c "$3" --argjson b "$4" \
-    '{version: $v, date: $d, contractVersion: $c} + (if ($b | length) > 0 then {builds: $b} else {} end)'
+    '{version: $v, date: $d, contractVersion: $c, builds: $b}'
 }
 
 # seed_records TAG prints the records of the release tags before TAG, newest
-# first and without builds: what releases.json starts with.
+# first, each with the digests of its builds: what releases.json starts with.
+# A tag that no longer builds is left out, with a warning.
 seed_records() {
   skip=$1
   seed=$(mktemp -d)
+  # A tag whose go.mod points the contract at a sibling directory finds it
+  # beside the worktree too.
+  [ ! -d ../contract ] || ln -s "$(cd ../contract && pwd)" "$seed/contract"
   out='[]'
   for t in $(git tag --list 'v*' --sort=-version:refname); do
     v=${t#v}
     case $v in *-*) continue ;; esac
     [ "$t" != "$skip" ] || continue
     rm -rf "$seed/tree" && git worktree add -q --detach "$seed/tree" "$t"
-    c=$(contract_at "$seed/tree")
-    d=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%d "$t")
-    out=$(printf '%s' "$out" | jq -c --argjson e "$(release_record "$v" "$d" "$c" '[]')" '. + [$e]')
+    if b=$(build_release "$seed/tree" "$v" "$seed" 2>"$seed/err"); then
+      c=$(contract_at "$seed/tree")
+      d=$(TZ=UTC git log -1 --format=%cd --date=format-local:%Y-%m-%d "$t")
+      out=$(printf '%s' "$out" | jq -c --argjson e "$(release_record "$v" "$d" "$c" "$b")" '. + [$e]')
+    else
+      echo "warning: $t does not build, so it is not recorded: $(head -1 "$seed/err")" >&2
+    fi
     git worktree remove --force "$seed/tree"
   done
   rm -rf "$seed"

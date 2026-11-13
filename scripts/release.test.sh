@@ -36,15 +36,15 @@ entry() { # entry VERSION, committed
 expect 1 "a version CHANGELOG.md has no entry for" scripts/release.sh 0.901.0
 grep -q 'CHANGELOG.md has no' "$work/out" || { echo "FAIL: the refusal does not name CHANGELOG.md"; fail=1; }
 # A release tagged before releases.json existed, which the first recorded
-# release records too, without builds.
+# release records too, rebuilt for its digests.
 git tag v0.900.0
 entry 0.901.0
 expect 0 "a release" scripts/release.sh 0.901.0
 [ "$(git tag --points-at HEAD)" = v0.901.0 ] || { echo "FAIL: v0.901.0 is not on the release commit"; fail=1; }
 [ -f internal/identity/testdata/v0.901.0/config.json ] || { echo "FAIL: no copy of the config examples"; fail=1; }
 [ "$(jq -r '[.[].version] | join(" ")' releases.json)" = "0.901.0 0.900.0" ] || { echo "FAIL: releases recorded: $(jq -c '[.[].version]' releases.json)"; fail=1; }
-[ "$(jq '.[0].builds | length' releases.json)" = 2 ] && [ "$(jq '.[1] | has("builds")' releases.json)" = false ] ||
-  { echo "FAIL: not one build per platform for the release, or builds for the earlier tag"; fail=1; }
+[ "$(jq '.[0].builds | length' releases.json)" = 2 ] && [ "$(jq '.[1].builds | length' releases.json)" = 2 ] ||
+  { echo "FAIL: not one build per platform for the release and for the earlier tag"; fail=1; }
 [ "$(jq -r '.[0].contractVersion' releases.json)" = "$(GOWORK=off go run ./cmd/easyssl-agent version --contract)" ] ||
   { echo "FAIL: the contract version recorded is not the one the build speaks"; fail=1; }
 expect 1 "a version already tagged" scripts/release.sh 0.901.0
@@ -69,6 +69,12 @@ grep -qx 'v0.901.1' "$work/gh-args" || { echo "FAIL: gh was not asked for the re
 for f in easyssl-agent-linux-amd64 easyssl-agent-linux-arm64 SHA256SUMS; do
   [ -f "$work/published/$f" ] || { echo "FAIL: $f was not published"; fail=1; }
 done
-[ "$(cut -d' ' -f1 "$work/published/SHA256SUMS" | sort | tr '\n' ' ')" = "$(jq -r '.[0].builds[].sha256' releases.json | sort | tr '\n' ' ')" ] ||
+[ "$(cut -d' ' -f1 "$work/published/SHA256SUMS" | sort | tr '\n' ' ')" = "$(jq -r '.[] | select(.version == "0.901.1") | .builds[].sha256' releases.json | sort | tr '\n' ' ')" ] ||
   { echo "FAIL: SHA256SUMS does not list the recorded digests"; fail=1; }
+# The earlier tag has no releases.json of its own; the record at HEAD is used.
+rm -f "$work/published"/*
+git push -q origin v0.900.0
+expect 0 "publishing a release tagged before releases.json" env PATH="$work/bin:$PATH" scripts/publish-release.sh 0.900.0
+[ "$(cut -d' ' -f1 "$work/published/SHA256SUMS" | sort | tr '\n' ' ')" = "$(jq -r '.[] | select(.version == "0.900.0") | .builds[].sha256' releases.json | sort | tr '\n' ' ')" ] ||
+  { echo "FAIL: the earlier release is not published with its recorded digests"; fail=1; }
 exit "$fail"
