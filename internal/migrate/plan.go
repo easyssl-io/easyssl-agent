@@ -76,7 +76,12 @@ func (s *session) plan(chosen, items []*item) (*migration, error) {
 
 		ps := byPlugin[it.obs]
 		if ps == nil {
-			ps = &pluginStep{obs: it.obs, req: plugincontract.RelocateRequest{Moves: []plugincontract.Move{}, References: []plugincontract.Reference{}}}
+			ps = &pluginStep{obs: it.obs, req: plugincontract.RelocateRequest{
+				Moves: []plugincontract.Move{}, References: []plugincontract.Reference{},
+				// Left by the Plugin on each line it changes, in the language
+				// this command speaks, for whoever reads the file later.
+				Note: msg.T("migrate.note", `now managed by easySSL; check the other "managed by Certbot" lines`),
+			}}
 			byPlugin[it.obs] = ps
 			m.plugins = append(m.plugins, ps)
 			picked[it.obs] = map[int]bool{}

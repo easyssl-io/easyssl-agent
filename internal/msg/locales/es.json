@@ -341,5 +341,6 @@
   "help.update.summary": "Actualiza el Agente y después sus Plugins a las versiones que ofrece el Servidor de este Agente.",
   "help.update.usage": "uso: easyssl-agent update [opciones]",
   "help.version.summary": "Muestra la versión de este Agente.",
-  "help.version.usage": "uso: easyssl-agent version [opciones]"
+  "help.version.usage": "uso: easyssl-agent version [opciones]",
+  "migrate.note": "ahora lo gestiona easySSL; revisa las otras líneas \"managed by Certbot\""
 }
