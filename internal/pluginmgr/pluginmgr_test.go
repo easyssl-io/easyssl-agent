@@ -482,7 +482,7 @@ func TestDiscoverMarksTargetsOnManagedPaths(t *testing.T) {
 	if len(ts) != 2 || ts[0].NewField != "kept" || len(ts[0].Warnings) != 1 {
 		t.Fatalf("targets = %+v", ts)
 	}
-	if w := ts[0].Warnings[0]; !strings.Contains(w["en"], "certbot's directory `/etc/letsencrypt`") || w["es"] == "" {
+	if w := ts[0].Warnings[0]; !strings.Contains(w["en"], "Certbot manages `/etc/letsencrypt`") || w["es"] == "" {
 		t.Fatalf("warning = %v", w)
 	}
 	// The other Target keeps exactly the Plugin's own warning.

@@ -273,10 +273,10 @@ func TestAManagedPathIsRefusedBeforeThePluginRuns(t *testing.T) {
 		t.Fatal("the Plugin ran")
 	}
 	en := res.AgentMessage["en"]
-	if !strings.HasPrefix(en, "easySSL does not write to `/etc/letsencrypt/live/example.com/fullchain.pem`, so the nginx Plugin was not run. It is in certbot's directory `/etc/letsencrypt`") {
+	if !strings.HasPrefix(en, "easySSL does not write to `/etc/letsencrypt/live/example.com/fullchain.pem`, so the nginx Plugin was not run. Certbot manages `/etc/letsencrypt`") {
 		t.Fatalf("AgentMessage = %q", en)
 	}
-	if es := res.AgentMessage["es"]; !strings.Contains(es, "directorio de certbot") {
+	if es := res.AgentMessage["es"]; !strings.Contains(es, "Certbot gestiona `/etc/letsencrypt`") {
 		t.Fatalf("Spanish AgentMessage = %q", es)
 	}
 

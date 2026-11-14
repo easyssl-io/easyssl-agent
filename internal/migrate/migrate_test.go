@@ -219,7 +219,7 @@ func TestMigrateMovesACertbotCertificate(t *testing.T) {
 		"certbot directory /etc/letsencrypt, with 2 certificates, checked because:\n    it is certbot's default directory\n\n",
 		"  certbot certificate example.com in /etc/letsencrypt:\n    1. nginx  /etc/letsencrypt/archive/example.com/fullchain1.pem  example.com",
 		"Fix first, since its Plugin reports more than certbot's directory:\n    nginx  /etc/letsencrypt/archive/other.example/fullchain1.pem  other.example\n        - It is also named by `SSLCertificateChainFile`.",
-		"Cannot be moved by this command:\n    nginx  /etc/nginx/ssl/copy.pem  example.com\n        - It is identical to certbot's current certificate `example.com`",
+		"Cannot be moved by this command:\n    nginx  /etc/nginx/ssl/copy.pem  example.com\n        - A certbot deploy hook keeps copying certbot's current certificate `example.com` here",
 		"  /etc/letsencrypt/archive/example.com/fullchain1.pem -> /etc/ssl/easyssl/example.com/certificate.pem\n" +
 			"  /etc/letsencrypt/archive/example.com/privkey1.pem -> /etc/ssl/easyssl/example.com/key.pem\n",
 		"  " + site + ":3  /etc/letsencrypt/live/example.com/fullchain.pem -> /etc/ssl/easyssl/example.com/certificate.pem\n",
@@ -269,6 +269,7 @@ func TestMigrateMovesACertbotCertificate(t *testing.T) {
 			{From: "/etc/letsencrypt/live/example.com/privkey.pem", To: "/etc/ssl/easyssl/example.com/key.pem"},
 		},
 		References: moved.References,
+		Note:       "now managed by easySSL; check nothing else here still uses /etc/letsencrypt",
 	}}
 	if !reflect.DeepEqual(r.relocated, wantReq) {
 		t.Fatalf("relocate = %+v\nwant %+v", r.relocated, wantReq)
@@ -331,7 +332,7 @@ func TestWhatTheCommandCannotMove(t *testing.T) {
 		"an older Plugin": {nginx("0.1.0", a), false, "Its nginx Plugin 0.2.0 cannot change its configuration."},
 		"an ACL":          {nginx("0.2.0", a), true, "/etc/letsencrypt/archive/example.com/fullchain1.pem carries a POSIX ACL"},
 		"no references":   {nginx("0.2.0", target(a.Settings["ssl_certificate"], a.Settings["ssl_certificate_key"], sum, nil)), false, "reports no configuration line naming it"},
-		"another client":  {nginx("0.2.0", lego), false, "It is under `/var/lib/acme`, which lego manages"},
+		"another client":  {nginx("0.2.0", lego), false, "`/var/lib/acme` is managed by lego"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r := &run{}

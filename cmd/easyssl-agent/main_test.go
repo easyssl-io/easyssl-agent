@@ -49,6 +49,9 @@ func TestRootPreflightCoversEveryOperationalCommand(t *testing.T) {
 		{[]string{"plugin", "update"}, "plugin update"},
 		{[]string{"update", "--check"}, "update"},
 		{[]string{"language", "es"}, "language"},
+		// A help flag the flag package would not read, after a positional
+		// argument, runs the command, so root is still required.
+		{[]string{"plugin", "install", "generic-cli", "--help"}, "plugin install"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.cmd, func(t *testing.T) {
@@ -78,6 +81,9 @@ func TestRootPreflightAllowsRootAndNonOperationalCommands(t *testing.T) {
 		{"unknown", []string{"unknown"}, 1000},
 		{"plugin usage", []string{"plugin"}, 1000},
 		{"unknown plugin command", []string{"plugin", "unknown"}, 1000},
+		{"a command's help", []string{"language", "-help"}, 1000},
+		{"a plugin command's help", []string{"plugin", "install", "--help"}, 1000},
+		{"help after a flag", []string{"update", "--check", "-h"}, 1000},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := rootPreflight(tt.args, tt.euid); err != nil {
@@ -143,5 +149,27 @@ func TestCatalogEntryLineShowsTheContractAndNotTheParty(t *testing.T) {
 	}
 	if got := catalogEntryLine(catalog.Plugin{ID: "nginx", Version: "0.2.0"}); strings.Contains(got, "contract") {
 		t.Fatalf("no contract: %q", got)
+	}
+}
+
+// A command's help says how to call it and what it does, and lists flags
+// under a heading only when there are some: `language -help` once printed
+// a heading and nothing under it.
+func TestHelpSaysWhatTheCommandDoes(t *testing.T) {
+	help := func(withFlag bool) string {
+		fs := newFlagSet("x", "usage: easyssl-agent x [<arg>]", "Does x.")
+		if withFlag {
+			fs.Bool("yes", false, "skip the prompt")
+		}
+		var b strings.Builder
+		fs.SetOutput(&b)
+		fs.Usage()
+		return b.String()
+	}
+	if got := help(false); got != "usage: easyssl-agent x [<arg>]\nDoes x.\n" {
+		t.Errorf("help without flags = %q, want the usage and the summary alone", got)
+	}
+	if got := help(true); !strings.HasPrefix(got, "usage: easyssl-agent x [<arg>]\nDoes x.\n\nFlags:\n") || !strings.Contains(got, "-yes") {
+		t.Errorf("help with a flag = %q, want the usage, the summary, then the flags under their heading", got)
 	}
 }

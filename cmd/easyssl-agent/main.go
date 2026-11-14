@@ -124,25 +124,42 @@ func commandLanguage() string {
 	return lang
 }
 
-// newFlagSet words the heading of `--help` as a message. What the flag package
-// itself writes under it, the default values and its own parse errors, stays in
+// newFlagSet is a command's flags with its `--help`: the usage line, a
+// sentence saying what the command does, and the flags under a heading only
+// when it has any, since a command whose help is a heading alone says nothing.
+// usage and summary arrive rendered, in the run's language; what the flag
+// package itself writes, the default values and its own parse errors, stays in
 // English.
-func newFlagSet(name string) *flag.FlagSet {
+func newFlagSet(name, usage, summary string) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ExitOnError)
-	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), msg.T("main.flags_heading", "Flags of easyssl-agent {command}:", "command", name))
-		fs.PrintDefaults()
-	}
+	fs.Usage = func() { writeHelp(fs, usage, summary) }
 	return fs
+}
+
+func writeHelp(fs *flag.FlagSet, usage, summary string) {
+	w := fs.Output()
+	fmt.Fprintln(w, usage)
+	fmt.Fprintln(w, summary)
+	flags := 0
+	fs.VisitAll(func(*flag.Flag) { flags++ })
+	if flags == 0 {
+		return
+	}
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, msg.T("main.flags_heading", "Flags:"))
+	fs.PrintDefaults()
 }
 
 // rootPreflight refuses every operational command before it parses flags, reads
 // a path, or contacts the Server. All Agent state is under a root-only
 // directory, so waiting for the filesystem error would leak which file was
 // reached first and give equivalent commands inconsistent failures.
+//
+// A request for a command's help passes: it prints its usage and stops before
+// reading anything.
 func rootPreflight(args []string, euid int) error {
 	cmd := rootCommand(args)
-	if euid == 0 || cmd == "" {
+	if euid == 0 || cmd == "" || helpRequested(args[len(strings.Fields(cmd)):]) {
 		return nil
 	}
 	if cmd == "register" {
@@ -151,6 +168,24 @@ func rootPreflight(args []string, euid int) error {
 		return msg.Err.T("main.register_not_root", "register must run as root: use sudo, or run it from a root shell")
 	}
 	return rootOnlyError(cmd)
+}
+
+// helpRequested reports whether the flag package will read a help flag in a
+// command's arguments, so print its help and exit before the command runs. It
+// reads flags only up to the first argument that is not one, as the flag
+// package does; a help flag after a positional argument, or after a flag's
+// value, is not seen there and the command would run, so the root check still
+// applies to it.
+func helpRequested(args []string) bool {
+	for _, a := range args {
+		switch {
+		case a == "--" || !strings.HasPrefix(a, "-"):
+			return false
+		case a == "-h" || a == "-help" || a == "--h" || a == "--help":
+			return true
+		}
+	}
+	return false
 }
 
 // rootCommand returns only recognized commands that can read or change Agent
@@ -180,7 +215,9 @@ func rootOnlyError(cmd string) error {
 }
 
 func cmdRegister(ctx context.Context, args []string) error {
-	fs := newFlagSet("register")
+	fs := newFlagSet("register",
+		msg.T("help.register.usage", "usage: easyssl-agent register --server <url> [flags]"),
+		msg.T("help.register.summary", "Registers this host's Agent with an easySSL Server, or resumes a deactivated one, and installs its service."))
 	server := fs.String("server", "", msg.T("register.flag.server", "easySSL Server base URL (required)"))
 	key := fs.String("registration-key", os.Getenv(wire.EnvRegistrationKey), msg.T("register.flag.key", "Organization registration key (defaults to ${env})", "env", wire.EnvRegistrationKey))
 	reactivation := fs.String("reactivation-token", os.Getenv(wire.EnvReactivationToken), msg.T("register.flag.reactivation_token", "reactivation token from a deactivated Agent's page, to resume that Agent (defaults to ${env})", "env", wire.EnvReactivationToken))
@@ -205,7 +242,9 @@ func cmdRegister(ctx context.Context, args []string) error {
 }
 
 func cmdUninstall(ctx context.Context, args []string) error {
-	fs := newFlagSet("uninstall")
+	fs := newFlagSet("uninstall",
+		msg.T("help.uninstall.usage", "usage: easyssl-agent uninstall [--yes]"),
+		msg.T("help.uninstall.summary", "Takes the Agent off this host: deactivates it on the Server, removes its service, configuration and binary, and offers to delete its Plugins and keys."))
 	yes := fs.Bool("yes", false, msg.T("uninstall.flag.yes", "do not ask for confirmation"))
 	_ = fs.Parse(args)
 	return flow.Uninstall(ctx, *yes)
@@ -217,7 +256,9 @@ func cmdUninstall(ctx context.Context, args []string) error {
 // trip rather than at the service's next check-in. The service's own next
 // check-in then computes the same fingerprint and sends nothing again.
 func cmdMigrate(ctx context.Context, args []string) error {
-	fs := newFlagSet("migrate")
+	fs := newFlagSet("migrate",
+		msg.T("help.migrate.usage", "usage: easyssl-agent migrate"),
+		msg.T("help.migrate.summary", "Moves the certificates the web servers serve out of certbot's directories to paths easySSL can deploy to, changing the configuration that names them."))
 	_ = fs.Parse(args)
 	plugins := pluginmgr.New(nil, nil)
 	report := func(ctx context.Context) (string, error) {
@@ -244,7 +285,9 @@ func cmdMigrate(ctx context.Context, args []string) error {
 
 // cmdLanguage prints the language saved on this host, or saves another.
 func cmdLanguage(args []string) error {
-	fs := newFlagSet("language")
+	fs := newFlagSet("language",
+		msg.T("help.language.usage", "usage: easyssl-agent language [<code>]"),
+		msg.T("help.language.summary", "Prints the language this host's Agent commands speak, or saves another."))
 	_ = fs.Parse(args)
 	if fs.NArg() > 1 {
 		return msg.Err.T("language.usage", "usage: easyssl-agent language [<code>]")
@@ -276,7 +319,9 @@ func cmdLanguage(args []string) error {
 }
 
 func cmdRun(ctx context.Context, args []string) error {
-	fs := newFlagSet("run")
+	fs := newFlagSet("run",
+		msg.T("help.run.usage", "usage: easyssl-agent run"),
+		msg.T("help.run.summary", "Runs the Agent service in the foreground; its systemd unit starts it."))
 	_ = fs.Parse(args)
 	cfg, err := identity.LoadConfig()
 	if err != nil {
@@ -556,7 +601,9 @@ func stateError(cmd string, err error) error {
 }
 
 func cmdStatus(args []string) error {
-	fs := newFlagSet("status")
+	fs := newFlagSet("status",
+		msg.T("help.status.usage", "usage: easyssl-agent status"),
+		msg.T("help.status.summary", "Prints whether this Agent is registered and its service is running, and the Server it reports to."))
 	_ = fs.Parse(args)
 
 	cfg, err := identity.LoadConfig()
@@ -667,7 +714,9 @@ func cmdPlugin(ctx context.Context, args []string) error {
 }
 
 func cmdPluginInstall(ctx context.Context, args []string) error {
-	fs := newFlagSet("plugin install")
+	fs := newFlagSet("plugin install",
+		msg.T("help.plugin_install.usage", "usage: easyssl-agent plugin install <name>... [--yes]"),
+		msg.T("help.plugin_install.summary", "Installs Plugins from the Marketplace of this Agent's Server."))
 	yes := fs.Bool("yes", false, msg.T("plugin.install.flag.yes", "install without the confirmation prompt"))
 	_ = fs.Parse(args)
 	if fs.NArg() == 0 {
@@ -783,7 +832,9 @@ func confirm(question string) bool {
 // cmdPluginCatalog lists what the Marketplace offers for this host, so a Plugin
 // can be found and installed without knowing its name in advance.
 func cmdPluginCatalog(ctx context.Context, args []string) error {
-	fs := newFlagSet("plugin catalog")
+	fs := newFlagSet("plugin catalog",
+		msg.T("help.plugin_catalog.usage", "usage: easyssl-agent plugin catalog"),
+		msg.T("help.plugin_catalog.summary", "Lists the Plugins the Marketplace of this Agent's Server offers for this host."))
 	_ = fs.Parse(args)
 
 	cfg, err := identity.LoadConfig()
@@ -830,7 +881,9 @@ func cmdPluginCatalog(ctx context.Context, args []string) error {
 }
 
 func cmdPluginList(args []string) error {
-	fs := newFlagSet("plugin list")
+	fs := newFlagSet("plugin list",
+		msg.T("help.plugin_list.usage", "usage: easyssl-agent plugin list"),
+		msg.T("help.plugin_list.summary", "Lists the Plugins installed on this host, with their versions."))
 	_ = fs.Parse(args)
 
 	// What the host inventory would carry now: the executables on disk and
