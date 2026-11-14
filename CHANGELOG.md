@@ -3,6 +3,14 @@
 Every release of the easySSL Agent, newest first. `scripts/release.sh` tags
 no version this file has no entry for.
 
+## 0.2.3
+
+- Built with Go 1.26.11, which fixes GO-2026-6859 in `net/http`.
+- `easyssl-agent update` and `plugin update` hold a host-wide lock while they
+  change the installed builds, so a second one refuses at once instead of
+  overwriting the first's kept build, which could leave no working Agent to
+  roll back to.
+
 ## 0.2.2
 
 - `easyssl-agent update` updates the Agent to the build the Server's catalog
