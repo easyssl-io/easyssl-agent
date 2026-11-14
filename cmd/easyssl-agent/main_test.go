@@ -52,6 +52,8 @@ func TestRootPreflightCoversEveryOperationalCommand(t *testing.T) {
 		// A help flag the flag package would not read, after a positional
 		// argument, runs the command, so root is still required.
 		{[]string{"plugin", "install", "generic-cli", "--help"}, "plugin install"},
+		// --help as a flag's value is that value, not a request for help.
+		{[]string{"register", "--server", "--help"}, "register"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.cmd, func(t *testing.T) {
@@ -70,6 +72,17 @@ func TestRootPreflightCoversEveryOperationalCommand(t *testing.T) {
 	}
 }
 
+// Every root-only command has its flags here, or its help would need root.
+func TestEveryRootCommandHasItsFlags(t *testing.T) {
+	for _, args := range [][]string{{"register"}, {"run"}, {"status"}, {"update"}, {"uninstall"}, {"migrate"}, {"language"},
+		{"plugin", "catalog"}, {"plugin", "install"}, {"plugin", "list"}, {"plugin", "update"}} {
+		cmd := rootCommand(args)
+		if _, ok := commandFlags[cmd]; !ok {
+			t.Errorf("%q has no entry in commandFlags", cmd)
+		}
+	}
+}
+
 func TestRootPreflightAllowsRootAndNonOperationalCommands(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -84,6 +97,7 @@ func TestRootPreflightAllowsRootAndNonOperationalCommands(t *testing.T) {
 		{"a command's help", []string{"language", "-help"}, 1000},
 		{"a plugin command's help", []string{"plugin", "install", "--help"}, 1000},
 		{"help after a flag", []string{"update", "--check", "-h"}, 1000},
+		{"help after a flag's value", []string{"register", "--server", "https://example.test", "--help"}, 1000},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := rootPreflight(tt.args, tt.euid); err != nil {

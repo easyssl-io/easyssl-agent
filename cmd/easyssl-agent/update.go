@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -32,11 +33,7 @@ import (
 // Plugins the new build would refuse; with --contract the contract version it
 // speaks, which a release records.
 func cmdVersion(args []string) error {
-	fs := newFlagSet("version",
-		msg.T("help.version.usage", "usage: easyssl-agent version [flags]"),
-		msg.T("help.version.summary", "Prints this Agent's version."))
-	contracts := fs.Bool("contracts", false, msg.T("version.flag.contracts", "print the contract versions this Agent accepts from a Plugin"))
-	contract := fs.Bool("contract", false, msg.T("version.flag.contract", "print the contract version this Agent speaks"))
+	fs, contracts, contract := versionFlags()
 	_ = fs.Parse(args)
 	if *contract {
 		fmt.Println(wire.ContractVersion)
@@ -55,12 +52,7 @@ func cmdVersion(args []string) error {
 // current Plugins refuses them; the Plugins are then updated by the new Agent.
 // --agent-only leaves the Plugins alone, and --check changes nothing.
 func cmdUpdate(ctx context.Context, args []string) error {
-	fs := newFlagSet("update",
-		msg.T("help.update.usage", "usage: easyssl-agent update [flags]"),
-		msg.T("help.update.summary", "Updates the Agent, then its Plugins, to the builds this Agent's Server offers."))
-	yes := fs.Bool("yes", false, msg.T("update.flag.yes", "update without the confirmation prompt"))
-	check := fs.Bool("check", false, msg.T("update.flag.check", "only say what would be updated"))
-	agentOnly := fs.Bool("agent-only", false, msg.T("update.flag.agent_only", "update the Agent and leave the Plugins as they are"))
+	fs, yes, check, agentOnly := updateFlags()
 	_ = fs.Parse(args)
 	// Taken before the installed build is read and held through the Plugins'
 	// update and any rollback, which runs in this process; --check changes
@@ -208,12 +200,7 @@ func updateAgent(ctx context.Context, api *serverapi.Client, plan selfupdate.Pla
 // cmdPluginUpdate installs the catalog's build of each installed Plugin, or of
 // those named, whose bytes differ from it.
 func cmdPluginUpdate(ctx context.Context, args []string) error {
-	fs := newFlagSet("plugin update",
-		msg.T("help.plugin_update.usage", "usage: easyssl-agent plugin update [<name>...] [flags]"),
-		msg.T("help.plugin_update.summary", "Updates the installed Plugins, or those named, to the builds this Agent's Server offers."))
-	yes := fs.Bool("yes", false, msg.T("plugin.update.flag.yes", "update without the confirmation prompt"))
-	check := fs.Bool("check", false, msg.T("update.flag.check", "only say what would be updated"))
-	downgrade := fs.Bool("allow-downgrade", false, msg.T("plugin.update.flag.allow_downgrade", "also install a Marketplace build older than the installed one"))
+	fs, yes, check, downgrade := pluginUpdateFlags()
 	_ = fs.Parse(args)
 	// Run by an `update` that holds the lock for it, it takes none.
 	if !*check && os.Getenv(selfupdate.LockHeldEnv) == "" {
@@ -335,4 +322,39 @@ func digestOf(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// versionFlags is `version`'s flags, shared by the command and by the root
+// check, which reads a help request with them (helpRequested).
+func versionFlags() (fs *flag.FlagSet, contracts *bool, contract *bool) {
+	fs = newFlagSet("version",
+		msg.T("help.version.usage", "usage: easyssl-agent version [flags]"),
+		msg.T("help.version.summary", "Prints this Agent's version."))
+	contracts = fs.Bool("contracts", false, msg.T("version.flag.contracts", "print the contract versions this Agent accepts from a Plugin"))
+	contract = fs.Bool("contract", false, msg.T("version.flag.contract", "print the contract version this Agent speaks"))
+	return
+}
+
+// updateFlags is `update`'s flags, shared by the command and by the root
+// check, which reads a help request with them (helpRequested).
+func updateFlags() (fs *flag.FlagSet, yes *bool, check *bool, agentOnly *bool) {
+	fs = newFlagSet("update",
+		msg.T("help.update.usage", "usage: easyssl-agent update [flags]"),
+		msg.T("help.update.summary", "Updates the Agent, then its Plugins, to the builds this Agent's Server offers."))
+	yes = fs.Bool("yes", false, msg.T("update.flag.yes", "update without the confirmation prompt"))
+	check = fs.Bool("check", false, msg.T("update.flag.check", "only say what would be updated"))
+	agentOnly = fs.Bool("agent-only", false, msg.T("update.flag.agent_only", "update the Agent and leave the Plugins as they are"))
+	return
+}
+
+// pluginUpdateFlags is `plugin update`'s flags, shared by the command and by the root
+// check, which reads a help request with them (helpRequested).
+func pluginUpdateFlags() (fs *flag.FlagSet, yes *bool, check *bool, downgrade *bool) {
+	fs = newFlagSet("plugin update",
+		msg.T("help.plugin_update.usage", "usage: easyssl-agent plugin update [<name>...] [flags]"),
+		msg.T("help.plugin_update.summary", "Updates the installed Plugins, or those named, to the builds this Agent's Server offers."))
+	yes = fs.Bool("yes", false, msg.T("plugin.update.flag.yes", "update without the confirmation prompt"))
+	check = fs.Bool("check", false, msg.T("update.flag.check", "only say what would be updated"))
+	downgrade = fs.Bool("allow-downgrade", false, msg.T("plugin.update.flag.allow_downgrade", "also install a Marketplace build older than the installed one"))
+	return
 }
