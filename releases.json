@@ -1,5 +1,22 @@
 [
   {
+    "version": "0.2.3",
+    "date": "2026-11-14",
+    "contractVersion": "0.2.1",
+    "builds": [
+      {
+        "os": "linux",
+        "arch": "amd64",
+        "sha256": "9b52c94e59c3c19cdf584e5f4d97ed2fbe7a6ff23508cf5d388917703974553a"
+      },
+      {
+        "os": "linux",
+        "arch": "arm64",
+        "sha256": "48b51d65f06ff931f668e93dc11f5ef43829aba4cedf2972d9b47f80cd7a2e85"
+      }
+    ]
+  },
+  {
     "version": "0.2.2",
     "date": "2026-11-14",
     "contractVersion": "0.2.1",
