@@ -145,3 +145,25 @@ func TestCatalogEntryLineShowsTheContractAndNotTheParty(t *testing.T) {
 		t.Fatalf("no contract: %q", got)
 	}
 }
+
+// A command's help says how to call it and what it does, and lists flags
+// under a heading only when there are some: `language -help` once printed
+// a heading and nothing under it.
+func TestHelpSaysWhatTheCommandDoes(t *testing.T) {
+	help := func(withFlag bool) string {
+		fs := newFlagSet("x", "usage: easyssl-agent x [<arg>]", "Does x.")
+		if withFlag {
+			fs.Bool("yes", false, "skip the prompt")
+		}
+		var b strings.Builder
+		fs.SetOutput(&b)
+		fs.Usage()
+		return b.String()
+	}
+	if got := help(false); got != "usage: easyssl-agent x [<arg>]\nDoes x.\n" {
+		t.Errorf("help without flags = %q, want the usage and the summary alone", got)
+	}
+	if got := help(true); !strings.HasPrefix(got, "usage: easyssl-agent x [<arg>]\nDoes x.\n\nFlags:\n") || !strings.Contains(got, "-yes") {
+		t.Errorf("help with a flag = %q, want the usage, the summary, then the flags under their heading", got)
+	}
+}
