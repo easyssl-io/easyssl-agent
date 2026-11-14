@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/easyssl-io/easyssl-agent/internal/atomicfile"
 	"github.com/easyssl-io/easyssl-agent/internal/msg"
@@ -63,6 +64,35 @@ func (c Config) Organization() string {
 func ConfigPath() string { return filepath.Join(ConfigDir, "config.json") }
 func TokenPath() string  { return filepath.Join(StateDir, "agent.token") }
 
+// CheckedInPath holds the version of the build whose service last had a
+// check-in accepted after it started, written then and dated by its mtime.
+// `update` reads it to know the build it just started works, without waiting
+// out its whole watch.
+func CheckedInPath() string { return filepath.Join(StateDir, "checked-in") }
+
+// MarkCheckedIn records that this build's service had a check-in accepted.
+func MarkCheckedIn(version string) error { return markCheckedIn(CheckedInPath(), version) }
+
+// CheckedInSince reports whether build version had a check-in accepted at or
+// after since.
+func CheckedInSince(version string, since time.Time) bool {
+	return checkedInSince(CheckedInPath(), version, since)
+}
+
+func markCheckedIn(path, version string) error {
+	return atomicfile.Write(path, []byte(version+"\n"), 0o600, 0o700)
+}
+
+func checkedInSince(path, version string, since time.Time) bool {
+	info, err := os.Stat(path)
+	// To the second, since some filesystems keep no finer mtime.
+	if err != nil || info.ModTime().Before(since.Truncate(time.Second)) {
+		return false
+	}
+	data, err := os.ReadFile(path)
+	return err == nil && strings.TrimSpace(string(data)) == version
+}
+
 // SaveConfig writes the config (0600) under a 0700 ConfigDir.
 func SaveConfig(cfg Config) error {
 	if err := os.MkdirAll(ConfigDir, 0o700); err != nil {
@@ -101,7 +131,7 @@ func SaveToken(token string) error {
 // Uninstalling is too ordinary a command to destroy that, so the keys are left
 // behind and the caller says so.
 func RemoveAll() error {
-	for _, path := range []string{ConfigPath(), TokenPath()} {
+	for _, path := range []string{ConfigPath(), TokenPath(), CheckedInPath()} {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

@@ -28,6 +28,7 @@ import (
 
 	"github.com/easyssl-io/easyssl-contract/catalog"
 
+	"github.com/easyssl-io/easyssl-agent/internal/buildinfo"
 	"github.com/easyssl-io/easyssl-agent/internal/commands"
 	"github.com/easyssl-io/easyssl-agent/internal/csr"
 	"github.com/easyssl-io/easyssl-agent/internal/deploy"
@@ -77,6 +78,10 @@ func main() {
 		err = cmdPlugin(ctx, os.Args[2:])
 	case "language":
 		err = cmdLanguage(os.Args[2:])
+	case "update":
+		err = cmdUpdate(ctx, os.Args[2:])
+	case "version":
+		err = cmdVersion(os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return
@@ -100,7 +105,7 @@ func main() {
 const exitUnchanged = 3
 
 func usage() {
-	fmt.Fprintln(os.Stderr, msg.T("main.usage", "usage: easyssl-agent <register|run|status|uninstall|migrate|plugin|language> [flags]"))
+	fmt.Fprintln(os.Stderr, msg.T("main.usage", "usage: easyssl-agent <register|run|status|update|uninstall|migrate|plugin|language|version> [flags]"))
 }
 
 // commandLanguage is the language this run speaks: EASYSSL_LANG when it names a
@@ -156,14 +161,14 @@ func rootCommand(args []string) string {
 		return ""
 	}
 	switch args[0] {
-	case "register", "run", "status", "uninstall", "migrate", "language":
+	case "register", "run", "status", "update", "uninstall", "migrate", "language":
 		return args[0]
 	case "plugin":
 		if len(args) < 2 {
 			return ""
 		}
 		switch args[1] {
-		case "catalog", "install", "list":
+		case "catalog", "install", "list", "update":
 			return "plugin " + args[1]
 		}
 	}
@@ -316,8 +321,14 @@ func cmdRun(ctx context.Context, args []string) error {
 	// error level the first time and rarely after that: the condition does not
 	// change on its own, and a line a minute would bury the journal.
 	removedSince := time.Time{}
+	// The same for a Server that refuses this Agent's contract version: nothing
+	// on the host changes that but updating the Agent.
+	refusedSince := time.Time{}
 
 	poll := 60
+	// Recorded once per start, on the first check-in the Server accepts, for
+	// `update` watching the build it just started.
+	markedCheckIn := false
 	for {
 		// The fingerprint on the wire is always over the whole current inventory; the
 		// document itself goes only when the Server says it lacks it. A contributor
@@ -330,6 +341,17 @@ func cmdRun(ctx context.Context, args []string) error {
 			fingerprint = ""
 		}
 		resp, err := api.Checkin(ctx, token, flow.CheckinBody(fingerprint))
+		if err == nil && !refusedSince.IsZero() {
+			logger.Info("the Server accepts this Agent's contract version again; resuming work")
+			sdnotify.Status("Checking in.")
+			refusedSince = time.Time{}
+		}
+		if err == nil && !markedCheckIn {
+			if merr := identity.MarkCheckedIn(buildinfo.Version); merr != nil {
+				logger.Warn("could not record the accepted check-in", "err", merr)
+			}
+			markedCheckIn = true
+		}
 		if err == nil {
 			if !removedSince.IsZero() {
 				// Only a new registration while the service ran recovers a revoked token.
@@ -377,6 +399,21 @@ func cmdRun(ctx context.Context, args []string) error {
 					runner.Reconcile(ctx)
 				}
 			}
+		} else if isContractUnsupported(err) {
+			// The Server no longer speaks the contract this Agent was built against.
+			// Like a revoked token, the service stays up and does no work, but it
+			// says so where an operator looks: the journal, at error level, and the
+			// unit's status line, which otherwise kept reading as healthy. The
+			// Server records the refusal too. The command named is this Agent's
+			// own `update`, which an Agent able to say this has, and which the
+			// Agent's page in the web console gives too.
+			if refusedSince.IsZero() || time.Since(refusedSince) > 30*time.Minute {
+				refusedSince = time.Now()
+				logger.Error("the Server refuses this Agent: it no longer speaks the contract version this Agent was built against",
+					"server", cfg.ServerURL, "contract", wire.ContractVersion,
+					"next", "update the Agent with `sudo easyssl-agent update`, which keeps this registration")
+			}
+			sdnotify.Status("Refused by the Server: it no longer speaks contract " + wire.ContractVersion + ". Update the Agent: sudo easyssl-agent update")
 		} else if isUnknownToken(err) {
 			// Deactivated or removed in the web console. The service keeps running and
 			// stops doing work: this Agent belongs to the host, so a decision taken in
@@ -544,6 +581,10 @@ func cmdStatus(args []string) error {
 	if reg.DisplayName != "" {
 		line(msg.T("status.label.name", "name"), reg.DisplayName)
 	}
+	// This build's own, beside what the Server says of it: the contract version is
+	// what a refusal below is about. `version` prints the first alone, for scripts.
+	line(msg.T("status.label.version", "version"), buildinfo.Version)
+	line(msg.T("status.label.contract", "contract"), wire.ContractVersion)
 	line(msg.T("status.label.server", "Server"), cfg.ServerURL)
 	if cfg.OrganizationName != "" || cfg.OrganizationID != "" {
 		line(msg.T("status.label.organization", "Organization"), cfg.Organization())
@@ -586,11 +627,18 @@ func serverState(cfg identity.Config, token string, tokenErr error) (detail stri
 		return msg.T("status.state.pending", "pending authorization"), resp
 	case err == nil:
 		return resp.Status, resp
+	case isContractUnsupported(err):
+		return msg.T("status.state.contract_refused", "refused (the Server answered, but no longer speaks this Agent's contract {version}; update the Agent: sudo easyssl-agent update)", "version", wire.ContractVersion), reg
 	case isUnknownToken(err):
 		return msg.T("status.state.token_rejected", "not registered (the Server rejected this token; the Agent was deactivated or removed there)"), reg
 	default:
 		return msg.T("status.state.unreachable", "unknown (could not reach {server}: {err})", "server", cfg.ServerURL, "err", err), reg
 	}
+}
+
+func isContractUnsupported(err error) bool {
+	apiErr, ok := errors.AsType[*serverapi.APIError](err)
+	return ok && apiErr.Code == wire.CodeContractUnsupported
 }
 
 func isUnknownToken(err error) bool {
@@ -602,7 +650,7 @@ func isUnknownToken(err error) bool {
 // Server's Marketplace on demand; nothing is bundled into this binary.
 func cmdPlugin(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return msg.Err.T("plugin.usage", "usage: easyssl-agent plugin <catalog|install|list> [flags]")
+		return msg.Err.T("plugin.usage", "usage: easyssl-agent plugin <catalog|install|list|update> [flags]")
 	}
 	switch args[0] {
 	case "catalog":
@@ -611,8 +659,10 @@ func cmdPlugin(ctx context.Context, args []string) error {
 		return cmdPluginInstall(ctx, args[1:])
 	case "list":
 		return cmdPluginList(args[1:])
+	case "update":
+		return cmdPluginUpdate(ctx, args[1:])
 	default:
-		return msg.Err.T("plugin.unknown_command", "unknown plugin command \"{command}\" (want catalog, install or list)", "command", args[0])
+		return msg.Err.T("plugin.unknown_command", "unknown plugin command \"{command}\" (want catalog, install, list or update)", "command", args[0])
 	}
 }
 
@@ -632,6 +682,18 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 	token, err := identity.LoadToken()
 	if err != nil {
 		return stateError("plugin install", err)
+	}
+
+	api, err := serverapi.New(cfg.ServerURL)
+	if err != nil {
+		return err
+	}
+	mgr := pluginmgr.New(api, agentLogger())
+	// Refused before the prompt, not after it: a Plugin the Marketplace does not
+	// offer for this host, or one built against a contract this Agent does not
+	// run, would only be refused once authorized.
+	if err := mgr.Installable(ctx, names, runtime.GOOS, runtime.GOARCH); err != nil {
+		return err
 	}
 
 	// Said before anything is installed, because this is when the authorization is
@@ -659,11 +721,6 @@ func cmdPluginInstall(ctx context.Context, args []string) error {
 		}
 	}
 
-	api, err := serverapi.New(cfg.ServerURL)
-	if err != nil {
-		return err
-	}
-	mgr := pluginmgr.New(api, agentLogger())
 	// The host's own platform: an Agent installs for the machine it runs on,
 	// never for another, so there is no flag to get this wrong.
 	out := make([]pluginmgr.Installed, 0, len(names))
@@ -754,7 +811,7 @@ func cmdPluginCatalog(ctx context.Context, args []string) error {
 		return nil
 	}
 	for _, e := range entries {
-		fmt.Printf("%-16s v%-10s %s\n", e.ID, e.Version, e.Party)
+		fmt.Println(catalogEntryLine(e))
 		// The Plugin's own text, in this host's language when the Plugin
 		// supplies it and in English otherwise.
 		if description := e.Description.In(msg.Language()); description != "" {
@@ -792,12 +849,30 @@ func cmdPluginList(args []string) error {
 	return nil
 }
 
+// catalogEntryLine heads one Marketplace entry: its id, the version offered
+// and the contract that build speaks, which decides whether this Agent can
+// run it. Who publishes it is on a line of its own below.
+func catalogEntryLine(e catalog.Plugin) string {
+	line := fmt.Sprintf("%-16s v%-10s", e.ID, e.Version)
+	if e.ContractVersion != "" {
+		line += " " + msg.T("plugin.catalog.contract", "contract {contract}", "contract", e.ContractVersion)
+	}
+	return line
+}
+
+// pluginListLine is one installed Plugin: its version, the contract version it
+// reported speaking, which decides whether this Agent runs it, and its digest.
 func pluginListLine(p wire.PluginInventory) string {
 	if p.Unobserved {
-		return msg.T("plugin.list.unobserved", "{id} {version} sha256:{digest}  (did not answer discover)",
-			"id", fmt.Sprintf("%-16s", p.ID), "version", fmt.Sprintf("%-11s", "?"), "digest", p.SHA256)
+		return msg.T("plugin.list.unobserved", "{id} {version} contract {contract} sha256:{digest}  (did not answer discover)",
+			"id", fmt.Sprintf("%-16s", p.ID), "version", fmt.Sprintf("%-11s", "?"), "contract", fmt.Sprintf("%-7s", "?"), "digest", p.SHA256)
 	}
 	var desc plugincontract.DescribeResponse
 	_ = json.Unmarshal(p.Describe, &desc) // checked already by Discover
-	return fmt.Sprintf("%-16s v%-10s sha256:%s", p.ID, desc.Version, p.SHA256)
+	contract := desc.ContractVersion
+	if contract == "" {
+		contract = "?"
+	}
+	return msg.T("plugin.list.line", "{id} {version} contract {contract} sha256:{digest}",
+		"id", fmt.Sprintf("%-16s", p.ID), "version", fmt.Sprintf("v%-10s", desc.Version), "contract", fmt.Sprintf("%-7s", contract), "digest", p.SHA256)
 }

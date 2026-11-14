@@ -22,6 +22,12 @@ easyssl-agent register --server <url> [--registration-key <key>] [--agent-name <
 easyssl-agent register --server <url> --reactivation-token <token>    resume a deactivated Agent on this host
 easyssl-agent run                                                     the service loop (periodic check-in)
 easyssl-agent status                                                  print local state and what the Server says
+easyssl-agent version [--contract | --contracts]                      print this build's version, the contract version it speaks, or those it accepts from a Plugin
+easyssl-agent update [--check] [--agent-only] [--yes]                 update the Agent, then its Plugins, to the builds the Server offers
+easyssl-agent plugin catalog                                          list the Plugins the Marketplace offers for this host
+easyssl-agent plugin install <name>... [--yes]                        install Plugins from the Marketplace
+easyssl-agent plugin list                                             list the installed Plugins
+easyssl-agent plugin update [<name>...] [--check] [--allow-downgrade] [--yes]   update the installed Plugins, or those named
 easyssl-agent uninstall [--yes]                                       deactivate and remove the Agent
 easyssl-agent migrate                                                 move what the Plugins serve out of certbot's directories
 easyssl-agent language [<code>]                                       print or change the language the commands speak
@@ -234,8 +240,9 @@ moved certificates straight away.
 
 ## Checking state
 
-`status` prints what the host knows (Server URL, Organization, the service
-and whether it is running, whether a token is stored) and then asks the
+`status` prints what the host knows (Server URL, Organization, the Agent's
+version and the contract version it speaks, the service and whether it is
+running, whether a token is stored) and then asks the
 Server what this Agent actually is: its id and name, and `authorized`,
 `pending authorization`, or no longer registered because it was deactivated or
 removed there. A stored token proves only that one was issued once, so
@@ -247,6 +254,43 @@ so running `status` never refreshes the Agent's last-seen and cannot make a
 stopped Agent look alive in the web console. When the Server cannot be reached,
 the state is reported as unknown with the reason, and the local facts still
 print.
+
+## Updating
+
+`sudo easyssl-agent update` brings the Agent, then its Plugins, to the builds
+the catalog of the Server it is registered with offers. The Agent goes first,
+because an Agent too old for the current Plugins refuses them; the new Agent
+then updates the Plugins, as `easyssl-agent plugin update --yes` would.
+`--check` only prints what would change, `--agent-only` leaves the Plugins as
+they are, and `--yes` skips the confirmation.
+
+A build is current when its SHA-256 is the one the catalog lists, whatever its
+version says, and a build offered at a lower version than the running one is
+never taken, so a Server holding an older Agent does not downgrade a host. The
+same holds for each Plugin, except that `plugin update --allow-downgrade`
+installs an older Marketplace build when that is the intent. The
+new build is downloaded beside the installed one as `easyssl-agent.new`, its
+SHA-256 is checked, and it is run once (`easyssl-agent version`) to prove it
+runs on this host and is the version offered. Only then is it renamed into
+place, keeping the previous build as `easyssl-agent.prev`, and the service
+restarted. The update is done once the new build's service has a check-in
+accepted, which it records in `/var/lib/easyssl/checked-in`; if the service is
+found not active before then, at looks a second apart for at most fifteen
+seconds, the previous build is put back and the service restarted on it.
+
+Before the swap, the new build is asked which contract versions it accepts
+from a Plugin (`easyssl-agent version --contracts`), and every installed
+Plugin is asked which one it was built against. An Agent accepts its own
+breaking version and the one before, so a Plugin two behind would stop
+working under it. The update is refused, before anything is replaced, when it
+would leave such a Plugin behind: with `--agent-only` any of them, and
+otherwise one whose installed build, or the Marketplace's build about to
+replace it, the new Agent would refuse.
+
+The downloads are outside the contract check, so an Agent the Server refuses
+for its contract version can still update itself. An Agent built before this
+command existed is updated by running the install command again, which the
+web console shows in its place.
 
 ## Seeing what a Plugin was asked to do
 
@@ -345,7 +389,7 @@ removing it: the token stops working, and the Agent's Targets, key records and
 history stay in the web console, where a reactivation command can bring the
 same Agent back on this host or another. Then, whether or not the Server could
 be reached, it stops and removes the service, deletes `/etc/easyssl/config.json`
-and `/var/lib/easyssl/agent.token`, and deletes the binary. It asks for confirmation,
+and `/var/lib/easyssl/agent.token`, and deletes the binary, with the previous build an update kept beside it. It asks for confirmation,
 refusing to run unattended unless `--yes` is passed, and is idempotent on a
 host with nothing or only remnants installed.
 

@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -127,6 +128,64 @@ func (e DigestMismatchError) Error() string {
 	return msg.T("plugin.install.digest_mismatch", "{plugin} downloaded as {got} but the catalog published {want}", "plugin", e.PluginID, "got", e.Got, "want", e.Want)
 }
 
+// Installable is whether each of pluginIDs is one Install would fetch, judged
+// from the catalog alone, so `plugin install` can refuse before it asks the
+// person to authorize anything. Install judges again, since the catalog can
+// change in between.
+func (m *Manager) Installable(ctx context.Context, pluginIDs []string, goos, goarch string) error {
+	cat, err := m.readCatalog(ctx)
+	if err != nil {
+		return err
+	}
+	for _, id := range pluginIDs {
+		if _, err := installable(cat, id, goos, goarch); err != nil {
+			return msg.Err.T("plugin.install.refused", "{plugin}: {err}", "plugin", id, "err", err)
+		}
+	}
+	return nil
+}
+
+func (m *Manager) readCatalog(ctx context.Context) (catalog.Response, error) {
+	cat, err := m.catalog.Catalog(ctx)
+	if err != nil {
+		return cat, msg.Err.T("plugin.install.catalog_failed", "reading the Marketplace catalog: {err}", "err", err)
+	}
+	return cat, nil
+}
+
+// installable is the build of pluginID for goos/goarch that cat offers and
+// this Agent would install, or why there is none.
+func installable(cat catalog.Response, pluginID, goos, goarch string) (catalog.Artifact, error) {
+	if !validPluginID.MatchString(pluginID) {
+		return catalog.Artifact{}, msg.Err.T("plugin.install.invalid_name", "\"{plugin}\" is not a valid Plugin name", "plugin", pluginID)
+	}
+	entry, ok := findPlugin(cat, pluginID)
+	if !ok {
+		return catalog.Artifact{}, ErrNotInCatalog
+	}
+	// Only first-party Plugins are installed: a third-party one would need a
+	// signature this Agent cannot check yet, so it is refused rather than run
+	// as root on the strength of a catalog entry alone.
+	if entry.Party != catalog.PartyFirst {
+		return catalog.Artifact{}, msg.Err.T("plugin.install.not_first_party", "{plugin} is not a first-party Plugin, and this Agent installs only those", "plugin", pluginID)
+	}
+	// The catalog says which contract the build speaks, so one this Agent would
+	// refuse is refused before it is downloaded rather than after.
+	if entry.ContractVersion != "" && !plugincontract.Compatible(entry.ContractVersion) {
+		return catalog.Artifact{}, refusedContract(entry.ContractVersion)
+	}
+	artifact, ok := artifactFor(entry, goos, goarch)
+	if !ok {
+		return catalog.Artifact{}, ErrNoArtifact
+	}
+	// A catalog entry with no digest would turn off the only check after the
+	// download, so it is refused rather than trusted.
+	if artifact.SHA256 == "" {
+		return catalog.Artifact{}, msg.Err.T("plugin.install.no_digest", "the catalog publishes no digest for {plugin}, so it was not installed", "plugin", pluginID)
+	}
+	return artifact, nil
+}
+
 // Install fetches a Plugin, verifies it against the catalog, places it, and
 // asks it to describe itself once, so an artifact that cannot answer as the
 // Plugin it was fetched as is refused now rather than reported unobserved
@@ -136,32 +195,13 @@ func (e DigestMismatchError) Error() string {
 // Nothing is recorded or reported from here: the executable on disk is the
 // record, and the host inventory the caller sends next is the report.
 func (m *Manager) Install(ctx context.Context, pluginID, goos, goarch string) (Installed, error) {
-	if !validPluginID.MatchString(pluginID) {
-		return Installed{}, msg.Err.T("plugin.install.invalid_name", "\"{plugin}\" is not a valid Plugin name", "plugin", pluginID)
-	}
-	cat, err := m.catalog.Catalog(ctx)
+	cat, err := m.readCatalog(ctx)
 	if err != nil {
-		return Installed{}, msg.Err.T("plugin.install.catalog_failed", "reading the Marketplace catalog: {err}", "err", err)
+		return Installed{}, err
 	}
-	entry, ok := findPlugin(cat, pluginID)
-	if !ok {
-		return Installed{}, ErrNotInCatalog
-	}
-	// Only first-party Plugins are installed: a third-party one would need a
-	// signature this Agent cannot check yet, so it is refused rather than run
-	// as root on the strength of a catalog entry alone.
-	if entry.Party != catalog.PartyFirst {
-		return Installed{}, msg.Err.T("plugin.install.not_first_party", "{plugin} is not a first-party Plugin, and this Agent installs only those", "plugin", pluginID)
-	}
-	artifact, ok := artifactFor(entry, goos, goarch)
-	if !ok {
-		return Installed{}, ErrNoArtifact
-	}
-
-	// A catalog entry with no digest would turn off the only check below, so it
-	// is refused rather than trusted.
-	if artifact.SHA256 == "" {
-		return Installed{}, msg.Err.T("plugin.install.no_digest", "the catalog publishes no digest for {plugin}, so it was not installed", "plugin", pluginID)
+	artifact, err := installable(cat, pluginID, goos, goarch)
+	if err != nil {
+		return Installed{}, err
 	}
 
 	// Everything is checked on a temporary file beside the installed one, which
@@ -215,7 +255,7 @@ func (m *Manager) describeRaw(ctx context.Context, path, pluginID string) (plugi
 	// expect a request this Agent does not send, or answer one it cannot read,
 	// so it is refused by name rather than run.
 	if !plugincontract.Compatible(desc.ContractVersion) {
-		return desc, nil, msg.Err.T("plugin.describe.contract", "the Plugin was built against contract version \"{got}\", which this Agent ({own}) does not run", "got", desc.ContractVersion, "own", plugincontract.ContractVersion)
+		return desc, nil, refusedContract(desc.ContractVersion)
 	}
 	if err := plugincontract.ValidateDescribe(desc); err != nil {
 		return desc, nil, err
@@ -247,6 +287,26 @@ func (m *Manager) List() ([]Installed, error) {
 		out = append(out, Installed{ID: e.Name(), Digest: digest, Path: path})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
+// Contracts maps each installed Plugin to the contract version it answers
+// describe with, including one this Agent refuses, so `update` can tell which
+// a newer Agent would refuse. A Plugin that does not answer is left out: it
+// runs under no Agent now.
+func (m *Manager) Contracts(ctx context.Context) (map[string]string, error) {
+	installed, err := m.List()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(installed))
+	for _, p := range installed {
+		// describeRaw decodes the answer before judging it, so the version is
+		// there when only the contract check failed.
+		if desc, _, _ := m.describeRaw(ctx, p.Path, p.ID); desc.ContractVersion != "" {
+			out[p.ID] = desc.ContractVersion
+		}
+	}
 	return out, nil
 }
 
@@ -658,4 +718,22 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	return b.buf.Write(p)
+}
+
+// AcceptedContracts are the breaking contract versions this Agent runs a
+// Plugin built against, the ones plugincontract.Compatible lets through,
+// newest first.
+func AcceptedContracts() []string {
+	current, _ := plugincontract.BreakingVersion(plugincontract.ContractVersion)
+	if plugincontract.PreviousBreakingVersion == "" {
+		return []string{current}
+	}
+	return []string{current, plugincontract.PreviousBreakingVersion}
+}
+
+// refusedContract is the error for a Plugin build on contract got, which this
+// Agent does not run, naming the contract it speaks and those it runs.
+func refusedContract(got string) error {
+	return msg.Err.T("plugin.describe.contract", "the Plugin was built against contract version \"{got}\", which this Agent does not run: it speaks contract {own} and runs Plugins built against {accepted}",
+		"got", got, "own", plugincontract.ContractVersion, "accepted", strings.Join(AcceptedContracts(), ", "))
 }

@@ -40,6 +40,13 @@ func newMarketplace(t *testing.T, publishDigest string) *httptest.Server {
 
 func newMarketplaceOf(t *testing.T, publishDigest, party string) *httptest.Server {
 	t.Helper()
+	return newMarketplaceSpeaking(t, publishDigest, party, "")
+}
+
+// newMarketplaceSpeaking is newMarketplaceOf whose entry says its build speaks
+// contract, and which fails the test if that build is downloaded.
+func newMarketplaceSpeaking(t *testing.T, publishDigest, party, contract string) *httptest.Server {
+	t.Helper()
 	var srv *httptest.Server
 	mux := http.NewServeMux()
 	mux.HandleFunc(wire.APIPrefix+catalog.RouteCatalog, func(w http.ResponseWriter, _ *http.Request) {
@@ -51,7 +58,7 @@ func newMarketplaceOf(t *testing.T, publishDigest, party string) *httptest.Serve
 			digest = ""
 		}
 		_ = json.NewEncoder(w).Encode(catalog.Response{Plugins: []catalog.Plugin{{
-			ID: "generic-cli", Version: "9.9.9-catalog-says", Party: party,
+			ID: "generic-cli", Version: "9.9.9-catalog-says", Party: party, ContractVersion: contract,
 			Artifacts: []catalog.Artifact{{
 				OS: "linux", Arch: "amd64", SHA256: digest,
 				URL: wire.APIPrefix + catalog.PluginArtifactPath("generic-cli", "linux", "amd64"),
@@ -59,6 +66,9 @@ func newMarketplaceOf(t *testing.T, publishDigest, party string) *httptest.Serve
 		}}})
 	})
 	mux.HandleFunc(wire.APIPrefix+catalog.PluginArtifactPath("generic-cli", "linux", "amd64"), func(w http.ResponseWriter, _ *http.Request) {
+		if contract != "" && !plugincontract.Compatible(contract) {
+			t.Errorf("a build on contract %s, which this Agent does not run, was downloaded", contract)
+		}
 		_, _ = w.Write([]byte(artifactBody))
 	})
 	srv = httptest.NewServer(mux)
