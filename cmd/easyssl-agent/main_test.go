@@ -49,6 +49,9 @@ func TestRootPreflightCoversEveryOperationalCommand(t *testing.T) {
 		{[]string{"plugin", "update"}, "plugin update"},
 		{[]string{"update", "--check"}, "update"},
 		{[]string{"language", "es"}, "language"},
+		// A help flag the flag package would not read, after a positional
+		// argument, runs the command, so root is still required.
+		{[]string{"plugin", "install", "generic-cli", "--help"}, "plugin install"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.cmd, func(t *testing.T) {
@@ -78,6 +81,9 @@ func TestRootPreflightAllowsRootAndNonOperationalCommands(t *testing.T) {
 		{"unknown", []string{"unknown"}, 1000},
 		{"plugin usage", []string{"plugin"}, 1000},
 		{"unknown plugin command", []string{"plugin", "unknown"}, 1000},
+		{"a command's help", []string{"language", "-help"}, 1000},
+		{"a plugin command's help", []string{"plugin", "install", "--help"}, 1000},
+		{"help after a flag", []string{"update", "--check", "-h"}, 1000},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := rootPreflight(tt.args, tt.euid); err != nil {

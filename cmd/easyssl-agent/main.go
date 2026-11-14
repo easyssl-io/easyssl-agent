@@ -154,9 +154,12 @@ func writeHelp(fs *flag.FlagSet, usage, summary string) {
 // a path, or contacts the Server. All Agent state is under a root-only
 // directory, so waiting for the filesystem error would leak which file was
 // reached first and give equivalent commands inconsistent failures.
+//
+// A request for a command's help passes: it prints its usage and stops before
+// reading anything.
 func rootPreflight(args []string, euid int) error {
 	cmd := rootCommand(args)
-	if euid == 0 || cmd == "" {
+	if euid == 0 || cmd == "" || helpRequested(args[len(strings.Fields(cmd)):]) {
 		return nil
 	}
 	if cmd == "register" {
@@ -165,6 +168,24 @@ func rootPreflight(args []string, euid int) error {
 		return msg.Err.T("main.register_not_root", "register must run as root: use sudo, or run it from a root shell")
 	}
 	return rootOnlyError(cmd)
+}
+
+// helpRequested reports whether the flag package will read a help flag in a
+// command's arguments, so print its help and exit before the command runs. It
+// reads flags only up to the first argument that is not one, as the flag
+// package does; a help flag after a positional argument, or after a flag's
+// value, is not seen there and the command would run, so the root check still
+// applies to it.
+func helpRequested(args []string) bool {
+	for _, a := range args {
+		switch {
+		case a == "--" || !strings.HasPrefix(a, "-"):
+			return false
+		case a == "-h" || a == "-help" || a == "--h" || a == "--help":
+			return true
+		}
+	}
+	return false
 }
 
 // rootCommand returns only recognized commands that can read or change Agent
