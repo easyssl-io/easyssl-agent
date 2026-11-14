@@ -1,0 +1,70 @@
+[
+  {
+    "version": "0.2.2",
+    "date": "2026-11-14",
+    "contractVersion": "0.2.1",
+    "builds": [
+      {
+        "os": "linux",
+        "arch": "amd64",
+        "sha256": "4c5186a0ed98de386167004ff4e855cf701a92428a1a894bdaac94185698e5f1"
+      },
+      {
+        "os": "linux",
+        "arch": "arm64",
+        "sha256": "c88d15d82154da563a0817ec796aecb7451ab8e47a63601c667e03fd7901d645"
+      }
+    ]
+  },
+  {
+    "version": "0.2.1",
+    "date": "2026-11-10",
+    "contractVersion": "0.2.0",
+    "builds": [
+      {
+        "os": "linux",
+        "arch": "amd64",
+        "sha256": "00072862119c2f48c9feec8cc8892b6e78e492bafc871c6fa580f7c6869a1302"
+      },
+      {
+        "os": "linux",
+        "arch": "arm64",
+        "sha256": "93af3980141c5f0e17247999ce1112bf7b4739caff2899e99dc33d9ee5ca7278"
+      }
+    ]
+  },
+  {
+    "version": "0.2.0",
+    "date": "2026-11-10",
+    "contractVersion": "0.2.0",
+    "builds": [
+      {
+        "os": "linux",
+        "arch": "amd64",
+        "sha256": "cab2e293661b5e2bee9e4405886eef9147d1eb8d1744969b4d84e128ed164669"
+      },
+      {
+        "os": "linux",
+        "arch": "arm64",
+        "sha256": "f8e5fbd33998ad9880e8d50209d6d8b62d162c84ad8b85439f59e7d455353fd5"
+      }
+    ]
+  },
+  {
+    "version": "0.1.0",
+    "date": "2026-11-08",
+    "contractVersion": "0.1.0",
+    "builds": [
+      {
+        "os": "linux",
+        "arch": "amd64",
+        "sha256": "5d5d8fb97f640937cf09620f742cdf475564c01758d7bd1dcd18e52684212d06"
+      },
+      {
+        "os": "linux",
+        "arch": "arm64",
+        "sha256": "9afd2eec876a3b1e4ece1decf21e51b0335d7507044fd699515b91b27522971f"
+      }
+    ]
+  }
+]
