@@ -269,7 +269,7 @@ func TestMigrateMovesACertbotCertificate(t *testing.T) {
 			{From: "/etc/letsencrypt/live/example.com/privkey.pem", To: "/etc/ssl/easyssl/example.com/key.pem"},
 		},
 		References: moved.References,
-		Note:       `now managed by easySSL; check the other "managed by Certbot" lines`,
+		Note:       "now managed by easySSL; check nothing else here still uses /etc/letsencrypt",
 	}}
 	if !reflect.DeepEqual(r.relocated, wantReq) {
 		t.Fatalf("relocate = %+v\nwant %+v", r.relocated, wantReq)

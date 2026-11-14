@@ -79,8 +79,12 @@ func (s *session) plan(chosen, items []*item) (*migration, error) {
 			ps = &pluginStep{obs: it.obs, req: plugincontract.RelocateRequest{
 				Moves: []plugincontract.Move{}, References: []plugincontract.Reference{},
 				// Left by the Plugin on each line it changes, in the language
-				// this command speaks, for whoever reads the file later.
-				Note: msg.T("migrate.note", `now managed by easySSL; check the other "managed by Certbot" lines`),
+				// this command speaks, for whoever reads the file later. It
+				// names certbot's directory rather than its comments: the
+				// Apache plugin writes none, and what breaks once certbot is
+				// gone is a line still reading a file from that directory
+				// (its options-ssl include, its dhparam file).
+				Note: msg.T("migrate.note", "now managed by easySSL; check nothing else here still uses {dir}", "dir", it.dir),
 			}}
 			byPlugin[it.obs] = ps
 			m.plugins = append(m.plugins, ps)
