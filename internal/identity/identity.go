@@ -70,6 +70,10 @@ func TokenPath() string  { return filepath.Join(StateDir, "agent.token") }
 // out its whole watch.
 func CheckedInPath() string { return filepath.Join(StateDir, "checked-in") }
 
+// UpdateLockPath is the lock `update` and `plugin update` hold while they
+// change the installed builds (selfupdate.Lock).
+func UpdateLockPath() string { return filepath.Join(StateDir, "update.lock") }
+
 // MarkCheckedIn records that this build's service had a check-in accepted.
 func MarkCheckedIn(version string) error { return markCheckedIn(CheckedInPath(), version) }
 
@@ -131,7 +135,7 @@ func SaveToken(token string) error {
 // Uninstalling is too ordinary a command to destroy that, so the keys are left
 // behind and the caller says so.
 func RemoveAll() error {
-	for _, path := range []string{ConfigPath(), TokenPath(), CheckedInPath()} {
+	for _, path := range []string{ConfigPath(), TokenPath(), CheckedInPath(), UpdateLockPath()} {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

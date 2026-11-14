@@ -58,6 +58,16 @@ func cmdUpdate(ctx context.Context, args []string) error {
 	check := fs.Bool("check", false, msg.T("update.flag.check", "only say what would be updated"))
 	agentOnly := fs.Bool("agent-only", false, msg.T("update.flag.agent_only", "update the Agent and leave the Plugins as they are"))
 	_ = fs.Parse(args)
+	// Taken before the installed build is read and held through the Plugins'
+	// update and any rollback, which runs in this process; --check changes
+	// nothing and takes none.
+	if !*check {
+		unlock, err := selfupdate.Lock(identity.UpdateLockPath())
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
 
 	cfg, err := identity.LoadConfig()
 	if err != nil {
@@ -136,6 +146,7 @@ func cmdUpdate(ctx context.Context, args []string) error {
 	// one whose contract version they were built for.
 	// #nosec G204 -- the installed Agent binary, just verified and swapped in.
 	run := exec.CommandContext(ctx, service.BinaryPath, "plugin", "update", "--yes")
+	run.Env = append(os.Environ(), selfupdate.LockHeldEnv+"=1")
 	run.Stdin, run.Stdout, run.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return run.Run()
 }
@@ -198,6 +209,14 @@ func cmdPluginUpdate(ctx context.Context, args []string) error {
 	check := fs.Bool("check", false, msg.T("update.flag.check", "only say what would be updated"))
 	downgrade := fs.Bool("allow-downgrade", false, msg.T("plugin.update.flag.allow_downgrade", "also install a Marketplace build older than the installed one"))
 	_ = fs.Parse(args)
+	// Run by an `update` that holds the lock for it, it takes none.
+	if !*check && os.Getenv(selfupdate.LockHeldEnv) == "" {
+		unlock, err := selfupdate.Lock(identity.UpdateLockPath())
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
 	cfg, err := identity.LoadConfig()
 	if err != nil {
 		return stateError("plugin update", err)
