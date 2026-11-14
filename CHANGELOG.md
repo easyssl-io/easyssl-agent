@@ -3,23 +3,35 @@
 Every release of the easySSL Agent, newest first. `scripts/release.sh` tags
 no version this file has no entry for.
 
-## Unreleased
+## 0.2.2
 
 - `easyssl-agent update` updates the Agent to the build the Server's catalog
   offers, checking its SHA-256 and that it runs before swapping it in, keeping
-  the previous build and putting it back if the service does not stay up on
+  the previous build and putting it back if the service does not check in on
   the new one; then it updates the Plugins. `--agent-only` leaves the Plugins
   alone, `--check` only says what would change, and an older build is never
-  taken. Built against `easyssl-contract` 0.2.1, whose catalog names the
-  Agent build.
+  taken. It refuses, before replacing anything, an Agent build that would
+  refuse an installed Plugin. Built against `easyssl-contract` 0.2.1, whose
+  catalog names the Agent build.
 - `easyssl-agent plugin update [name...]` installs the catalog's build of each
-  installed Plugin whose bytes differ; one the catalog no longer offers is
-  left as it is.
-- `easyssl-agent version` prints the version alone.
+  installed Plugin whose bytes differ; one the catalog no longer offers, or
+  offers at a lower version, is left as it is unless `--allow-downgrade` is
+  passed. The plan shows each Plugin's installed and offered versions.
+- A Plugin build on a contract this Agent does not run is never downloaded:
+  `update` and `plugin update` leave it and say it needs a newer Agent, and
+  `plugin install` refuses it, like any Plugin it could not install, before
+  asking to authorize the install. The refusal names the contract this Agent
+  speaks and the ones it runs.
+- `easyssl-agent plugin list` and `plugin catalog` show each Plugin's contract
+  version; `plugin catalog` no longer prints the party.
+- `easyssl-agent version` prints the version alone; `--contract` the contract
+  version it speaks, `--contracts` the ones it runs a Plugin built against.
 - A Server that no longer speaks this Agent's contract version is reported as
-  such: `easyssl-agent status` says the Agent is refused and how to update it,
-  the service logs it at error level, and its systemd status line says so,
-  instead of reading as unreachable or healthy.
+  such: `easyssl-agent status` says the Agent is refused and to run
+  `sudo easyssl-agent update`, the service logs it at error level, and its
+  systemd status line says so, instead of reading as unreachable or healthy.
+- `easyssl-agent uninstall` also removes the builds `update` keeps beside the
+  binary, `easyssl-agent.prev` and `easyssl-agent.new`.
 
 ## 0.2.1
 
