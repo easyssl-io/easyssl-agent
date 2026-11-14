@@ -298,6 +298,7 @@
   "update.flag.agent_only": "actualizar el Agente y dejar los Plugins como están",
   "update.agent.planned": "Agente: {current} → {offered}",
   "update.agent.current": "Agente: {current}, al día",
+  "update.locked": "hay otro `easyssl-agent update` o `plugin update` en curso en este host; vuelve a ejecutar esto cuando termine",
   "update.nothing": "Nada que actualizar.",
   "update.confirm": "¿Actualizar? [s/N] ",
   "update.declined": "No se actualizó nada.",

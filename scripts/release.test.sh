@@ -22,6 +22,9 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.com GIT_COMMITTER_NAME=t GIT
 # the clone's, so the clone's tree is clean either way.
 git add scripts/release.sh scripts/publish-release.sh scripts/lib/build.sh
 git diff --cached --quiet || git commit -q -m "the script under test"
+# The clone starts without the release record this repository now keeps, as
+# the first release recorded did, so the seeding of earlier tags is what runs.
+if [ -f releases.json ]; then git rm -q releases.json && git commit -q -m "no release recorded yet"; fi
 
 fail=0
 expect() { # expect STATUS DESCRIPTION COMMAND...
