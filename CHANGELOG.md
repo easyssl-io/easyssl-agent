@@ -3,6 +3,12 @@
 Every release of the easySSL Agent, newest first. `scripts/release.sh` tags
 no version this file has no entry for.
 
+## 0.2.5
+
+Built against `easyssl-contract` 0.2.3. A command's help runs without root
+also after a flag that takes a value (`register --server <url> --help`): the
+root check reads the arguments with the command's own flags.
+
 ## 0.2.4
 
 Built against `easyssl-contract` 0.2.3.
