@@ -1,8 +1,8 @@
 {
-  "acme.warning.certbot": "Está en el directorio de certbot {dir}, así que easySSL no despliega allí. Ejecuta `sudo easyssl-agent migrate` para sacarlo de ahí.",
-  "acme.warning.hook_copy": "Es idéntico al certificado actual {lineage} de certbot, que un deploy hook de certbot sigue copiando aquí, así que easySSL no despliega allí. Cuando nada más use ese certificado, ejecuta {command}; si no, quita el hook que lo copia.",
-  "acme.warning.hook_copy_in_use": "Es idéntico al certificado actual {lineage} de certbot, que un deploy hook de certbot sigue copiando aquí, así que easySSL no despliega allí. Ejecuta primero `sudo easyssl-agent migrate` para mover lo que aún usa los archivos propios de certbot.",
-  "acme.warning.other_client": "Está bajo {dir}, que gestiona {client}, así que easySSL no despliega allí. Apunta el servidor web a una copia fuera de ese directorio para gestionarlo con easySSL.",
+  "acme.warning.certbot": "Certbot gestiona {dir}, así que easySSL no despliega allí. Ejecuta `sudo easyssl-agent migrate` para sacar los certificados de ahí.",
+  "acme.warning.hook_copy": "Un deploy hook de certbot sigue copiando aquí el certificado actual {lineage} de certbot, así que easySSL no despliega allí. Cuando nada más use ese certificado, ejecuta {command}; si no, quita el hook que lo copia.",
+  "acme.warning.hook_copy_in_use": "Un deploy hook de certbot sigue copiando aquí el certificado actual {lineage} de certbot, así que easySSL no despliega allí. Ejecuta primero `sudo easyssl-agent migrate` para mover lo que aún usa los archivos propios de certbot.",
+  "acme.warning.other_client": "{dir} lo gestiona {client}, así que easySSL no despliega allí. Apunta el servidor web a una ubicación fuera de ese directorio para desplegar con easySSL.",
   "config.organization.unnamed": "su Organización",
   "deploy.artifact.is_directory": "es un directorio",
   "deploy.artifact.not_executable": "no es ejecutable (modo {mode})",
