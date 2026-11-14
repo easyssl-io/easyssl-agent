@@ -3,6 +3,19 @@
 Every release of the easySSL Agent, newest first. `scripts/release.sh` tags
 no version this file has no entry for.
 
+## 0.2.4
+
+Built against `easyssl-contract` 0.2.3.
+
+- `easyssl-agent migrate` asks the Plugins to leave a note on each
+  configuration line they change, in the host's language: "now managed by
+  easySSL; check nothing else here still uses /etc/letsencrypt".
+- The warnings on a path another ACME client manages read the same for one
+  path or several ("Certbot manages `/etc/letsencrypt`, …"), since the web
+  console lists several paths under one copy.
+- Every command's `-help` prints its usage and what it does, and lists flags
+  only when it has some; a command's help runs without root.
+
 ## 0.2.3
 
 - Built with Go 1.26.11, which fixes GO-2026-6859 in `net/http`.
